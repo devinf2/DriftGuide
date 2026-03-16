@@ -1,0 +1,933 @@
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Platform, Modal, KeyboardAvoidingView, Alert } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { format } from 'date-fns';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { useTripStore } from '@/src/stores/tripStore';
+import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationStore } from '@/src/stores/locationStore';
+import { Location, LocationConditions, ConditionRating, SessionType } from '@/src/types';
+import * as ExpoLocation from 'expo-location';
+import { fetchAllLocationConditions } from '@/src/services/conditions';
+import { getWeatherIconName } from '@/src/services/conditions';
+import { getTopFishingSpots, getSeason, getTimeOfDay, type SpotSuggestion } from '@/src/services/ai';
+import { haversineDistance } from '@/src/services/locationService';
+import { fetchFlies } from '@/src/services/flyService';
+import GuideChat from '@/src/components/GuideChat';
+import type { AIContext } from '@/src/services/ai';
+
+/** Max drive distance (km) for suggested spots — ~2 hours at 60 mph ≈ 120 mi ≈ 193 km. */
+const SUGGESTED_SPOTS_MAX_DRIVE_KM = 193;
+
+const CONDITION_COLORS: Record<ConditionRating, string> = {
+  good: Colors.success,
+  fair: Colors.warning,
+  poor: Colors.error,
+};
+
+function ConditionDot({ rating }: { rating: ConditionRating }) {
+  return <View style={[styles.conditionDot, { backgroundColor: CONDITION_COLORS[rating] }]} />;
+}
+
+function ConditionIcon({ label, value, rating }: { label: string; value: string; rating: ConditionRating }) {
+  return (
+    <View style={styles.conditionItem}>
+      <View style={styles.conditionValueRow}>
+        <ConditionDot rating={rating} />
+        <Text style={[styles.conditionValue, { color: CONDITION_COLORS[rating] }]}>{value}</Text>
+      </View>
+      <Text style={styles.conditionLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function SkyIcon({ conditions }: { conditions: LocationConditions }) {
+  const iconName = getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap;
+  const color = CONDITION_COLORS[conditions.sky.rating];
+  return (
+    <View style={styles.conditionItem}>
+      <View style={styles.conditionValueRow}>
+        <Ionicons name={iconName} size={14} color={color} />
+        <Text style={[styles.conditionValue, { color }]}>{conditions.sky.label}</Text>
+      </View>
+      <Text style={styles.conditionLabel}>Sky</Text>
+    </View>
+  );
+}
+
+function ConditionsRow({ conditions }: { conditions: LocationConditions }) {
+  return (
+    <View style={styles.conditionsRow}>
+      <ConditionIcon
+        label="Wind"
+        value={`${conditions.wind.speed_mph}mph`}
+        rating={conditions.wind.rating}
+      />
+      <ConditionIcon
+        label="Temp"
+        value={`${conditions.temperature.temp_f}\u00B0`}
+        rating={conditions.temperature.rating}
+      />
+      <ConditionIcon
+        label="Water"
+        value={conditions.water.flow_cfs !== null ? `${conditions.water.flow_cfs}` : '\u2014'}
+        rating={conditions.water.rating}
+      />
+    </View>
+  );
+}
+
+function formatWaterLabel(conditions: LocationConditions): string {
+  if (conditions.water.flow_cfs !== null) {
+    return `${conditions.water.flow_cfs} cfs`;
+  }
+  const labels: Record<string, string> = {
+    clear: 'Clear', slightly_stained: 'Slight', stained: 'Stained',
+    murky: 'Murky', blown_out: 'Blown', unknown: '\u2014',
+  };
+  return labels[conditions.water.clarity] || '\u2014';
+}
+
+/** Current date/time rounded up to the next 15-minute mark (e.g. 9:08 → 9:15). */
+function getNextFifteenMinutes(): Date {
+  const d = new Date();
+  const minutes = d.getMinutes();
+  const next = minutes % 15 === 0 ? minutes : (Math.floor(minutes / 15) + 1) * 15;
+  if (next >= 60) {
+    d.setHours(d.getHours() + 1);
+    d.setMinutes(0);
+  } else {
+    d.setMinutes(next);
+  }
+  d.setSeconds(0, 0);
+  return d;
+}
+
+export default function NewTripScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ locationId?: string }>();
+  const { user } = useAuthStore();
+  const { planTrip } = useTripStore();
+  const {
+    locations, fetchLocations, searchLocations, addRecentLocation,
+    getRecentLocations, lastAddedLocationId, setLastAddedLocationId, getLocationById,
+  } = useLocationStore();
+
+  const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showLocationSearch, setShowLocationSearch] = useState(false);
+  const [searchInputFocused, setSearchInputFocused] = useState(false);
+  const [conditionsMap, setConditionsMap] = useState<Map<string, LocationConditions>>(new Map());
+  const [conditionsLoading, setConditionsLoading] = useState(false);
+  const [spotSuggestions, setSpotSuggestions] = useState<SpotSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [plannedDate, setPlannedDate] = useState(() => getNextFifteenMinutes());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [sessionType, setSessionType] = useState<SessionType | null>('wade');
+  const [showGuideModal, setShowGuideModal] = useState(false);
+
+  const getGuideContext = useCallback(async (): Promise<AIContext> => {
+    let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
+    if (user?.id) {
+      try {
+        userFlies = await fetchFlies(user.id);
+      } catch {
+        // non-blocking
+      }
+    }
+    return {
+      location: selectedLocation ?? null,
+      fishingType: 'fly',
+      weather: null,
+      waterFlow: null,
+      currentFly: null,
+      fishCount: 0,
+      recentEvents: [],
+      timeOfDay: getTimeOfDay(plannedDate),
+      season: getSeason(plannedDate),
+      userFlies: userFlies.length > 0 ? userFlies : null,
+    };
+  }, [user?.id, selectedLocation, plannedDate]);
+
+  useEffect(() => {
+    if (locations.length === 0) fetchLocations();
+  }, []);
+
+  useEffect(() => {
+    if (lastAddedLocationId) {
+      const loc = getLocationById(lastAddedLocationId);
+      if (loc) {
+        setSelectedLocation(loc);
+        setShowLocationSearch(false);
+        setSearchQuery('');
+      }
+      setLastAddedLocationId(null);
+    }
+  }, [lastAddedLocationId, locations]);
+
+  // Pre-select location when opened from spot page (e.g. "Plan trip here")
+  useEffect(() => {
+    const locationId = params.locationId;
+    if (locationId && locations.length > 0) {
+      const loc = getLocationById(locationId);
+      if (loc) {
+        setSelectedLocation(loc);
+        setShowLocationSearch(false);
+        setSearchQuery('');
+      }
+    }
+  }, [params.locationId, locations, getLocationById]);
+
+  const topLevelLocations = locations.filter(l => !l.parent_location_id);
+
+  // Use this location's conditions, or its parent's when it's a child (we only fetch for top-level)
+  const getConditionsForLocation = useCallback((loc: Location) => {
+    return conditionsMap.get(loc.id) ?? (loc.parent_location_id ? conditionsMap.get(loc.parent_location_id) : undefined);
+  }, [conditionsMap]);
+
+  useEffect(() => {
+    if (topLevelLocations.length === 0) return;
+
+    let cancelled = false;
+    setConditionsLoading(true);
+    setSuggestionsLoading(true);
+
+    (async () => {
+      let spotsForSuggestions = topLevelLocations;
+      try {
+        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await ExpoLocation.getCurrentPositionAsync({
+            accuracy: ExpoLocation.Accuracy.Balanced,
+          });
+          const lat = loc.coords.latitude;
+          const lng = loc.coords.longitude;
+          const nearby = topLevelLocations.filter((l) => {
+            const locLat = l.latitude ?? null;
+            const locLng = l.longitude ?? null;
+            if (locLat == null || locLng == null) return false;
+            return haversineDistance(lat, lng, locLat, locLng) <= SUGGESTED_SPOTS_MAX_DRIVE_KM;
+          });
+          if (nearby.length > 0) spotsForSuggestions = nearby;
+        }
+      } catch {
+        // use all spots if location fails
+      }
+
+      if (cancelled) return;
+      const result = await fetchAllLocationConditions(topLevelLocations);
+      if (cancelled) return;
+      setConditionsMap(result);
+      setConditionsLoading(false);
+
+      const suggestions = await getTopFishingSpots(spotsForSuggestions, result);
+      if (!cancelled) {
+        setSpotSuggestions(suggestions);
+        setSuggestionsLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [topLevelLocations.length]);
+
+  const filteredLocations = searchQuery.trim()
+    ? searchLocations(searchQuery)
+    : [];
+
+  const findLocationForSuggestion = useCallback((suggestion: SpotSuggestion): Location | undefined => {
+    return locations.find(l =>
+      l.name.toLowerCase() === suggestion.locationName.toLowerCase() ||
+      suggestion.locationName.toLowerCase().includes(l.name.toLowerCase()) ||
+      l.name.toLowerCase().includes(suggestion.locationName.toLowerCase().split(' - ')[0]),
+    );
+  }, [locations]);
+
+  const handleDateChange = useCallback((_event: DateTimePickerEvent, date?: Date) => {
+    if (Platform.OS === 'android') setShowDatePicker(false);
+    if (date) {
+      setPlannedDate(prev => {
+        const updated = new Date(date);
+        updated.setHours(prev.getHours(), prev.getMinutes());
+        return updated;
+      });
+    }
+  }, []);
+
+  const handleTimeChange = useCallback((_event: DateTimePickerEvent, date?: Date) => {
+    if (Platform.OS === 'android') setShowTimePicker(false);
+    if (date) {
+      setPlannedDate(prev => {
+        const updated = new Date(prev);
+        updated.setHours(date.getHours(), date.getMinutes());
+        return updated;
+      });
+    }
+  }, []);
+
+  const handlePlanTrip = useCallback(async () => {
+    if (!user || !selectedLocation) return;
+    if (!sessionType) {
+      Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore so we can save your trip.');
+      return;
+    }
+    setSaving(true);
+    addRecentLocation(selectedLocation.id);
+    const tripId = await planTrip(user.id, selectedLocation.id, 'fly', selectedLocation, plannedDate, sessionType);
+    setSaving(false);
+    if (tripId) {
+      router.back();
+    } else {
+      Alert.alert('Couldn\'t create trip', 'Something went wrong saving your trip. Check your connection and try again.');
+    }
+  }, [user, selectedLocation, planTrip, addRecentLocation, router, plannedDate, sessionType]);
+
+  const handleSelectSuggestion = useCallback((suggestion: SpotSuggestion) => {
+    const match = findLocationForSuggestion(suggestion);
+    if (match) {
+      router.push(`/spot/${match.id}`);
+    }
+  }, [findLocationForSuggestion, router]);
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+      >
+      {/* Session type */}
+      <Text style={styles.sectionLabel}>How will you fish?</Text>
+      <View style={styles.sessionTypeRow}>
+        {(['wade', 'float', 'shore'] as const).map((type) => (
+          <Pressable
+            key={type}
+            style={[styles.sessionPill, sessionType === type && styles.sessionPillSelected]}
+            onPress={() => setSessionType(type)}
+          >
+            <Text style={[styles.sessionPillText, sessionType === type && styles.sessionPillTextSelected]}>
+              {type.charAt(0).toUpperCase() + type.slice(1)}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {/* Date & Time Selection */}
+      <View style={styles.dateTimeRow}>
+        <View style={styles.dateTimeColumn}>
+          <Text style={styles.dateTimeLabel}>Date</Text>
+          <Pressable
+            style={styles.dateTimeButton}
+            onPress={() => setShowDatePicker(v => !v)}
+          >
+            <Text style={styles.dateTimeValue}>{format(plannedDate, 'EEE, MMM d, yyyy')}</Text>
+          </Pressable>
+        </View>
+        <View style={styles.dateTimeColumn}>
+          <Text style={styles.dateTimeLabel}>Time</Text>
+          <Pressable
+            style={styles.dateTimeButton}
+            onPress={() => setShowTimePicker(v => !v)}
+          >
+            <Text style={styles.dateTimeValue}>{format(plannedDate, 'h:mm a')}</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <Modal visible={showDatePicker} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setShowDatePicker(false)}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Date</Text>
+              <Pressable onPress={() => setShowDatePicker(false)}>
+                <Text style={styles.modalDone}>Done</Text>
+              </Pressable>
+            </View>
+            <DateTimePicker
+              value={plannedDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              onChange={handleDateChange}
+              minimumDate={new Date()}
+              themeVariant="light"
+            />
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={showTimePicker} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setShowTimePicker(false)}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Time</Text>
+              <Pressable onPress={() => setShowTimePicker(false)}>
+                <Text style={styles.modalDone}>Done</Text>
+              </Pressable>
+            </View>
+            <DateTimePicker
+              value={plannedDate}
+              mode="time"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={handleTimeChange}
+              minuteInterval={15}
+              themeVariant="light"
+            />
+          </View>
+        </Pressable>
+      </Modal>
+
+      {selectedLocation ? (
+        <Pressable
+          style={styles.selectedLocation}
+          onPress={() => {
+            setSelectedLocation(null);
+            setShowLocationSearch(true);
+          }}
+        >
+          <View style={styles.selectedLocationInfo}>
+            <Text style={styles.selectedLocationName}>{selectedLocation.name}</Text>
+            {(() => {
+              const conditions = getConditionsForLocation(selectedLocation);
+              return conditions ? (
+                <View style={styles.selectedConditionsRow}>
+                  <SkyIcon conditions={conditions} />
+                  <ConditionIcon
+                    label="Wind"
+                    value={`${conditions.wind.speed_mph}mph`}
+                    rating={conditions.wind.rating}
+                  />
+                  <ConditionIcon
+                    label="Temp"
+                    value={`${conditions.temperature.temp_f}\u00B0F`}
+                    rating={conditions.temperature.rating}
+                  />
+                  <ConditionIcon
+                    label="Water"
+                    value={formatWaterLabel(conditions)}
+                    rating={conditions.water.rating}
+                  />
+                </View>
+              ) : null;
+            })()}
+          </View>
+          <Text style={styles.changeText}>Change</Text>
+        </Pressable>
+      ) : (
+        <View>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search locations..."
+            placeholderTextColor={Colors.textTertiary}
+            value={searchQuery}
+            onChangeText={(text) => {
+              setSearchQuery(text);
+              setShowLocationSearch(true);
+            }}
+            onFocus={() => {
+              setShowLocationSearch(true);
+              setSearchInputFocused(true);
+            }}
+            onBlur={() => setSearchInputFocused(false)}
+          />
+          {showLocationSearch && searchQuery.trim() !== '' && (
+            <View style={styles.locationList}>
+              {conditionsLoading && (
+                <View style={styles.conditionsLoadingRow}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.conditionsLoadingText}>Loading conditions...</Text>
+                </View>
+              )}
+              <ScrollView
+                style={styles.locationListScroll}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={true}
+              >
+                {filteredLocations.map((loc) => {
+                  const conditions = getConditionsForLocation(loc);
+                  return (
+                    <Pressable
+                      key={loc.id}
+                      style={styles.locationItem}
+                      onPress={() => {
+                        setShowLocationSearch(false);
+                        setSearchQuery('');
+                        router.push(`/spot/${loc.id}`);
+                      }}
+                    >
+                      <View style={styles.locationMain}>
+                        <Text style={styles.locationName}>{loc.name}</Text>
+                      </View>
+                      {conditions && <ConditionsRow conditions={conditions} />}
+                    </Pressable>
+                  );
+                })}
+                {filteredLocations.length === 0 && !conditionsLoading && (
+                  <View style={styles.noResultsContainer}>
+                    <Text style={styles.noResults}>No locations found</Text>
+                    <Pressable
+                      style={styles.addLocationButton}
+                      onPress={() => router.push('/trip/add-location')}
+                    >
+                      <Text style={styles.addLocationButtonText}>+ Add New Location</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Suggested Spots */}
+      <View style={styles.suggestedSpotsHeaderRow}>
+        <Text style={styles.sectionHeader}>Suggested Spots</Text>
+        <Pressable
+          style={styles.askGuideButton}
+          onPress={() => setShowGuideModal(true)}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.primary} />
+          <Text style={styles.askGuideButtonText}>Ask DriftGuide</Text>
+        </Pressable>
+      </View>
+      {suggestionsLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator color={Colors.primary} />
+          <Text style={styles.loadingLabel}>
+            {conditionsLoading ? 'Checking weather & conditions...' : 'Getting suggestions...'}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.suggestionsContainer}>
+          {spotSuggestions.map((suggestion, index) => {
+            const matchedLoc = findLocationForSuggestion(suggestion);
+            const conditions = matchedLoc ? getConditionsForLocation(matchedLoc) : undefined;
+            return (
+              <Pressable
+                key={index}
+                style={styles.suggestionCard}
+                onPress={() => handleSelectSuggestion(suggestion)}
+              >
+                <View style={styles.suggestionContent}>
+                  <View style={styles.suggestionHeader}>
+                    <Text style={styles.suggestionName} numberOfLines={1}>{suggestion.locationName}</Text>
+                    {conditions && (
+                      <View style={styles.suggestionSkyBadge}>
+                        <Ionicons
+                          name={getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap}
+                          size={13}
+                          color={CONDITION_COLORS[conditions.sky.rating]}
+                        />
+                        <Text style={[styles.suggestionSkyText, { color: CONDITION_COLORS[conditions.sky.rating] }]}>
+                          {conditions.sky.label}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.suggestionReason}>{suggestion.reason}</Text>
+                  {conditions && <ConditionsRow conditions={conditions} />}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      <Modal
+        visible={showGuideModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowGuideModal(false)}
+      >
+        <GuideChat
+          getContext={getGuideContext}
+          variant="modal"
+          onClose={() => setShowGuideModal(false)}
+          welcomeTitle="Ask DriftGuide"
+          welcomeSubtitle="Planning a trip? Ask where to go, what to use, or anything else — I'll use your planned time and location when relevant."
+        />
+      </Modal>
+
+      </ScrollView>
+      <View style={styles.pinnedButtonContainer}>
+        <Pressable
+          style={[styles.planButton, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
+          onPress={handlePlanTrip}
+          disabled={!selectedLocation || !sessionType || saving}
+        >
+          {saving ? (
+            <ActivityIndicator color={Colors.textInverse} />
+          ) : (
+            <Text style={styles.planButtonText}>Create Trip</Text>
+          )}
+        </Pressable>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  content: {
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xxl + 80,
+  },
+  pinnedButtonContainer: {
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.lg,
+    paddingTop: Spacing.md,
+    backgroundColor: Colors.background,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  suggestedSpotsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+    gap: Spacing.md,
+  },
+  sectionHeader: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    flex: 1,
+  },
+  askGuideButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: Colors.primaryLight + '40',
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary + '60',
+  },
+  askGuideButtonText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  sectionLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  sessionTypeRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  sessionPill: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+  },
+  sessionPillSelected: {
+    backgroundColor: Colors.primary + '20',
+    borderColor: Colors.primary,
+  },
+  sessionPillText: {
+    fontSize: FontSize.sm,
+    color: Colors.text,
+  },
+  sessionPillTextSelected: {
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.lg,
+  },
+  loadingLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+  },
+
+  suggestionsContainer: {
+    marginBottom: Spacing.md,
+  },
+  suggestionCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  suggestionContent: {
+    flex: 1,
+  },
+  suggestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  suggestionName: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.text,
+    flexShrink: 1,
+  },
+  suggestionSkyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  suggestionSkyText: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+  },
+  suggestionReason: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+
+  searchInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.text,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  locationList: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    marginTop: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    maxHeight: 280,
+  },
+  locationListScroll: {
+    maxHeight: 280,
+  },
+  conditionsLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.sm,
+    gap: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  conditionsLoadingText: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+  },
+  locationItem: {
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  locationMain: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  locationName: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    fontWeight: '500',
+  },
+  locationType: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    textTransform: 'capitalize',
+  },
+  conditionsRow: {
+    flexDirection: 'row',
+    marginTop: Spacing.sm,
+    gap: Spacing.md,
+    flexWrap: 'wrap',
+  },
+  conditionItem: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 2,
+  },
+  conditionValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  conditionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  conditionValue: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+  conditionLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+  },
+  noResultsContainer: {
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  noResults: {
+    textAlign: 'center',
+    color: Colors.textTertiary,
+    fontSize: FontSize.md,
+  },
+  addLocationButton: {
+    backgroundColor: Colors.primaryLight,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm + 2,
+  },
+  addLocationButtonText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.md,
+    fontWeight: '600',
+  },
+  selectedLocation: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.lg,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  selectedLocationInfo: {
+    flex: 1,
+    marginRight: Spacing.md,
+  },
+  selectedLocationName: {
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  selectedConditionsRow: {
+    flexDirection: 'row',
+    marginTop: Spacing.sm,
+    gap: Spacing.md,
+    flexWrap: 'wrap',
+  },
+  changeText: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: BorderRadius.xl,
+    borderTopRightRadius: BorderRadius.xl,
+    paddingBottom: Spacing.xxl,
+    paddingHorizontal: Spacing.lg,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+  },
+  modalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  modalDone: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  dateTimeColumn: {
+    flex: 1,
+  },
+  dateTimeButton: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  dateTimeLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  dateTimeValue: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    fontWeight: '600',
+  },
+  planButton: {
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    alignItems: 'center',
+    shadowColor: Colors.primaryDark,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  planButtonDisabled: {
+    backgroundColor: Colors.textTertiary,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  planButtonText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+  },
+});
