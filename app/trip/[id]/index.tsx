@@ -22,7 +22,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useTripStore } from '@/src/stores/tripStore';
-import { formatTripDuration, formatEventTime, formatFishCount, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
+import { formatTripDuration, formatEventTime, formatTripDate, formatFishCount, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { FlyChangeData, TripEvent, NoteData, CatchData, AIQueryData, Fly, WaterClarity, PresentationMethod, Structure } from '@/src/types';
 import * as ExpoLocation from 'expo-location';
@@ -93,6 +93,15 @@ export default function TripDashboardScreen() {
   const [tripPhotoUri, setTripPhotoUri] = useState<string | null>(null);
   const [tripPhotoCaption, setTripPhotoCaption] = useState('');
   const [tripPhotoSpecies, setTripPhotoSpecies] = useState('');
+  /** Full-screen photo view (timeline or Photos tab) — same UX as photo library */
+  const [fullScreenPhoto, setFullScreenPhoto] = useState<{
+    url: string;
+    location?: string;
+    fly?: string;
+    date?: string;
+    species?: string;
+    caption?: string;
+  } | null>(null);
 
   const [aiMessages, setAiMessages] = useState<{ id: string; role: 'user' | 'ai'; text: string }[]>([]);
   const [aiInput, setAiInput] = useState('');
@@ -245,6 +254,29 @@ export default function TripDashboardScreen() {
     setTripPhotoCaption('');
     setTripPhotoSpecies('');
   }, []);
+
+  const handleCatchPhotoPress = useCallback((event: TripEvent) => {
+    const data = event.data as CatchData;
+    if (!data?.photo_url) return;
+    setFullScreenPhoto({
+      url: data.photo_url,
+      location: activeTrip?.location?.name ?? undefined,
+      date: formatTripDate(event.timestamp),
+      species: data.species ?? undefined,
+      caption: data.note ?? undefined,
+    });
+  }, [activeTrip?.location?.name]);
+
+  const handleTripPhotoPress = useCallback((photo: Photo) => {
+    setFullScreenPhoto({
+      url: photo.url,
+      location: activeTrip?.location?.name ?? undefined,
+      fly: [photo.fly_pattern, photo.fly_size ? `#${photo.fly_size}` : null, photo.fly_color].filter(Boolean).join(' ') || undefined,
+      date: (photo.captured_at || photo.created_at) ? formatTripDate(photo.captured_at || photo.created_at!) : undefined,
+      species: photo.species ?? undefined,
+      caption: photo.caption ?? undefined,
+    });
+  }, [activeTrip?.location?.name]);
 
   /** Presentation for current fly: from user fly box or COMMON_FLIES. */
   const getPresentationForCurrentFly = useCallback((): PresentationMethod | null => {
@@ -629,6 +661,63 @@ export default function TripDashboardScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      {/* Full-screen photo view — same as photo library: tap thumbnail to open */}
+      <Modal
+        visible={fullScreenPhoto != null}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setFullScreenPhoto(null)}
+      >
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <Pressable
+            style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
+            onPress={() => setFullScreenPhoto(null)}
+          >
+            <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+          </Pressable>
+          {fullScreenPhoto && (
+            <ScrollView
+              style={styles.fullScreenPhotoScroll}
+              contentContainerStyle={[styles.fullScreenPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
+              showsVerticalScrollIndicator={false}
+            >
+              <Image
+                source={{ uri: fullScreenPhoto.url }}
+                style={[styles.fullScreenPhotoImage, { width: Dimensions.get('window').width, height: Math.round(Dimensions.get('window').height * 0.55) }]}
+                resizeMode="contain"
+              />
+              <View style={styles.fullScreenPhotoInfo}>
+                {fullScreenPhoto.location ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} /> {fullScreenPhoto.location}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.fly ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} /> {fullScreenPhoto.fly}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.date ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialIcons name="calendar-today" size={16} color={Colors.textInverse} /> {fullScreenPhoto.date}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.species ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} /> {fullScreenPhoto.species}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.caption ? (
+                  <Text style={styles.fullScreenPhotoCaption}>{fullScreenPhoto.caption}</Text>
+                ) : null}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
       {/* Header — extends into top safe area so status bar area is blue */}
       <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
         <View>
@@ -746,6 +835,7 @@ export default function TripDashboardScreen() {
           flyPickerNames={flyPickerNames}
           userFlies={userFlies}
           tripPhotos={tripPhotos}
+          onCatchPhotoPress={handleCatchPhotoPress}
         />
       )}
 
@@ -755,6 +845,7 @@ export default function TripDashboardScreen() {
           loading={tripPhotosLoading}
           uploading={tripPhotoUploading}
           onAddPhoto={handlePickTripPhoto}
+          onPhotoPress={handleTripPhotoPress}
         />
       )}
 
@@ -891,6 +982,7 @@ function FishingTab({
   flyPickerNames = FLY_NAMES,
   userFlies = [],
   tripPhotos = [],
+  onCatchPhotoPress,
 }: any) {
   const [catchFlyDropdownOpen, setCatchFlyDropdownOpen] = useState<null | 'name' | 'size' | 'color' | 'name2' | 'size2' | 'color2'>(null);
   const [catchSpeciesDropdownOpen, setCatchSpeciesDropdownOpen] = useState(false);
@@ -1613,11 +1705,16 @@ function FishingTab({
                 <Text style={styles.timelineText}>
                   {getEventDescription(event)}
                 </Text>
+                {event.event_type === 'catch' ? (
+                  <CatchDetailsBlock data={event.data as CatchData} />
+                ) : null}
                 {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
-                  <Image
-                    source={{ uri: (event.data as CatchData).photo_url! }}
-                    style={styles.timelineCatchThumb}
-                  />
+                  <Pressable onPress={() => onCatchPhotoPress?.(event)}>
+                    <Image
+                      source={{ uri: (event.data as CatchData).photo_url! }}
+                      style={styles.timelineCatchThumb}
+                    />
+                  </Pressable>
                 ) : null}
               </View>
             </View>
@@ -1637,11 +1734,13 @@ function PhotosTab({
   loading,
   uploading,
   onAddPhoto,
+  onPhotoPress,
 }: {
   tripPhotos: Photo[];
   loading: boolean;
   uploading: boolean;
   onAddPhoto: () => void;
+  onPhotoPress?: (photo: Photo) => void;
 }) {
   return (
     <ScrollView style={styles.photosTabScroll} contentContainerStyle={styles.photosTabContent}>
@@ -1671,7 +1770,9 @@ function PhotosTab({
       ) : (
         <View style={styles.photosTabGrid}>
           {tripPhotos.map((photo) => (
-            <Image key={photo.id} source={{ uri: photo.url }} style={styles.tripPhotoThumb} />
+            <Pressable key={photo.id} onPress={() => onPhotoPress?.(photo)}>
+              <Image source={{ uri: photo.url }} style={styles.tripPhotoThumb} />
+            </Pressable>
           ))}
           <Pressable style={styles.tripPhotoAddSlot} onPress={onAddPhoto} disabled={uploading}>
             <MaterialIcons name="add" size={32} color={Colors.primary} />
@@ -1834,6 +1935,27 @@ function AIGuideTab({
 
 /* ─── Helpers ─── */
 
+function formatLabel(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function CatchDetailsBlock({ data }: { data: CatchData }) {
+  const lines: string[] = [];
+  if (data.note?.trim()) lines.push(data.note.trim());
+  if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
+  if (data.structure) lines.push(`Structure: ${formatLabel(data.structure)}`);
+  if (data.presentation_method) lines.push(`Presentation: ${formatLabel(data.presentation_method)}`);
+  if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
+  if (lines.length === 0) return null;
+  return (
+    <View style={styles.timelineCatchDetails}>
+      {lines.map((line, i) => (
+        <Text key={i} style={styles.timelineCatchDetailLine}>{line}</Text>
+      ))}
+    </View>
+  );
+}
+
 function getEventDescription(event: TripEvent): string {
   switch (event.event_type) {
     case 'catch': {
@@ -1841,8 +1963,9 @@ function getEventDescription(event: TripEvent): string {
       const parts: string[] = [];
       if (data.species) parts.push(data.species);
       if (data.size_inches != null) parts.push(`${data.size_inches}"`);
-      const main = parts.length ? `Caught ${parts.join(' · ')}` : 'Fish caught!';
-      return data.note ? `${main}. ${data.note}` : main;
+      const qty = data.quantity != null && data.quantity > 1 ? data.quantity : 1;
+      const main = parts.length ? `Caught ${parts.join(' · ')}${qty > 1 ? ` (×${qty})` : ''}` : (qty > 1 ? `${qty} fish caught!` : 'Fish caught!');
+      return main;
     }
     case 'fly_change': {
       const data = event.data as FlyChangeData;
@@ -2661,6 +2784,41 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.textInverse,
   },
+  fullScreenPhotoWrap: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+  },
+  fullScreenPhotoClose: {
+    position: 'absolute',
+    right: Spacing.lg,
+    zIndex: 10,
+    padding: Spacing.sm,
+  },
+  fullScreenPhotoScroll: {
+    flex: 1,
+  },
+  fullScreenPhotoScrollContent: {
+    flexGrow: 1,
+  },
+  fullScreenPhotoImage: {
+    marginTop: Spacing.sm,
+  },
+  fullScreenPhotoInfo: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xs,
+  },
+  fullScreenPhotoInfoRow: {
+    fontSize: FontSize.md,
+    color: Colors.textInverse,
+    marginBottom: Spacing.xs,
+  },
+  fullScreenPhotoCaption: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.xs,
+  },
   catchModalInput: {
     backgroundColor: Colors.background,
     borderRadius: BorderRadius.md,
@@ -2871,6 +3029,14 @@ const styles = StyleSheet.create({
   timelineText: {
     fontSize: FontSize.sm,
     color: Colors.text,
+  },
+  timelineCatchDetails: {
+    marginTop: Spacing.xs,
+    gap: 2,
+  },
+  timelineCatchDetailLine: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
   },
   timelineCatchThumb: {
     width: 72,

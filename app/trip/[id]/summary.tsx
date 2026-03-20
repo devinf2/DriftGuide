@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert, Image, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert, Image, Platform, Modal, Dimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
@@ -28,6 +28,14 @@ export default function TripSummaryScreen() {
   const [tripPhotosLoading, setTripPhotosLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('fishing');
+  const [fullScreenPhoto, setFullScreenPhoto] = useState<{
+    url: string;
+    location?: string;
+    fly?: string;
+    date?: string;
+    species?: string;
+    caption?: string;
+  } | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -60,6 +68,29 @@ export default function TripSummaryScreen() {
   useEffect(() => {
     if (trip && id) loadTripPhotos();
   }, [trip, id, loadTripPhotos]);
+
+  const handleCatchPhotoPress = useCallback((event: TripEvent) => {
+    const data = event.data as CatchData;
+    if (!data?.photo_url) return;
+    setFullScreenPhoto({
+      url: data.photo_url,
+      location: trip?.location?.name ?? undefined,
+      date: formatTripDate(event.timestamp),
+      species: data.species ?? undefined,
+      caption: data.note ?? undefined,
+    });
+  }, [trip?.location?.name]);
+
+  const handleTripPhotoPress = useCallback((photo: Photo) => {
+    setFullScreenPhoto({
+      url: photo.url,
+      location: trip?.location?.name ?? undefined,
+      fly: [photo.fly_pattern, photo.fly_size ? `#${photo.fly_size}` : null, photo.fly_color].filter(Boolean).join(' ') || undefined,
+      date: (photo.captured_at || photo.created_at) ? formatTripDate(photo.captured_at || photo.created_at!) : undefined,
+      species: photo.species ?? undefined,
+      caption: photo.caption ?? undefined,
+    });
+  }, [trip?.location?.name]);
 
   if (loading) {
     return (
@@ -113,6 +144,62 @@ export default function TripSummaryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
+      {/* Full-screen photo view — same as photo library */}
+      <Modal
+        visible={fullScreenPhoto != null}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setFullScreenPhoto(null)}
+      >
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <Pressable
+            style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
+            onPress={() => setFullScreenPhoto(null)}
+          >
+            <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+          </Pressable>
+          {fullScreenPhoto && (
+            <ScrollView
+              style={styles.fullScreenPhotoScroll}
+              contentContainerStyle={[styles.fullScreenPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
+              showsVerticalScrollIndicator={false}
+            >
+              <Image
+                source={{ uri: fullScreenPhoto.url }}
+                style={[styles.fullScreenPhotoImage, { width: Dimensions.get('window').width, height: Math.round(Dimensions.get('window').height * 0.55) }]}
+                resizeMode="contain"
+              />
+              <View style={styles.fullScreenPhotoInfo}>
+                {fullScreenPhoto.location ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} /> {fullScreenPhoto.location}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.fly ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} /> {fullScreenPhoto.fly}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.date ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialIcons name="calendar-today" size={16} color={Colors.textInverse} /> {fullScreenPhoto.date}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.species ? (
+                  <Text style={styles.fullScreenPhotoInfoRow}>
+                    <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} /> {fullScreenPhoto.species}
+                  </Text>
+                ) : null}
+                {fullScreenPhoto.caption ? (
+                  <Text style={styles.fullScreenPhotoCaption}>{fullScreenPhoto.caption}</Text>
+                ) : null}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
         <Pressable onPress={() => router.back()}>
@@ -177,9 +264,15 @@ export default function TripSummaryScreen() {
       </View>
 
       {/* Tab Content */}
-      {activeTab === 'fishing' && <FishingTab events={events} />}
+      {activeTab === 'fishing' && (
+        <FishingTab events={events} onCatchPhotoPress={handleCatchPhotoPress} />
+      )}
       {activeTab === 'photos' && (
-        <SummaryPhotosTab tripPhotos={tripPhotos} loading={tripPhotosLoading} />
+        <SummaryPhotosTab
+          tripPhotos={tripPhotos}
+          loading={tripPhotosLoading}
+          onPhotoPress={handleTripPhotoPress}
+        />
       )}
       {activeTab === 'conditions' && (
         <ConditionsTab
@@ -261,7 +354,7 @@ export default function TripSummaryScreen() {
 
 /* ─── Fishing Tab (read-only) ─── */
 
-function FishingTab({ events }: { events: TripEvent[] }) {
+function FishingTab({ events, onCatchPhotoPress }: { events: TripEvent[]; onCatchPhotoPress?: (event: TripEvent) => void }) {
   const flyChanges = events.filter(e => e.event_type === 'fly_change');
   const uniqueFlies = [...new Set(
     flyChanges.flatMap(e => {
@@ -309,11 +402,16 @@ function FishingTab({ events }: { events: TripEvent[] }) {
                   <Text style={styles.timelineText}>
                     {getEventDescription(event)}
                   </Text>
+                  {event.event_type === 'catch' ? (
+                    <CatchDetailsBlock data={event.data as CatchData} />
+                  ) : null}
                   {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
-                    <Image
-                      source={{ uri: (event.data as CatchData).photo_url! }}
-                      style={styles.timelineCatchThumb}
-                    />
+                    <Pressable onPress={() => onCatchPhotoPress?.(event)}>
+                      <Image
+                        source={{ uri: (event.data as CatchData).photo_url! }}
+                        style={styles.timelineCatchThumb}
+                      />
+                    </Pressable>
                   ) : null}
                 </View>
               </View>
@@ -402,9 +500,11 @@ const SUMMARY_PHOTO_SIZE = 100;
 function SummaryPhotosTab({
   tripPhotos,
   loading,
+  onPhotoPress,
 }: {
   tripPhotos: Photo[];
   loading: boolean;
+  onPhotoPress?: (photo: Photo) => void;
 }) {
   return (
     <ScrollView style={styles.summaryPhotosScroll} contentContainerStyle={styles.summaryPhotosContent}>
@@ -423,7 +523,9 @@ function SummaryPhotosTab({
       ) : (
         <View style={styles.summaryPhotosGrid}>
           {tripPhotos.map((photo) => (
-            <Image key={photo.id} source={{ uri: photo.url }} style={styles.summaryPhotoThumb} />
+            <Pressable key={photo.id} onPress={() => onPhotoPress?.(photo)}>
+              <Image source={{ uri: photo.url }} style={styles.summaryPhotoThumb} />
+            </Pressable>
           ))}
         </View>
       )}
@@ -477,11 +579,36 @@ function SummaryMapTab({ trip }: { trip: Trip }) {
 
 /* ─── Helpers ─── */
 
+function formatCatchLabel(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function CatchDetailsBlock({ data }: { data: CatchData }) {
+  const lines: string[] = [];
+  if (data.note?.trim()) lines.push(data.note.trim());
+  if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
+  if (data.structure) lines.push(`Structure: ${formatCatchLabel(data.structure)}`);
+  if (data.presentation_method) lines.push(`Presentation: ${formatCatchLabel(data.presentation_method)}`);
+  if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
+  if (lines.length === 0) return null;
+  return (
+    <View style={styles.timelineCatchDetails}>
+      {lines.map((line, i) => (
+        <Text key={i} style={styles.timelineCatchDetailLine}>{line}</Text>
+      ))}
+    </View>
+  );
+}
+
 function getEventDescription(event: TripEvent): string {
   switch (event.event_type) {
     case 'catch': {
       const data = event.data as CatchData;
-      return data.species ? `Caught ${data.species}` : 'Fish caught!';
+      const parts: string[] = [];
+      if (data.species) parts.push(data.species);
+      if (data.size_inches != null) parts.push(`${data.size_inches}"`);
+      const qty = data.quantity != null && data.quantity > 1 ? data.quantity : 1;
+      return parts.length ? `Caught ${parts.join(' · ')}${qty > 1 ? ` (×${qty})` : ''}` : (qty > 1 ? `${qty} fish caught!` : 'Fish caught!');
     }
     case 'fly_change': {
       const data = event.data as FlyChangeData;
@@ -809,6 +936,49 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: BorderRadius.sm,
     backgroundColor: Colors.surface,
+  },
+  timelineCatchDetails: {
+    marginTop: Spacing.xs,
+    gap: 2,
+  },
+  timelineCatchDetailLine: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+  },
+  fullScreenPhotoWrap: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+  },
+  fullScreenPhotoClose: {
+    position: 'absolute',
+    right: Spacing.lg,
+    zIndex: 10,
+    padding: Spacing.sm,
+  },
+  fullScreenPhotoScroll: {
+    flex: 1,
+  },
+  fullScreenPhotoScrollContent: {
+    flexGrow: 1,
+  },
+  fullScreenPhotoImage: {
+    marginTop: Spacing.sm,
+  },
+  fullScreenPhotoInfo: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xs,
+  },
+  fullScreenPhotoInfoRow: {
+    fontSize: FontSize.md,
+    color: Colors.textInverse,
+    marginBottom: Spacing.xs,
+  },
+  fullScreenPhotoCaption: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.xs,
   },
 
   conditionCard: {
