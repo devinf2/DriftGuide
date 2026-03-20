@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator,
   Platform, KeyboardAvoidingView, TextInput,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -31,7 +31,7 @@ export default function SpotFishingTripScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuthStore();
-  const { locations, fetchLocations, getLocationById } = useLocationStore();
+  const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
 
   const [activeTab, setActiveTab] = useState<SpotTabKey>('overview');
   const [conditions, setConditions] = useState<LocationConditions | null>(null);
@@ -53,6 +53,14 @@ export default function SpotFishingTripScreen() {
   const [howToFishLoading, setHowToFishLoading] = useState(false);
 
   const location = id ? getLocationById(id) : undefined;
+  const navigation = useNavigation();
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: location?.name ?? 'Fishing Trip',
+      headerTitleStyle: { fontSize: FontSize.xl, fontWeight: '700' },
+    });
+  }, [navigation, location?.name]);
 
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
@@ -161,7 +169,10 @@ export default function SpotFishingTripScreen() {
   }, [aiInput, location, conditions, weatherData, waterFlowData]);
 
   const handlePlanTripHere = () => {
-    if (id) router.push({ pathname: '/trip/new', params: { locationId: id } });
+    if (id) {
+      setPendingPlanTripLocationId(id);
+      router.back();
+    }
   };
 
   const handleMoreInfo = () => {
@@ -201,8 +212,6 @@ export default function SpotFishingTripScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.spotName}>{location?.name ?? '—'}</Text>
-
       <View style={styles.tabBar}>
         {([
           { key: 'overview' as SpotTabKey, label: 'Overview' },
@@ -539,14 +548,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.textSecondary,
   },
-  spotName: {
-    fontSize: FontSize.xxl,
-    fontWeight: '700',
-    color: Colors.text,
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-  },
   tileLabelsRow: {
     flexDirection: 'row',
     gap: Spacing.md,
@@ -572,7 +573,7 @@ const styles = StyleSheet.create({
   tilesRow: {
     flexDirection: 'row',
     gap: Spacing.md,
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
   tile: {
     flex: 1,
@@ -630,7 +631,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
   },
@@ -648,8 +649,8 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.lg,
+    marginBottom: Spacing.xs,
+    marginTop: Spacing.md,
   },
   conditionsBlocksRow: {
     flexDirection: 'row',
@@ -687,7 +688,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
   },
@@ -742,7 +743,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
   },

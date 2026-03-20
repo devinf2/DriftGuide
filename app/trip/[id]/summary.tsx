@@ -56,7 +56,7 @@ export default function TripSummaryScreen() {
     }
   }, [user?.id, id]);
 
-  // Load trip photos when entry loads so we can show thumbnails in the entry and in the Photos tab
+  // Load trip photos when entry loads for the Photos tab
   useEffect(() => {
     if (trip && id) loadTripPhotos();
   }, [trip, id, loadTripPhotos]);
@@ -154,27 +154,6 @@ export default function TripSummaryScreen() {
           <Text style={styles.statLabel}>Duration</Text>
         </View>
       </View>
-
-      {/* Entry thumbnails — first few trip photos */}
-      {tripPhotos.length > 0 && (
-        <View style={styles.entryThumbnailsWrap}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.entryThumbnailsContent}
-          >
-            {tripPhotos.slice(0, 6).map((photo) => (
-              <Pressable
-                key={photo.id}
-                style={styles.entryThumbnailTouch}
-                onPress={() => setActiveTab('photos')}
-              >
-                <Image source={{ uri: photo.url }} style={styles.entryThumbnail} />
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-      )}
 
       {/* Tab Bar — same 5 tabs as active trip: Fishing, Photos, Conditions, AI Guide, Map */}
       <View style={styles.tabBar}>
@@ -326,9 +305,17 @@ function FishingTab({ events }: { events: TripEvent[] }) {
                     <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
                   )}
                 </View>
-                <Text style={styles.timelineText}>
-                  {getEventDescription(event)}
-                </Text>
+                <View style={styles.timelineTextBlock}>
+                  <Text style={styles.timelineText}>
+                    {getEventDescription(event)}
+                  </Text>
+                  {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
+                    <Image
+                      source={{ uri: (event.data as CatchData).photo_url! }}
+                      style={styles.timelineCatchThumb}
+                    />
+                  ) : null}
+                </View>
               </View>
             </View>
           ))
@@ -611,25 +598,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  entryThumbnailsWrap: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  entryThumbnailsContent: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  entryThumbnailTouch: {
-    borderRadius: BorderRadius.md,
-    overflow: 'hidden',
-  },
-  entryThumbnail: {
-    width: 72,
-    height: 72,
-    borderRadius: BorderRadius.md,
-    backgroundColor: Colors.borderLight,
-  },
-
   tabBar: {
     flexDirection: 'row',
     backgroundColor: Colors.surface,
@@ -828,10 +796,19 @@ const styles = StyleSheet.create({
     alignItems: 'center' as const,
     paddingTop: 2,
   },
+  timelineTextBlock: {
+    flex: 1,
+    gap: Spacing.sm,
+  },
   timelineText: {
     fontSize: FontSize.sm,
     color: Colors.text,
-    flex: 1,
+  },
+  timelineCatchThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.surface,
   },
 
   conditionCard: {

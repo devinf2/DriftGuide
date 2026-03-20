@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, FlatList, Pressable, RefreshControl,
   ActivityIndicator, Modal, Dimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as ExpoLocation from 'expo-location';
@@ -92,6 +92,13 @@ export default function JournalScreen() {
   useEffect(() => {
     loadTrips();
   }, [loadTrips]);
+
+  // Reload when screen gains focus (e.g. after deleting an entry and going back)
+  useFocusEffect(
+    useCallback(() => {
+      loadTrips();
+    }, [loadTrips]),
+  );
 
   useEffect(() => {
     (async () => {

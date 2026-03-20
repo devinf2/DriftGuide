@@ -347,7 +347,7 @@ export default function HomeScreen() {
                 style={styles.seeMoreHotSpots}
                 onPress={() => setHotSpotsExpanded(true)}
               >
-                <Text style={styles.seeMoreHotSpotsText}>See more ({hotSpotList.length - 1} more)</Text>
+                <Text style={styles.seeMoreHotSpotsText}>See More</Text>
                 <Ionicons name="chevron-down" size={18} color={Colors.primary} />
               </Pressable>
             )}
@@ -563,8 +563,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.xs,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
   },
   seeMoreHotSpotsText: {
     fontSize: FontSize.sm,

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Platform, Modal, KeyboardAvoidingView, Alert } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -33,26 +34,40 @@ function ConditionDot({ rating }: { rating: ConditionRating }) {
   return <View style={[styles.conditionDot, { backgroundColor: CONDITION_COLORS[rating] }]} />;
 }
 
-function ConditionIcon({ label, value, rating }: { label: string; value: string; rating: ConditionRating }) {
+function ConditionIcon({
+  label,
+  value,
+  rating,
+  compact,
+}: {
+  label: string;
+  value: string;
+  rating: ConditionRating;
+  compact?: boolean;
+}) {
   return (
     <View style={styles.conditionItem}>
-      <View style={styles.conditionValueRow}>
+      <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
         <ConditionDot rating={rating} />
-        <Text style={[styles.conditionValue, { color: CONDITION_COLORS[rating] }]}>{value}</Text>
+        <Text style={[styles.conditionValue, { color: CONDITION_COLORS[rating] }]} numberOfLines={1}>
+          {value}
+        </Text>
       </View>
       <Text style={styles.conditionLabel}>{label}</Text>
     </View>
   );
 }
 
-function SkyIcon({ conditions }: { conditions: LocationConditions }) {
+function SkyIcon({ conditions, compact }: { conditions: LocationConditions; compact?: boolean }) {
   const iconName = getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap;
   const color = CONDITION_COLORS[conditions.sky.rating];
   return (
     <View style={styles.conditionItem}>
-      <View style={styles.conditionValueRow}>
+      <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
         <Ionicons name={iconName} size={14} color={color} />
-        <Text style={[styles.conditionValue, { color }]}>{conditions.sky.label}</Text>
+        <Text style={[styles.conditionValue, { color }]} numberOfLines={1}>
+          {conditions.sky.label}
+        </Text>
       </View>
       <Text style={styles.conditionLabel}>Sky</Text>
     </View>
@@ -111,11 +126,12 @@ export default function NewTripScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ locationId?: string }>();
   const { user } = useAuthStore();
-  const { planTrip, startTrip } = useTripStore();
+  const { planTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
   const {
     locations, fetchLocations, searchLocations, addRecentLocation,
     getRecentLocations, lastAddedLocationId, setLastAddedLocationId, getLocationById,
+    pendingPlanTripLocationId, setPendingPlanTripLocationId,
   } = useLocationStore();
 
   const [offlineLocations, setOfflineLocations] = useState<Location[]>([]);
@@ -183,7 +199,7 @@ export default function NewTripScreen() {
   const effectiveLocations = isConnected ? locations : offlineLocations;
   const getEffectiveLocationById = (id: string) => effectiveLocations.find((l) => l.id === id);
 
-  // Pre-select location when opened from spot page (e.g. "Plan trip here")
+  // Pre-select location when opened with locationId param (e.g. deep link)
   useEffect(() => {
     const locationId = params.locationId;
     if (locationId && effectiveLocations.length > 0) {
@@ -195,6 +211,21 @@ export default function NewTripScreen() {
       }
     }
   }, [params.locationId, effectiveLocations.length]);
+
+  // When returning from spot overview after tapping Select: apply pending location and close overview
+  useFocusEffect(
+    useCallback(() => {
+      const pendingId = pendingPlanTripLocationId;
+      if (!pendingId) return;
+      setPendingPlanTripLocationId(null);
+      const loc = getLocationById(pendingId) ?? effectiveLocations.find((l) => l.id === pendingId);
+      if (loc) {
+        setSelectedLocation(loc);
+        setShowLocationSearch(false);
+        setSearchQuery('');
+      }
+    }, [pendingPlanTripLocationId, setPendingPlanTripLocationId, getLocationById, effectiveLocations])
+  );
 
   const topLevelLocations = isConnected ? locations.filter(l => !l.parent_location_id) : offlineLocations;
 
@@ -298,23 +329,6 @@ export default function NewTripScreen() {
       Alert.alert('Couldn\'t create trip', 'Something went wrong saving your trip. Check your connection and try again.');
     }
   }, [user, selectedLocation, planTrip, addRecentLocation, router, plannedDate, sessionType]);
-
-  const handleStartTripNow = useCallback(async () => {
-    if (!user || !selectedLocation) return;
-    if (!sessionType) {
-      Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore.');
-      return;
-    }
-    setSaving(true);
-    try {
-      const tripId = await startTrip(user.id, selectedLocation.id, 'fly', selectedLocation, sessionType);
-      setSaving(false);
-      router.replace(`/trip/${tripId}`);
-    } catch {
-      setSaving(false);
-      Alert.alert('Couldn\'t start trip', 'Something went wrong. Try again.');
-    }
-  }, [user, selectedLocation, sessionType, startTrip, router]);
 
   const handleSelectSuggestion = useCallback((suggestion: SpotSuggestion) => {
     const match = findLocationForSuggestion(suggestion);
@@ -424,33 +438,46 @@ export default function NewTripScreen() {
             setShowLocationSearch(true);
           }}
         >
-          <View style={styles.selectedLocationInfo}>
-            <Text style={styles.selectedLocationName}>{selectedLocation.name}</Text>
+          <View style={styles.selectedLocationContent}>
+            <View style={styles.selectedLocationHeader}>
+              <Text style={styles.selectedLocationName}>{selectedLocation.name}</Text>
+              <Text style={styles.changeText}>Change</Text>
+            </View>
             {(() => {
               const conditions = getConditionsForLocation(selectedLocation);
               return conditions ? (
                 <View style={styles.selectedConditionsRow}>
-                  <SkyIcon conditions={conditions} />
-                  <ConditionIcon
-                    label="Wind"
-                    value={`${conditions.wind.speed_mph}mph`}
-                    rating={conditions.wind.rating}
-                  />
-                  <ConditionIcon
-                    label="Temp"
-                    value={`${conditions.temperature.temp_f}\u00B0F`}
-                    rating={conditions.temperature.rating}
-                  />
-                  <ConditionIcon
-                    label="Water"
-                    value={formatWaterLabel(conditions)}
-                    rating={conditions.water.rating}
-                  />
+                  <View style={styles.selectedConditionItem}>
+                    <SkyIcon conditions={conditions} compact />
+                  </View>
+                  <View style={styles.selectedConditionItem}>
+                    <ConditionIcon
+                      label="Wind"
+                      value={`${conditions.wind.speed_mph}mph`}
+                      rating={conditions.wind.rating}
+                      compact
+                    />
+                  </View>
+                  <View style={styles.selectedConditionItem}>
+                    <ConditionIcon
+                      label="Temp"
+                      value={`${conditions.temperature.temp_f}\u00B0F`}
+                      rating={conditions.temperature.rating}
+                      compact
+                    />
+                  </View>
+                  <View style={styles.selectedConditionItem}>
+                    <ConditionIcon
+                      label="Water"
+                      value={formatWaterLabel(conditions)}
+                      rating={conditions.water.rating}
+                      compact
+                    />
+                  </View>
                 </View>
               ) : null;
             })()}
           </View>
-          <Text style={styles.changeText}>Change</Text>
         </Pressable>
       ) : (
         <View>
@@ -597,24 +624,15 @@ export default function NewTripScreen() {
       <View style={styles.pinnedButtonContainer}>
         <Pressable
           style={[styles.planButton, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
-          onPress={handleStartTripNow}
+          onPress={handlePlanTrip}
           disabled={!selectedLocation || !sessionType || saving}
         >
           {saving ? (
             <ActivityIndicator color={Colors.textInverse} />
           ) : (
-            <Text style={styles.planButtonText}>Start trip now</Text>
+            <Text style={styles.planButtonText}>Create Trip</Text>
           )}
         </Pressable>
-        {isConnected && (
-          <Pressable
-            style={[styles.planButtonSecondary, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
-            onPress={handlePlanTrip}
-            disabled={!selectedLocation || !sessionType || saving}
-          >
-            <Text style={styles.planButtonSecondaryText}>Create trip (plan for later)</Text>
-          </Pressable>
-        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -845,6 +863,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 3,
   },
+  conditionValueRowCompact: {
+    minHeight: 18,
+  },
   conditionDot: {
     width: 8,
     height: 8,
@@ -882,27 +903,36 @@ const styles = StyleSheet.create({
   selectedLocation: {
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
     borderWidth: 1,
     borderColor: Colors.primary,
   },
-  selectedLocationInfo: {
+  selectedLocationContent: {
     flex: 1,
-    marginRight: Spacing.md,
+  },
+  selectedLocationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 0,
   },
   selectedLocationName: {
     fontSize: FontSize.lg,
     fontWeight: '600',
     color: Colors.text,
+    flex: 1,
   },
   selectedConditionsRow: {
     flexDirection: 'row',
-    marginTop: Spacing.sm,
-    gap: Spacing.md,
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
+    marginTop: Spacing.xs,
+    gap: Spacing.sm,
+    width: '100%',
+  },
+  selectedConditionItem: {
+    flex: 1,
+    minWidth: 0,
   },
   changeText: {
     fontSize: FontSize.sm,

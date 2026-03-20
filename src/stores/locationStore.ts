@@ -9,6 +9,8 @@ interface LocationState {
   recentLocationIds: string[];
   isLoading: boolean;
   lastAddedLocationId: string | null;
+  /** When user taps Select on spot overview from plan-trip flow, we set this and go back so trip/new can apply it. */
+  pendingPlanTripLocationId: string | null;
   fetchLocations: () => Promise<void>;
   searchLocations: (query: string) => Location[];
   getLocationById: (id: string) => Location | undefined;
@@ -16,6 +18,7 @@ interface LocationState {
   addRecentLocation: (locationId: string) => void;
   getRecentLocations: () => Location[];
   setLastAddedLocationId: (id: string | null) => void;
+  setPendingPlanTripLocationId: (id: string | null) => void;
 }
 
 export const useLocationStore = create<LocationState>()(
@@ -25,6 +28,7 @@ export const useLocationStore = create<LocationState>()(
       recentLocationIds: [],
       isLoading: false,
       lastAddedLocationId: null,
+      pendingPlanTripLocationId: null,
 
       fetchLocations: async () => {
         set({ isLoading: true });
@@ -76,6 +80,10 @@ export const useLocationStore = create<LocationState>()(
 
       setLastAddedLocationId: (id) => {
         set({ lastAddedLocationId: id });
+      },
+
+      setPendingPlanTripLocationId: (id) => {
+        set({ pendingPlanTripLocationId: id });
       },
     }),
     {

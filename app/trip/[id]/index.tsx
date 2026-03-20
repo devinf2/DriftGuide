@@ -745,6 +745,7 @@ export default function TripDashboardScreen() {
           events={events}
           flyPickerNames={flyPickerNames}
           userFlies={userFlies}
+          tripPhotos={tripPhotos}
         />
       )}
 
@@ -889,10 +890,12 @@ function FishingTab({
   handleConfirmFly, events,
   flyPickerNames = FLY_NAMES,
   userFlies = [],
+  tripPhotos = [],
 }: any) {
   const [catchFlyDropdownOpen, setCatchFlyDropdownOpen] = useState<null | 'name' | 'size' | 'color' | 'name2' | 'size2' | 'color2'>(null);
   const [catchSpeciesDropdownOpen, setCatchSpeciesDropdownOpen] = useState(false);
   const [flyNameSearch, setFlyNameSearch] = useState('');
+  const [showTripPhotoPicker, setShowTripPhotoPicker] = useState(false);
 
   const flyNamesWithOther = useMemo(() => {
     const hasOther = flyPickerNames.some((n: string) => n === 'Other');
@@ -1141,9 +1144,57 @@ function FishingTab({
                     <MaterialIcons name="photo-library" size={22} color={Colors.primary} />
                     <Text style={styles.catchPhotoButtonLabel}>Upload</Text>
                   </Pressable>
+                  <Pressable
+                    style={styles.catchPhotoButton}
+                    onPress={() => setShowTripPhotoPicker(true)}
+                  >
+                    <MaterialIcons name="collections" size={22} color={Colors.primary} />
+                    <Text style={styles.catchPhotoButtonLabel}>From trip</Text>
+                  </Pressable>
                 </>
               )}
             </View>
+
+            {/* Trip photo picker modal — select from trip photos like photo library */}
+            <Modal
+              visible={showTripPhotoPicker}
+              animationType="slide"
+              transparent
+              onRequestClose={() => setShowTripPhotoPicker(false)}
+            >
+              <Pressable style={styles.tripPhotoPickerOverlay} onPress={() => setShowTripPhotoPicker(false)}>
+                <Pressable style={styles.tripPhotoPickerCard} onPress={() => {}}>
+                  <View style={styles.tripPhotoPickerHeader}>
+                    <Text style={styles.tripPhotoPickerTitle}>Select from trip</Text>
+                    <Pressable hitSlop={12} onPress={() => setShowTripPhotoPicker(false)}>
+                      <MaterialIcons name="close" size={24} color={Colors.textSecondary} />
+                    </Pressable>
+                  </View>
+                  {tripPhotos.length === 0 ? (
+                    <View style={styles.tripPhotoPickerEmpty}>
+                      <MaterialIcons name="photo-library" size={48} color={Colors.textTertiary} />
+                      <Text style={styles.tripPhotoPickerEmptyText}>No photos in this trip yet</Text>
+                      <Text style={styles.tripPhotoPickerEmptyHint}>Add photos in the Photos tab or take one with Camera / Upload</Text>
+                    </View>
+                  ) : (
+                    <ScrollView style={styles.tripPhotoPickerScroll} contentContainerStyle={styles.tripPhotoPickerGrid}>
+                      {tripPhotos.map((photo) => (
+                        <Pressable
+                          key={photo.id}
+                          style={styles.tripPhotoPickerThumbWrap}
+                          onPress={() => {
+                            setCatchPhotoUri(photo.url);
+                            setShowTripPhotoPicker(false);
+                          }}
+                        >
+                          <Image source={{ uri: photo.url }} style={styles.tripPhotoPickerThumb} />
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                </Pressable>
+              </Pressable>
+            </Modal>
 
             <Text style={styles.flyFieldLabel}>Notes</Text>
             <TextInput
@@ -1558,9 +1609,17 @@ function FishingTab({
                   <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
                 )}
               </View>
-              <Text style={styles.timelineText}>
-                {getEventDescription(event)}
-              </Text>
+              <View style={styles.timelineTextBlock}>
+                <Text style={styles.timelineText}>
+                  {getEventDescription(event)}
+                </Text>
+                {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
+                  <Image
+                    source={{ uri: (event.data as CatchData).photo_url! }}
+                    style={styles.timelineCatchThumb}
+                  />
+                ) : null}
+              </View>
             </View>
           </View>
         ))}
@@ -2659,6 +2718,69 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  tripPhotoPickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  tripPhotoPickerCard: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderTopRightRadius: BorderRadius.lg,
+    maxHeight: '80%',
+    paddingBottom: Spacing.xl,
+  },
+  tripPhotoPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  tripPhotoPickerTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  tripPhotoPickerEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.xl * 2,
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  tripPhotoPickerEmptyText: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    fontWeight: '500',
+  },
+  tripPhotoPickerEmptyHint: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  tripPhotoPickerScroll: {
+    maxHeight: 400,
+  },
+  tripPhotoPickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+  },
+  tripPhotoPickerThumbWrap: {
+    width: (Dimensions.get('window').width - Spacing.lg * 2 - Spacing.sm * 2) / 3,
+    aspectRatio: 1,
+  },
+  tripPhotoPickerThumb: {
+    width: '100%',
+    height: '100%',
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.surface,
+  },
   quantityRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2742,10 +2864,19 @@ const styles = StyleSheet.create({
     alignItems: 'center' as const,
     paddingTop: 2,
   },
+  timelineTextBlock: {
+    flex: 1,
+    gap: Spacing.sm,
+  },
   timelineText: {
     fontSize: FontSize.sm,
     color: Colors.text,
-    flex: 1,
+  },
+  timelineCatchThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.surface,
   },
 
   mapTabContainer: {
