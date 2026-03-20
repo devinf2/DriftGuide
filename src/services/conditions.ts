@@ -1,4 +1,4 @@
-import { Location, LocationConditions, ConditionRating, WaterClarity } from '@/src/types';
+import { Location, LocationConditions, ConditionRating, WaterClarity, WeatherData, WaterFlowData } from '@/src/types';
 import { getWeather } from './weather';
 import { getStreamFlow } from './waterFlow';
 
@@ -166,4 +166,26 @@ export async function fetchAllLocationConditions(
   }
 
   return results;
+}
+
+/** Build LocationConditions from trip-store weather + water flow (for Strategy tab on trip view). */
+export function buildConditionsFromWeatherAndFlow(
+  weather: WeatherData | null,
+  waterFlow: WaterFlowData | null,
+  locationId: string,
+): LocationConditions | null {
+  if (!weather && !waterFlow) return null;
+  const condition = weather?.condition ?? 'Clear';
+  const windSpeed = weather?.wind_speed_mph ?? 0;
+  const tempF = waterFlow?.water_temp_f ?? weather?.temperature_f ?? 60;
+  const clarity = waterFlow?.clarity ?? 'unknown';
+  const flowCfs = waterFlow?.flow_cfs ?? null;
+  return {
+    locationId,
+    sky: { condition, label: formatSkyLabel(condition), rating: rateSky(condition) },
+    wind: { speed_mph: windSpeed, rating: rateWind(windSpeed) },
+    temperature: { temp_f: tempF, rating: rateTemperature(tempF) },
+    water: { clarity, flow_cfs: flowCfs, rating: rateWater(clarity) },
+    fetchedAt: new Date().toISOString(),
+  };
 }

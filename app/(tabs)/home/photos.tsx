@@ -18,7 +18,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuthStore } from '@/src/stores/authStore';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { fetchPhotosWithTrip, addPhoto, PhotoWithTrip } from '@/src/services/photoService';
+import { fetchPhotosWithTrip, addPhoto, PhotoQueuedOfflineError, PhotoWithTrip } from '@/src/services/photoService';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { fetchTripsFromCloud } from '@/src/services/sync';
 import { Trip } from '@/src/types';
 import { format } from 'date-fns';
@@ -35,6 +36,7 @@ export default function PhotoLibraryScreen() {
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
+  const { isConnected } = useNetworkStatus();
   const [photos, setPhotos] = useState<PhotoWithTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -207,24 +209,32 @@ export default function PhotoLibraryScreen() {
     if (!user?.id || !addPhotoUri) return;
     setUploading(true);
     try {
-      await addPhoto({
-        userId: user.id,
-        uri: addPhotoUri,
-        tripId: addPhotoTripId ?? undefined,
-        caption: addPhotoCaption.trim() || undefined,
-        species: addPhotoSpecies.trim() || undefined,
-        fly_pattern: addPhotoFlyPattern.trim() || undefined,
-        fly_size: addPhotoFlySize.trim() || undefined,
-        fly_color: addPhotoFlyColor.trim() || undefined,
-      });
+      await addPhoto(
+        {
+          userId: user.id,
+          uri: addPhotoUri,
+          tripId: addPhotoTripId ?? undefined,
+          caption: addPhotoCaption.trim() || undefined,
+          species: addPhotoSpecies.trim() || undefined,
+          fly_pattern: addPhotoFlyPattern.trim() || undefined,
+          fly_size: addPhotoFlySize.trim() || undefined,
+          fly_color: addPhotoFlyColor.trim() || undefined,
+        },
+        { isOnline: isConnected },
+      );
       setAddPhotoUri(null);
       await loadPhotos();
     } catch (e) {
-      Alert.alert('Upload failed', (e as Error).message);
+      if (e instanceof PhotoQueuedOfflineError) {
+        Alert.alert('Saved on device', 'Photo will upload when you\'re back online.');
+        setAddPhotoUri(null);
+      } else {
+        Alert.alert('Upload failed', (e as Error).message);
+      }
     } finally {
       setUploading(false);
     }
-  }, [user?.id, addPhotoUri, addPhotoTripId, addPhotoCaption, addPhotoSpecies, addPhotoFlyPattern, addPhotoFlySize, addPhotoFlyColor, loadPhotos]);
+  }, [user?.id, addPhotoUri, addPhotoTripId, addPhotoCaption, addPhotoSpecies, addPhotoFlyPattern, addPhotoFlySize, addPhotoFlyColor, loadPhotos, isConnected]);
 
   const handleCancelAddPhoto = useCallback(() => {
     setAddPhotoUri(null);

@@ -56,9 +56,10 @@ export default function TripSummaryScreen() {
     }
   }, [user?.id, id]);
 
+  // Load trip photos when entry loads so we can show thumbnails in the entry and in the Photos tab
   useEffect(() => {
-    if (trip && activeTab === 'photos') loadTripPhotos();
-  }, [trip, activeTab, loadTripPhotos]);
+    if (trip && id) loadTripPhotos();
+  }, [trip, id, loadTripPhotos]);
 
   if (loading) {
     return (
@@ -153,6 +154,27 @@ export default function TripSummaryScreen() {
           <Text style={styles.statLabel}>Duration</Text>
         </View>
       </View>
+
+      {/* Entry thumbnails — first few trip photos */}
+      {tripPhotos.length > 0 && (
+        <View style={styles.entryThumbnailsWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.entryThumbnailsContent}
+          >
+            {tripPhotos.slice(0, 6).map((photo) => (
+              <Pressable
+                key={photo.id}
+                style={styles.entryThumbnailTouch}
+                onPress={() => setActiveTab('photos')}
+              >
+                <Image source={{ uri: photo.url }} style={styles.entryThumbnail} />
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Tab Bar — same 5 tabs as active trip: Fishing, Photos, Conditions, AI Guide, Map */}
       <View style={styles.tabBar}>
@@ -587,6 +609,25 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+
+  entryThumbnailsWrap: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  entryThumbnailsContent: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  entryThumbnailTouch: {
+    borderRadius: BorderRadius.md,
+    overflow: 'hidden',
+  },
+  entryThumbnail: {
+    width: 72,
+    height: 72,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.borderLight,
   },
 
   tabBar: {

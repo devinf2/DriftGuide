@@ -13,9 +13,15 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.driftguide.app",
+      "supportsTablet": true,
+      "usesAppleSignIn": true,
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.driftguide.app",
       "adaptiveIcon": {
         "backgroundColor": "#E8F4F8",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -33,10 +39,15 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
+      "expo-apple-authentication",
       "@maplibre/maplibre-react-native"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "privacyPolicyUrl": "https://yoursite.com/privacy",
+      "supportUrl": "https://yoursite.com/support"
     }
   }
 }

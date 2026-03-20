@@ -10,6 +10,7 @@ import 'react-native-reanimated';
 
 import { useAuthStore } from '@/src/stores/authStore';
 import { supabase } from '@/src/services/supabase';
+import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -50,7 +51,12 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [session, segments, isLoading]);
 
-  return <>{children}</>;
+  return (
+    <>
+      {session ? <SyncOnConnectivity /> : null}
+      {children}
+    </>
+  );
 }
 
 export default function RootLayout() {
@@ -97,6 +103,10 @@ export default function RootLayout() {
             <Stack.Screen
               name="trip/add-location"
               options={{ title: 'Add Location', presentation: 'modal' }}
+            />
+            <Stack.Screen
+              name="trip/download-waterway"
+              options={{ title: 'Download for offline', headerBackTitle: 'Back' }}
             />
             <Stack.Screen
               name="trip/[id]"

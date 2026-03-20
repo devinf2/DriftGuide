@@ -16,7 +16,9 @@ import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useTripStore } from '@/src/stores/tripStore';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { getDownloadedWaterways, removeDownloadedWaterway, refreshWaterway, type DownloadedWaterway } from '@/src/services/waterwayCache';
 import {
   fetchProfileStats,
   ProfileStats,
@@ -48,10 +50,13 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, profile, signOut } = useAuthStore();
+  const { pendingSyncTrips, retryPendingSyncs, isSyncingPending } = useTripStore();
   const [rangeIdx, setRangeIdx] = useState(1);
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
+  const [downloadedWaterways, setDownloadedWaterways] = useState<DownloadedWaterway[]>([]);
+  const [refreshingWaterwayId, setRefreshingWaterwayId] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     if (!user) return;
@@ -67,6 +72,7 @@ export default function ProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       loadStats();
+      getDownloadedWaterways().then(setDownloadedWaterways);
     }, [loadStats])
   );
 
@@ -75,6 +81,37 @@ export default function ProfileScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: signOut },
     ]);
+  };
+
+  const handleRemoveWaterway = (locationId: string) => {
+    Alert.alert('Remove', 'Remove this waterway from offline storage?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: async () => {
+        await removeDownloadedWaterway(locationId);
+        setDownloadedWaterways(await getDownloadedWaterways());
+      } },
+    ]);
+  };
+
+  const handleRefreshWaterway = async (locationId: string) => {
+    setRefreshingWaterwayId(locationId);
+    try {
+      await refreshWaterway(locationId);
+      setDownloadedWaterways(await getDownloadedWaterways());
+    } finally {
+      setRefreshingWaterwayId(null);
+    }
+  };
+
+  const handleRetrySync = async () => {
+    const prevCount = pendingSyncTrips.length;
+    await retryPendingSyncs();
+    const newCount = useTripStore.getState().pendingSyncTrips.length;
+    if (newCount < prevCount) {
+      Alert.alert('Trip synced', prevCount - newCount === 1 ? '1 trip synced to the cloud.' : `${prevCount - newCount} trips synced.`);
+    } else if (prevCount > 0) {
+      Alert.alert('Sync failed', 'Could not sync. Check your connection and try again.');
+    }
   };
 
   const maxFish = stats
@@ -122,6 +159,53 @@ export default function ProfileScreen() {
           <Text style={styles.flyBoxButtonText}>Fly Box</Text>
           <Text style={styles.flyBoxButtonSubtext}>Manage your fly inventory</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Offline waterways</Text>
+          <Text style={styles.pendingSyncText}>
+            Download waterways to start trips and use conditions when offline.
+          </Text>
+          {downloadedWaterways.length === 0 ? (
+            <Text style={styles.emptyText}>No waterways downloaded</Text>
+          ) : (
+            downloadedWaterways.map((w) => {
+              const name = w.locations.find((l) => l.id === w.locationId)?.name ?? w.locationId;
+              const isRefreshing = refreshingWaterwayId === w.locationId;
+              return (
+                <View key={w.locationId} style={styles.waterwayRow}>
+                  <Text style={styles.waterwayName} numberOfLines={1}>{name}</Text>
+                  <View style={styles.waterwayActions}>
+                    <Pressable
+                      style={styles.refreshWaterwayBtn}
+                      onPress={() => handleRefreshWaterway(w.locationId)}
+                      disabled={isRefreshing}
+                    >
+                      {isRefreshing ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <Text style={styles.refreshWaterwayBtnText}>Refresh</Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      style={styles.removeWaterwayBtn}
+                      onPress={() => handleRemoveWaterway(w.locationId)}
+                    >
+                      <Text style={styles.removeWaterwayBtnText}>Remove</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })
+          )}
+          <Pressable
+            style={styles.addWaterwayButton}
+            onPress={() => router.push('/trip/download-waterway')}
+          >
+            <Text style={styles.addWaterwayButtonText}>{downloadedWaterways.length === 0 ? 'Download a waterway' : 'Add waterway'}</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.section}>
@@ -287,6 +371,28 @@ export default function ProfileScreen() {
             </View>
           </View>
         </>
+      ) : null}
+
+      {pendingSyncTrips.length > 0 ? (
+        <View style={styles.section}>
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Offline sync</Text>
+            <Text style={styles.pendingSyncText}>
+              {pendingSyncTrips.length} trip{pendingSyncTrips.length !== 1 ? 's' : ''} saved on device waiting to sync.
+            </Text>
+            <Pressable
+              style={[styles.retrySyncButton, isSyncingPending && styles.retrySyncButtonDisabled]}
+              onPress={handleRetrySync}
+              disabled={isSyncingPending}
+            >
+              {isSyncingPending ? (
+                <ActivityIndicator size="small" color={Colors.textInverse} />
+              ) : (
+                <Text style={styles.retrySyncButtonText}>Retry sync</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
       ) : null}
 
       <View style={styles.section}>
@@ -534,6 +640,55 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+  pendingSyncText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.md,
+  },
+  retrySyncButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.sm,
+    alignItems: 'center',
+  },
+  retrySyncButtonDisabled: {
+    opacity: 0.7,
+  },
+  retrySyncButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textInverse,
+  },
+  waterwayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  waterwayName: { flex: 1, fontSize: FontSize.md, color: Colors.text },
+  waterwayActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  refreshWaterwayBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm, minWidth: 56, alignItems: 'center' },
+  refreshWaterwayBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
+  removeWaterwayBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm },
+  removeWaterwayBtnText: { fontSize: FontSize.sm, color: Colors.error, fontWeight: '600' },
+  addWaterwayButton: {
+    marginTop: Spacing.md,
+    backgroundColor: Colors.background,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  addWaterwayButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.primary,
   },
   signOutRow: {
     paddingVertical: Spacing.lg,

@@ -1,5 +1,8 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import type { Fly, FlyCatalog, FlyColor, FlySize, FlyPresentation } from '@/src/types';
+
+const FLIES_CACHE_PREFIX = 'user_flies_';
 
 /** Fetch reference lists for pickers. */
 export async function fetchFlyCatalog(): Promise<FlyCatalog[]> {
@@ -60,7 +63,7 @@ export async function fetchFlies(userId: string): Promise<Fly[]> {
   }>;
   rows.sort((a, b) => (a.fly?.name ?? '').localeCompare(b.fly?.name ?? ''));
 
-  return rows.map((r) => ({
+  const flies = rows.map((r) => ({
     id: r.id,
     user_id: r.user_id,
     name: r.fly?.name ?? '',
@@ -74,6 +77,23 @@ export async function fetchFlies(userId: string): Promise<Fly[]> {
     fly_color_id: r.fly_color_id,
     fly_size_id: r.fly_size_id,
   })) as Fly[];
+  try {
+    await AsyncStorage.setItem(FLIES_CACHE_PREFIX + userId, JSON.stringify(flies));
+  } catch {
+    // non-blocking
+  }
+  return flies;
+}
+
+/** Read user fly box from local cache (for offline use). */
+export async function getFliesFromCache(userId: string): Promise<Fly[]> {
+  try {
+    const raw = await AsyncStorage.getItem(FLIES_CACHE_PREFIX + userId);
+    if (!raw) return [];
+    return JSON.parse(raw) as Fly[];
+  } catch {
+    return [];
+  }
 }
 
 /** Resolve color name to fly_color_id; insert color if missing. */

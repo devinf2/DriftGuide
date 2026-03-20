@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
@@ -33,11 +33,18 @@ export default function TripSurveyScreen() {
     if (!id || !trip || !canSubmit) return;
     setSubmitting(true);
     try {
-      await updateTripSurvey(id, {
+      const synced = await updateTripSurvey(id, {
         rating,
         user_reported_clarity: userReportedClarity,
         notes: notes.trim() || null,
       });
+      if (!synced) {
+        Alert.alert(
+          'Saved on device',
+          'Survey will sync when you\'re back online or when you open the app with connection.',
+          [{ text: 'OK' }],
+        );
+      }
       router.replace(`/trip/${id}/summary`);
     } catch {
       setSubmitting(false);

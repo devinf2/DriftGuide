@@ -6,10 +6,15 @@ import { Trip, TripEvent, FlyChangeData, CatchData, NoteData, FishingType, Weath
 import { getMoonPhase } from '@/src/utils/moonPhase';
 import * as ExpoLocation from 'expo-location';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
+import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
 import { getFallbackRecommendation, getSmartFlyRecommendation, getSeason, getTimeOfDay } from '@/src/services/ai';
-import { fetchFlies } from '@/src/services/flyService';
+import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
+import { getCachedConditions } from '@/src/services/waterwayCache';
+
+const IN_TRIP_SYNC_DEBOUNCE_MS = 5000;
+let inTripSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface TripState {
   activeTrip: Trip | null;
@@ -24,6 +29,7 @@ interface TripState {
   conditionsLoading: boolean;
   recommendationLoading: boolean;
   pendingSyncTrips: string[];
+  isSyncingPending: boolean;
   plannedTrips: Trip[];
   plannedTripsLoading: boolean;
 
@@ -33,9 +39,15 @@ interface TripState {
   deleteTrip: (tripId: string) => Promise<void>;
   fetchPlannedTrips: (userId: string) => Promise<void>;
   startTrip: (userId: string, locationId: string | null, fishingType: FishingType, location?: Location, sessionType?: SessionType | null) => Promise<string>;
-  endTrip: () => Promise<void>;
-  updateTripSurvey: (tripId: string, payload: { rating: number | null; user_reported_clarity: string | null; notes: string | null }) => Promise<void>;
-  addCatch: (data?: Partial<CatchData>, latitude?: number | null, longitude?: number | null) => void;
+  endTrip: () => Promise<{ synced: boolean }>;
+  updateTripSurvey: (tripId: string, payload: { rating: number | null; user_reported_clarity: string | null; notes: string | null }) => Promise<boolean>;
+  retryPendingSyncs: () => Promise<void>;
+  isSyncingPending: boolean;
+  isOnline: boolean;
+  setOnlineStatus: (online: boolean) => void;
+  scheduleInTripSync: () => void;
+  addCatch: (data?: Partial<CatchData>, latitude?: number | null, longitude?: number | null) => string | undefined;
+  updateEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
   removeCatch: () => void;
   changeFly: (primary: FlyChangeData, dropper?: FlyChangeData | null, latitude?: number | null, longitude?: number | null) => void;
   addNote: (text: string, latitude?: number | null, longitude?: number | null) => void;
@@ -74,6 +86,8 @@ export const useTripStore = create<TripState>()(
       conditionsLoading: false,
       recommendationLoading: false,
       pendingSyncTrips: [],
+      isSyncingPending: false,
+      isOnline: true,
       plannedTrips: [],
       plannedTripsLoading: false,
 
@@ -270,9 +284,9 @@ export const useTripStore = create<TripState>()(
         return tripId;
       },
 
-      endTrip: async () => {
+      endTrip: async (): Promise<{ synced: boolean }> => {
         const { activeTrip, events, fishCount, weatherData, waterFlowData, nextFlyRecommendation } = get();
-        if (!activeTrip) return;
+        if (!activeTrip) return { synced: false };
 
         let endLat: number | null = null;
         let endLon: number | null = null;
@@ -319,6 +333,11 @@ export const useTripStore = create<TripState>()(
         const synced = await syncTripToCloud(endedTrip, allEvents);
 
         if (!synced) {
+          try {
+            await savePendingTrip(activeTrip.id, endedTrip, allEvents);
+          } catch (e) {
+            console.error('Failed to save pending trip locally:', e);
+          }
           set(state => ({
             pendingSyncTrips: [...state.pendingSyncTrips, activeTrip.id],
           }));
@@ -334,18 +353,29 @@ export const useTripStore = create<TripState>()(
           conditionsLoading: false,
           recommendationLoading: false,
         });
+        return { synced };
       },
 
-      updateTripSurvey: async (tripId, payload) => {
+      updateTripSurvey: async (tripId, payload): Promise<boolean> => {
         const { activeTrip, events } = get();
-        if (!activeTrip || activeTrip.id !== tripId) return;
+        if (!activeTrip || activeTrip.id !== tripId) return false;
         const updatedTrip: Trip = {
           ...activeTrip,
           rating: payload.rating,
           user_reported_clarity: payload.user_reported_clarity as Trip['user_reported_clarity'],
           notes: payload.notes ?? activeTrip.notes,
         };
-        await syncTripToCloud(updatedTrip, events);
+        const synced = await syncTripToCloud(updatedTrip, events);
+        if (!synced) {
+          try {
+            await savePendingTrip(tripId, updatedTrip, events);
+          } catch (e) {
+            console.error('Failed to save pending trip locally:', e);
+          }
+          set(state => ({
+            pendingSyncTrips: [...state.pendingSyncTrips, tripId],
+          }));
+        }
         set({
           activeTrip: null,
           events: [],
@@ -357,15 +387,52 @@ export const useTripStore = create<TripState>()(
           weatherData: null,
           waterFlowData: null,
         });
+        return synced;
       },
 
-      addCatch: (data, latitude, longitude) => {
+      retryPendingSyncs: async () => {
+        const { pendingSyncTrips } = get();
+        if (pendingSyncTrips.length === 0) return;
+        set({ isSyncingPending: true });
+        try {
+          const pending = await getPendingTrips();
+          for (const tripId of pendingSyncTrips) {
+            const payload = pending[tripId];
+            if (!payload) continue;
+            const ok = await syncTripToCloud(payload.trip, payload.events);
+            if (ok) {
+              await removePendingTrip(tripId);
+              set(state => ({
+                pendingSyncTrips: state.pendingSyncTrips.filter((id) => id !== tripId),
+              }));
+            }
+          }
+        } finally {
+          set({ isSyncingPending: false });
+        }
+      },
+
+      setOnlineStatus: (online) => set({ isOnline: online }),
+
+      scheduleInTripSync: () => {
+        if (inTripSyncTimer) clearTimeout(inTripSyncTimer);
+        inTripSyncTimer = setTimeout(() => {
+          inTripSyncTimer = null;
+          const { activeTrip, events, isOnline } = get();
+          if (activeTrip && events && isOnline) {
+            syncTripToCloud(activeTrip, events).catch(() => {});
+          }
+        }, IN_TRIP_SYNC_DEBOUNCE_MS);
+      },
+
+      addCatch: (data, latitude, longitude): string | undefined => {
         const { activeTrip, currentFlyEventId, fishCount, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        if (!activeTrip) return undefined;
         const qty = Math.max(1, data?.quantity ?? 1);
+        const eventId = uuidv4();
 
         const catchEvent: TripEvent = {
-          id: uuidv4(),
+          id: eventId,
           trip_id: activeTrip.id,
           event_type: 'catch',
           timestamp: new Date().toISOString(),
@@ -396,6 +463,20 @@ export const useTripStore = create<TripState>()(
         }));
 
         setTimeout(() => get().refreshSmartRecommendation(), 100);
+        get().scheduleInTripSync();
+        return eventId;
+      },
+
+      updateEventPhotoUrl: (tripId, eventId, photoUrl) => {
+        const { activeTrip } = get();
+        if (!activeTrip || activeTrip.id !== tripId) return;
+        set((state) => ({
+          events: state.events.map((e) =>
+            e.id === eventId && e.event_type === 'catch'
+              ? { ...e, data: { ...e.data, photo_url: photoUrl } }
+              : e,
+          ),
+        }));
       },
 
       removeCatch: () => {
@@ -462,6 +543,7 @@ export const useTripStore = create<TripState>()(
         }));
 
         setTimeout(() => get().refreshSmartRecommendation(), 100);
+        get().scheduleInTripSync();
       },
 
       addNote: (text, latitude, longitude) => {
@@ -482,6 +564,7 @@ export const useTripStore = create<TripState>()(
         set(state => ({
           events: [...state.events, noteEvent],
         }));
+        get().scheduleInTripSync();
       },
 
       addBite: (latitude, longitude) => {
@@ -567,12 +650,34 @@ export const useTripStore = create<TripState>()(
       },
 
       fetchConditions: async () => {
-        const { activeTrip } = get();
+        const { activeTrip, isOnline } = get();
         if (!activeTrip) return;
 
         set({ conditionsLoading: true });
 
         try {
+          if (!isOnline) {
+            const location = activeTrip.location;
+            const locationId = location?.id;
+            const parentId = location?.parent_location_id ?? undefined;
+            const cached = locationId ? await getCachedConditions(locationId, parentId) : null;
+            const weather = cached?.weather ?? null;
+            const waterFlow = cached?.waterFlow ?? null;
+            set(state => ({
+              weatherData: weather,
+              waterFlowData: waterFlow,
+              conditionsLoading: false,
+              activeTrip: state.activeTrip
+                ? {
+                    ...state.activeTrip,
+                    ...(weather && { weather_cache: weather }),
+                    ...(waterFlow && { water_flow_cache: waterFlow }),
+                  }
+                : null,
+            }));
+            return;
+          }
+
           const location = activeTrip.location;
           const lat = location?.latitude;
           const lng = location?.longitude;
@@ -603,7 +708,7 @@ export const useTripStore = create<TripState>()(
       },
 
       refreshSmartRecommendation: async () => {
-        const { activeTrip, events, currentFly, currentFly2, fishCount, weatherData, waterFlowData } = get();
+        const { activeTrip, events, currentFly, currentFly2, fishCount, weatherData, waterFlowData, isOnline } = get();
         if (!activeTrip) {
           set({ recommendationLoading: false });
           return;
@@ -613,13 +718,31 @@ export const useTripStore = create<TripState>()(
 
         try {
           const now = new Date();
+          const primaryStr = currentFly ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}${currentFly.color ? ` (${currentFly.color})` : ''}` : null;
+
+          if (!isOnline) {
+            const location = activeTrip.location;
+            const locationId = location?.id;
+            const parentId = location?.parent_location_id ?? undefined;
+            const cached = locationId ? await getCachedConditions(locationId, parentId) : null;
+            const cachedWeather = cached?.weather ?? weatherData ?? null;
+            const userFlies = await getFliesFromCache(activeTrip.user_id);
+            const recommendation = getFallbackRecommendation(
+              activeTrip.fishing_type,
+              primaryStr,
+              cachedWeather,
+              userFlies.length > 0 ? userFlies : null,
+            );
+            set({ nextFlyRecommendation: recommendation, recommendationLoading: false });
+            return;
+          }
+
           let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
           try {
             userFlies = await fetchFlies(activeTrip.user_id);
           } catch {
             // non-blocking: recommendations still work without fly box
           }
-          const primaryStr = currentFly ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}${currentFly.color ? ` (${currentFly.color})` : ''}` : null;
           const dropperStr = currentFly2 ? `${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}${currentFly2.color ? ` (${currentFly2.color})` : ''}` : null;
           const recommendation = await getSmartFlyRecommendation({
             location: activeTrip.location || null,

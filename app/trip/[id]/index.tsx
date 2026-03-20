@@ -31,12 +31,13 @@ import { MoonPhaseShape } from '@/src/components/MoonPhaseShape';
 import { getHourlyForecast } from '@/src/services/weather';
 import { FLY_NAMES, FLY_SIZES, FLY_COLORS, COMMON_FLIES_BY_NAME, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
 import { CLARITY_LABELS, CLARITY_DESCRIPTIONS, getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_DESCRIPTIONS, FLOW_STATUS_COLORS, buildConditionsSummary, inferClarityFromWeather } from '@/src/services/waterFlow';
-import { askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
-import { fetchFlies } from '@/src/services/flyService';
+import { askAI, getSeason, getTimeOfDay, getSpotFishingSummary, getSpotHowToFish } from '@/src/services/ai';
+import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getWeatherIconName, formatSkyLabel } from '@/src/services/conditions';
+import { getWeatherIconName, formatSkyLabel, buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
 import * as ImagePicker from 'expo-image-picker';
-import { fetchPhotos, addPhoto } from '@/src/services/photoService';
+import { fetchPhotos, addPhoto, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { savePendingPhoto, buildPendingFromAddPhotoOptions } from '@/src/services/pendingPhotoStorage';
 import { Photo } from '@/src/types';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 
@@ -103,6 +104,10 @@ export default function TripDashboardScreen() {
   const [mapLocation, setMapLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [mapLocationLoading, setMapLocationLoading] = useState(false);
   const [mapLocationError, setMapLocationError] = useState<string | null>(null);
+  const [strategyTopFlies, setStrategyTopFlies] = useState<string[]>([]);
+  const [strategyBestTime, setStrategyBestTime] = useState<string | null>(null);
+  const [strategyHowToFish, setStrategyHowToFish] = useState<string | null>(null);
+  const [strategyLoading, setStrategyLoading] = useState(false);
 
   /** Fly names for picker: from Fly Box when available, else default list */
   const flyPickerNames = userFlies.length > 0
@@ -129,8 +134,12 @@ export default function TripDashboardScreen() {
 
   useEffect(() => {
     if (!activeTrip?.user_id) return;
-    fetchFlies(activeTrip.user_id).then(setUserFlies).catch(() => setUserFlies([]));
-  }, [activeTrip?.user_id]);
+    if (isConnected) {
+      fetchFlies(activeTrip.user_id).then(setUserFlies).catch(() => setUserFlies([]));
+    } else {
+      getFliesFromCache(activeTrip.user_id).then(setUserFlies);
+    }
+  }, [activeTrip?.user_id, isConnected]);
 
   const loadTripPhotos = useCallback(async () => {
     if (!activeTrip?.id || !activeTrip?.user_id) return;
@@ -148,6 +157,37 @@ export default function TripDashboardScreen() {
   useEffect(() => {
     if (activeTrip && activeTab === 'photos') loadTripPhotos();
   }, [activeTrip, activeTab, loadTripPhotos]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || !activeTrip?.location) return;
+    const loc = activeTrip.location;
+    const conditions = buildConditionsFromWeatherAndFlow(weatherData, waterFlowData, loc.id)
+      ?? {
+        locationId: loc.id,
+        sky: { condition: 'Clear', label: 'Clear', rating: 'good' as const },
+        wind: { speed_mph: 0, rating: 'good' as const },
+        temperature: { temp_f: 60, rating: 'good' as const },
+        water: { clarity: 'unknown' as const, flow_cfs: null, rating: 'fair' as const },
+        fetchedAt: new Date().toISOString(),
+      };
+    let cancelled = false;
+    setStrategyLoading(true);
+    setStrategyTopFlies([]);
+    setStrategyBestTime(null);
+    setStrategyHowToFish(null);
+    Promise.all([
+      getSpotFishingSummary(loc.name, conditions),
+      getSpotHowToFish(loc.name, conditions),
+    ]).then(([summary, howToFish]) => {
+      if (!cancelled) {
+        setStrategyTopFlies(summary.topFlies);
+        setStrategyBestTime(summary.bestTime);
+        setStrategyHowToFish(howToFish);
+        setStrategyLoading(false);
+      }
+    }).catch(() => { if (!cancelled) setStrategyLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, activeTrip?.id, activeTrip?.location?.id, activeTrip?.location?.name, weatherData, waterFlowData]);
 
   const handlePickTripPhoto = useCallback(async () => {
     if (!activeTrip?.id) return;
@@ -171,26 +211,34 @@ export default function TripDashboardScreen() {
     if (!activeTrip?.id || !tripPhotoUri) return;
     setTripPhotoUploading(true);
     try {
-      await addPhoto({
-        userId: activeTrip.user_id,
-        tripId: activeTrip.id,
-        uri: tripPhotoUri,
-        caption: tripPhotoCaption.trim() || undefined,
-        species: tripPhotoSpecies.trim() || undefined,
-        fly_pattern: currentFly?.pattern ?? undefined,
-        fly_size: currentFly?.size ?? undefined,
-        fly_color: currentFly?.color ?? undefined,
-        fly_id: currentFly?.fly_id ?? undefined,
-        captured_at: new Date().toISOString(),
-      });
+      await addPhoto(
+        {
+          userId: activeTrip.user_id,
+          tripId: activeTrip.id,
+          uri: tripPhotoUri,
+          caption: tripPhotoCaption.trim() || undefined,
+          species: tripPhotoSpecies.trim() || undefined,
+          fly_pattern: currentFly?.pattern ?? undefined,
+          fly_size: currentFly?.size ?? undefined,
+          fly_color: currentFly?.color ?? undefined,
+          fly_id: currentFly?.fly_id ?? undefined,
+          captured_at: new Date().toISOString(),
+        },
+        { isOnline: isConnected },
+      );
       setTripPhotoUri(null);
       await loadTripPhotos();
     } catch (e) {
-      Alert.alert('Upload failed', (e as Error).message);
+      if (e instanceof PhotoQueuedOfflineError) {
+        Alert.alert('Saved on device', 'Photo will upload when you\'re back online.');
+        setTripPhotoUri(null);
+      } else {
+        Alert.alert('Upload failed', (e as Error).message);
+      }
     } finally {
       setTripPhotoUploading(false);
     }
-  }, [activeTrip?.id, activeTrip?.user_id, tripPhotoUri, tripPhotoCaption, tripPhotoSpecies, currentFly, loadTripPhotos]);
+  }, [activeTrip?.id, activeTrip?.user_id, tripPhotoUri, tripPhotoCaption, tripPhotoSpecies, currentFly, loadTripPhotos, isConnected]);
 
   const handleCancelTripPhoto = useCallback(() => {
     setTripPhotoUri(null);
@@ -340,10 +388,8 @@ export default function TripDashboardScreen() {
       lon = lastKnownCatchLon.current;
     }
     let photoUrl: string | null = null;
-    if (catchPhotoUri && activeTrip?.id && activeTrip?.user_id) {
-      setCatchPhotoUploading(true);
-      try {
-        const photo = await addPhoto({
+    const photoOptions = activeTrip?.id && activeTrip?.user_id && catchPhotoUri
+      ? {
           userId: activeTrip.user_id,
           tripId: activeTrip.id,
           uri: catchPhotoUri,
@@ -354,7 +400,13 @@ export default function TripDashboardScreen() {
           fly_color: primary.color ?? undefined,
           fly_id: primary.fly_id ?? undefined,
           captured_at: new Date().toISOString(),
-        });
+        }
+      : null;
+
+    if (photoOptions && isConnected) {
+      setCatchPhotoUploading(true);
+      try {
+        const photo = await addPhoto(photoOptions, { isOnline: true });
         photoUrl = photo.url;
       } catch (e) {
         Alert.alert('Upload failed', (e as Error).message);
@@ -363,7 +415,8 @@ export default function TripDashboardScreen() {
       }
       setCatchPhotoUploading(false);
     }
-    addCatch(
+
+    const eventId = addCatch(
       {
         species: species ?? undefined,
         size_inches: sizeNum ?? undefined,
@@ -379,6 +432,16 @@ export default function TripDashboardScreen() {
       lat,
       lon,
     );
+
+    if (photoOptions && !photoUrl && eventId) {
+      try {
+        await savePendingPhoto({
+          ...buildPendingFromAddPhotoOptions(photoOptions, 'catch', eventId),
+        });
+      } catch {
+        // non-blocking
+      }
+    }
     setCatchSpecies('');
     setCatchSize('');
     setCatchNote('');
@@ -394,7 +457,7 @@ export default function TripDashboardScreen() {
     setCatchReleased(true);
     setCatchStructure(null);
     setShowCatchModal(false);
-  }, [addCatch, changeFly, activeTrip?.id, activeTrip?.user_id, userFlies, currentFly, currentFly2, catchSpecies, catchSize, catchNote, catchPhotoUri, catchCaughtOnFly, catchDepth, catchFlyName, catchFlySize, catchFlyColor, catchFlyName2, catchFlySize2, catchFlyColor2, catchPresentation, catchReleased, catchStructure]);
+  }, [addCatch, changeFly, activeTrip?.id, activeTrip?.user_id, userFlies, currentFly, currentFly2, catchSpecies, catchSize, catchNote, catchPhotoUri, catchCaughtOnFly, catchDepth, catchFlyName, catchFlySize, catchFlyColor, catchFlyName2, catchFlySize2, catchFlyColor2, catchPresentation, catchReleased, catchStructure, isConnected]);
 
   const handleEndTrip = () => {
     Alert.alert('End Trip', `End this trip with ${formatFishCount(fishCount)}?`, [
@@ -403,7 +466,14 @@ export default function TripDashboardScreen() {
         text: 'End Trip',
         style: 'destructive',
         onPress: async () => {
-          await endTrip();
+          const { synced } = await endTrip();
+          if (!synced) {
+            Alert.alert(
+              'Saved on device',
+              "Trip will sync when you're back online or when you open the app with connection.",
+              [{ text: 'OK' }],
+            );
+          }
           router.replace(`/trip/${id}/survey`);
         },
       },
@@ -688,28 +758,79 @@ export default function TripDashboardScreen() {
       )}
 
       {activeTab === 'conditions' && (
-        <ConditionsTab
-          weatherData={weatherData}
-          waterFlowData={waterFlowData}
-          conditionsLoading={conditionsLoading}
-          onRefresh={fetchConditions}
-          location={activeTrip.location}
-        />
+        <>
+          {!isConnected && (
+            <View style={styles.cachedDataBanner}>
+              <Text style={styles.cachedDataBannerText}>Offline – using cached data</Text>
+            </View>
+          )}
+          <ConditionsTab
+            weatherData={weatherData}
+            waterFlowData={waterFlowData}
+            conditionsLoading={conditionsLoading}
+            onRefresh={fetchConditions}
+            location={activeTrip.location}
+          />
+        </>
       )}
 
       {activeTab === 'ai' && (
-        <AIGuideTab
-          nextFlyRecommendation={nextFlyRecommendation}
-          recommendationLoading={recommendationLoading}
-          onRefreshRecommendation={refreshSmartRecommendation}
-          changeFly={changeFly}
-          messages={aiMessages}
-          input={aiInput}
-          setInput={setAiInput}
-          loading={aiLoading}
-          onSend={handleAskAI}
-          scrollRef={aiScrollRef}
-        />
+        <>
+          {!isConnected && (
+            <View style={styles.cachedDataBanner}>
+              <Text style={styles.cachedDataBannerText}>Offline – using cached data</Text>
+            </View>
+          )}
+          <AIGuideTab
+            strategySlot={
+              <>
+                <Text style={[styles.strategySectionLabel, styles.strategySectionLabelFirst]}>Best time to fish</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                  ) : strategyBestTime ? (
+                    <Text style={styles.strategyBestTime}>{strategyBestTime}</Text>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>—</Text>
+                  )}
+                </View>
+                <Text style={styles.strategySectionLabel}>Top flies</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                  ) : strategyTopFlies.length > 0 ? (
+                    <View style={styles.strategyFliesWrap}>
+                      {strategyTopFlies.map((fly, i) => (
+                        <View key={i} style={styles.strategyFlyRow}>
+                          <View style={styles.strategyFlyBullet} />
+                          <Text style={styles.strategyFlyName} numberOfLines={2}>{fly}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>No fly suggestions.</Text>
+                  )}
+                </View>
+                <Text style={styles.strategySectionLabel}>How to fish it</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                  ) : strategyHowToFish ? (
+                    <Text style={styles.strategyHowToFishText}>{strategyHowToFish}</Text>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>—</Text>
+                  )}
+                </View>
+              </>
+            }
+            messages={aiMessages}
+            input={aiInput}
+            setInput={setAiInput}
+            loading={aiLoading}
+            onSend={handleAskAI}
+            scrollRef={aiScrollRef}
+          />
+        </>
       )}
 
       {activeTab === 'map' && (
@@ -1587,15 +1708,9 @@ function TripMapTab({
 /* ─── AI Guide Tab ─── */
 
 function AIGuideTab({
-  nextFlyRecommendation, recommendationLoading, onRefreshRecommendation,
-  changeFly, messages, input, setInput, loading, onSend, scrollRef,
+  messages, input, setInput, loading, onSend, scrollRef,
+  strategySlot,
 }: any) {
-  const handleRefresh = useCallback(() => {
-    if (typeof onRefreshRecommendation === 'function' && !recommendationLoading) {
-      onRefreshRecommendation();
-    }
-  }, [onRefreshRecommendation, recommendationLoading]);
-
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -1608,90 +1723,8 @@ function AIGuideTab({
         contentContainerStyle={styles.aiScrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Get/Refresh recommendation — show when no card or as header */}
-        {!nextFlyRecommendation ? (
-          <Pressable
-            style={styles.aiGetRecButton}
-            onPress={handleRefresh}
-            disabled={recommendationLoading}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <MaterialIcons name="auto-awesome" size={20} color={Colors.primary} />
-            <Text style={styles.aiGetRecButtonText}>
-              {recommendationLoading ? 'Thinking...' : 'Get AI fly recommendation'}
-            </Text>
-          </Pressable>
-        ) : null}
-
-        {/* Smart Recommendation Card */}
-        {nextFlyRecommendation && (
-          <View style={styles.smartRecCard}>
-            <View style={styles.smartRecHeader}>
-              <Text style={styles.smartRecTitle}>AI Fly Recommendation</Text>
-              <Pressable
-                style={styles.smartRecRefresh}
-                onPress={handleRefresh}
-                disabled={recommendationLoading}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <Text style={styles.smartRecRefreshText}>
-                  {recommendationLoading ? 'Thinking...' : 'Refresh'}
-                </Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.smartRecFly}>
-              {nextFlyRecommendation.pattern2
-                ? `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size} / ${nextFlyRecommendation.pattern2} #${nextFlyRecommendation.size2 ?? ''}`
-                : `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size}`}
-            </Text>
-            <Text style={styles.smartRecColor}>
-              {nextFlyRecommendation.pattern2 ? `${nextFlyRecommendation.color} + ${nextFlyRecommendation.color2 ?? ''}` : nextFlyRecommendation.color}
-            </Text>
-            <Text style={styles.smartRecReason}>{nextFlyRecommendation.reason}</Text>
-
-            <View style={styles.smartRecFooter}>
-              <View style={styles.confidenceBadge}>
-                <Text style={styles.confidenceText}>
-                  {Math.round(nextFlyRecommendation.confidence * 100)}% confidence
-                </Text>
-              </View>
-              <Pressable
-                style={styles.switchFlyButton}
-                onPress={() => {
-                  const primary = {
-                    pattern: nextFlyRecommendation.pattern,
-                    size: nextFlyRecommendation.size,
-                    color: nextFlyRecommendation.color,
-                    fly_id: nextFlyRecommendation.fly_id ?? undefined,
-                    fly_color_id: nextFlyRecommendation.fly_color_id ?? undefined,
-                    fly_size_id: nextFlyRecommendation.fly_size_id ?? undefined,
-                  };
-                  const dropper =
-                    nextFlyRecommendation.pattern2 != null && nextFlyRecommendation.pattern2.trim()
-                      ? {
-                          pattern: nextFlyRecommendation.pattern2,
-                          size: nextFlyRecommendation.size2 ?? null,
-                          color: nextFlyRecommendation.color2 ?? null,
-                          fly_id: nextFlyRecommendation.fly_id2 ?? undefined,
-                          fly_color_id: nextFlyRecommendation.fly_color_id2 ?? undefined,
-                          fly_size_id: nextFlyRecommendation.fly_size_id2 ?? undefined,
-                        }
-                      : null;
-                  changeFly(primary, dropper);
-                }}
-              >
-                <Text style={styles.switchFlyButtonText}>Switch to this fly</Text>
-              </Pressable>
-            </View>
-
-            {recommendationLoading && (
-              <View style={styles.smartRecLoadingOverlay}>
-                <ActivityIndicator size="small" color={Colors.primary} />
-              </View>
-            )}
-          </View>
-        )}
+        {/* Strategy (Best time, Top flies, How to fish it) */}
+        {strategySlot}
 
         <Text style={styles.aiContextNote}>
           AI uses your trip history, current conditions, and fishing data to give personalized advice.
@@ -1841,6 +1874,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.text,
   },
+  cachedDataBanner: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.warning + '18',
+  },
+  cachedDataBannerText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
   endButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: BorderRadius.md,
@@ -1881,6 +1923,71 @@ const styles = StyleSheet.create({
   },
   tabLabelActive: {
     color: Colors.primary,
+  },
+  tabScroll: {
+    flex: 1,
+  },
+  strategyTabContent: {
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xxl,
+  },
+  strategySectionLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: Spacing.xs,
+    marginTop: Spacing.sm,
+  },
+  strategySectionLabelFirst: {
+    marginTop: 0,
+  },
+  strategyCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  strategyLoader: {
+    marginVertical: Spacing.xs,
+  },
+  strategyBestTime: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  strategyPlaceholder: {
+    fontSize: FontSize.md,
+    color: Colors.textTertiary,
+    fontStyle: 'italic',
+  },
+  strategyFliesWrap: {
+    gap: 2,
+  },
+  strategyFlyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 2,
+  },
+  strategyFlyBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.secondary,
+  },
+  strategyFlyName: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    flex: 1,
+  },
+  strategyHowToFishText: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    lineHeight: 24,
   },
 
   // Photos Tab

@@ -136,6 +136,79 @@ export interface EventConditionsSnapshot {
   moon_phase?: MoonPhase | null;
 }
 
+/** DB row: conditions_snapshots table. Referenced by catches for queryable/offline conditions. */
+export interface ConditionsSnapshotRow {
+  id: string;
+  temperature_f: number | null;
+  condition: string | null;
+  cloud_cover: number | null;
+  wind_speed_mph: number | null;
+  wind_direction: string | null;
+  barometric_pressure: number | null;
+  humidity: number | null;
+  flow_station_id: string | null;
+  flow_station_name: string | null;
+  flow_cfs: number | null;
+  water_temp_f: number | null;
+  gage_height_ft: number | null;
+  turbidity_ntu: number | null;
+  flow_clarity: string | null;
+  flow_clarity_source: string | null;
+  flow_timestamp: string | null;
+  moon_phase: string | null;
+  captured_at: string;
+}
+
+/** DB row: catches table. One per catch event; links to trip_events, conditions_snapshot, location. */
+export interface CatchRow {
+  id: string;
+  user_id: string;
+  trip_id: string;
+  event_id: string;
+  location_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timestamp: string;
+  species: string | null;
+  size_inches: number | null;
+  quantity: number;
+  released: boolean | null;
+  depth_ft: number | null;
+  structure: string | null;
+  caught_on_fly: string | null;
+  active_fly_event_id: string | null;
+  presentation_method: string | null;
+  note: string | null;
+  photo_url: string | null;
+  conditions_snapshot_id: string | null;
+  fly_pattern: string | null;
+  fly_size: number | null;
+  fly_color: string | null;
+  created_at?: string;
+}
+
+/** Anonymized catch for community/offline AI: no user_id, trip_id, event_id, photo_url. */
+export interface CommunityCatchRow {
+  id: string;
+  location_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timestamp: string;
+  species: string | null;
+  size_inches: number | null;
+  quantity: number;
+  released: boolean | null;
+  depth_ft: number | null;
+  structure: string | null;
+  caught_on_fly: string | null;
+  fly_pattern: string | null;
+  fly_size: number | null;
+  fly_color: string | null;
+  presentation_method: string | null;
+  conditions_snapshot_id: string | null;
+  note: string | null;
+}
+
 /** Global fly catalog: pattern only (no user, size, color). */
 export interface FlyCatalog {
   id: string;

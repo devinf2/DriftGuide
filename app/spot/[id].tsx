@@ -9,7 +9,7 @@ import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName, formatSkyLabel } from '@/src/services/conditions';
-import { getSpotFishingSummary, getSpotDetailedReport, getFlyOfTheDay, askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
+import { getSpotFishingSummary, getSpotDetailedReport, getSpotHowToFish, askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import type { LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
@@ -45,12 +45,12 @@ export default function SpotFishingTripScreen() {
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [waterFlowData, setWaterFlowData] = useState<WaterFlowData | null>(null);
   const [conditionsTabLoading, setConditionsTabLoading] = useState(false);
-  const [aiRec, setAiRec] = useState<Awaited<ReturnType<typeof getFlyOfTheDay>> | null>(null);
-  const [aiRecLoading, setAiRecLoading] = useState(false);
   const [aiMessages, setAiMessages] = useState<{ id: string; role: 'user' | 'ai'; text: string }[]>([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const aiScrollRef = useRef<ScrollView>(null);
+  const [howToFish, setHowToFish] = useState<string | null>(null);
+  const [howToFishLoading, setHowToFishLoading] = useState(false);
 
   const location = id ? getLocationById(id) : undefined;
 
@@ -119,19 +119,19 @@ export default function SpotFishingTripScreen() {
     }).catch(() => setConditionsTabLoading(false));
   }, [location?.id, lat, lng, stationId, activeTab]);
 
-  const fetchAiRec = useCallback(() => {
-    if (!user?.id || !location || !conditions) return;
-    setAiRecLoading(true);
-    const conditionsSummary = `${conditions.sky.label}, ${conditions.temperature.temp_f}°F, wind ${conditions.wind.speed_mph}mph${conditions.water.flow_cfs != null ? `, flow ${conditions.water.flow_cfs} CFS` : ''}`;
-    getFlyOfTheDay(user.id, { locationName: location.name, conditionsSummary }).then(r => {
-      setAiRec(r);
-      setAiRecLoading(false);
-    }).catch(() => setAiRecLoading(false));
-  }, [user?.id, location, conditions]);
+  const fetchHowToFish = useCallback(() => {
+    if (!location || !conditions) return;
+    setHowToFishLoading(true);
+    setHowToFish(null);
+    getSpotHowToFish(location.name, conditions).then((text) => {
+      setHowToFish(text);
+      setHowToFishLoading(false);
+    }).catch(() => setHowToFishLoading(false));
+  }, [location?.id, conditions]);
 
   useEffect(() => {
-    if (activeTab === 'ai') fetchAiRec();
-  }, [activeTab, fetchAiRec]);
+    if (activeTab === 'ai' && location && conditions) fetchHowToFish();
+  }, [activeTab, location?.id, conditions, fetchHowToFish]);
 
   const handleAskAI = useCallback(async () => {
     const q = aiInput.trim();
@@ -377,25 +377,59 @@ export default function SpotFishingTripScreen() {
       {activeTab === 'ai' && (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={120}>
           <ScrollView ref={aiScrollRef} style={styles.tabScroll} contentContainerStyle={styles.aiScrollContent} keyboardShouldPersistTaps="handled">
-            {!aiRec ? (
-              <Pressable style={styles.aiGetRecButton} onPress={fetchAiRec} disabled={aiRecLoading}>
-                <MaterialIcons name="auto-awesome" size={20} color={Colors.primary} />
-                <Text style={styles.aiGetRecButtonText}>{aiRecLoading ? 'Thinking…' : 'Get AI fly recommendation'}</Text>
-              </Pressable>
-            ) : (
-              <View style={styles.smartRecCard}>
-                <View style={styles.smartRecHeader}>
-                  <Text style={styles.smartRecTitle}>AI Fly Recommendation</Text>
-                  <Pressable onPress={fetchAiRec} disabled={aiRecLoading}>
-                    <Text style={styles.smartRecRefreshText}>{aiRecLoading ? 'Thinking…' : 'Refresh'}</Text>
-                  </Pressable>
+            {/* Best time to fish */}
+            <Text style={[styles.guideSectionLabel, styles.guideSectionLabelFirst]}>Best time to fish</Text>
+            <View style={styles.guideCard}>
+              {summaryLoading ? (
+                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+              ) : bestTime ? (
+                <Text style={styles.strategyBestTime}>{bestTime}</Text>
+              ) : (
+                <Text style={styles.fliesPlaceholder}>—</Text>
+              )}
+            </View>
+
+            {/* Top flies */}
+            <Text style={styles.guideSectionLabel}>Top flies</Text>
+            <View style={styles.guideCard}>
+              {summaryLoading ? (
+                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+              ) : topFlies.length > 0 ? (
+                <View style={styles.fliesTwoCol}>
+                  <View style={styles.fliesColumn}>
+                    {topFlies.slice(0, 3).map((fly, i) => (
+                      <View key={i} style={styles.flyRow}>
+                        <View style={styles.flyBullet} />
+                        <Text style={styles.flyName} numberOfLines={2}>{fly}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={styles.fliesColumn}>
+                    {topFlies.slice(3, 6).map((fly, i) => (
+                      <View key={i + 3} style={styles.flyRow}>
+                        <View style={styles.flyBullet} />
+                        <Text style={styles.flyName} numberOfLines={2}>{fly}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
-                <Text style={styles.smartRecFly}>{aiRec.pattern} #{aiRec.size}</Text>
-                <Text style={styles.smartRecColor}>{aiRec.color}</Text>
-                <Text style={styles.smartRecReason}>{aiRec.reason}</Text>
-                <Text style={styles.confidenceText}>{Math.round(aiRec.confidence * 100)}% confidence</Text>
-              </View>
-            )}
+              ) : (
+                <Text style={styles.fliesPlaceholder}>No fly suggestions for this spot.</Text>
+              )}
+            </View>
+
+            {/* How to fish it */}
+            <Text style={styles.guideSectionLabel}>How to fish it</Text>
+            <View style={styles.guideCard}>
+              {howToFishLoading ? (
+                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+              ) : howToFish ? (
+                <Text style={styles.howToFishText}>{howToFish}</Text>
+              ) : (
+                <Text style={styles.fliesPlaceholder}>—</Text>
+              )}
+            </View>
+
             <Text style={styles.aiContextNote}>Ask a question about this spot. AI uses current conditions and location.</Text>
             {aiMessages.map((msg) => (
               <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}>
@@ -744,6 +778,54 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontStyle: 'italic',
   },
+  strategyContent: {
+    padding: Spacing.lg,
+    paddingBottom: Spacing.lg,
+  },
+  strategyCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.lg,
+    marginBottom: Spacing.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  guideSectionLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.xs,
+  },
+  guideSectionLabelFirst: {
+    marginTop: 0,
+  },
+  guideCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  strategyLoader: {
+    marginVertical: Spacing.sm,
+  },
+  strategyBestTime: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  howToFishText: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    lineHeight: 24,
+  },
+  guideStrategyFirstLabel: {
+    marginTop: 0,
+  },
 
   tabBar: {
     flexDirection: 'row',
@@ -774,7 +856,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   aiScrollContent: {
-    padding: Spacing.lg,
+    padding: Spacing.md,
     paddingBottom: Spacing.xxl,
   },
   aiGetRecButton: {

@@ -8,6 +8,8 @@ import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
 import { Location, LocationConditions, ConditionRating, SessionType } from '@/src/types';
 import * as ExpoLocation from 'expo-location';
 import { fetchAllLocationConditions } from '@/src/services/conditions';
@@ -109,12 +111,14 @@ export default function NewTripScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ locationId?: string }>();
   const { user } = useAuthStore();
-  const { planTrip } = useTripStore();
+  const { planTrip, startTrip } = useTripStore();
+  const { isConnected } = useNetworkStatus();
   const {
     locations, fetchLocations, searchLocations, addRecentLocation,
     getRecentLocations, lastAddedLocationId, setLastAddedLocationId, getLocationById,
   } = useLocationStore();
 
+  const [offlineLocations, setOfflineLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showLocationSearch, setShowLocationSearch] = useState(false);
@@ -154,35 +158,45 @@ export default function NewTripScreen() {
   }, [user?.id, selectedLocation, plannedDate]);
 
   useEffect(() => {
-    if (locations.length === 0) fetchLocations();
-  }, []);
+    if (isConnected && locations.length === 0) fetchLocations();
+  }, [isConnected]);
 
   useEffect(() => {
-    if (lastAddedLocationId) {
-      const loc = getLocationById(lastAddedLocationId);
-      if (loc) {
-        setSelectedLocation(loc);
-        setShowLocationSearch(false);
-        setSearchQuery('');
-      }
-      setLastAddedLocationId(null);
+    if (!isConnected) {
+      getLocationsForOfflineStart().then(setOfflineLocations);
     }
-  }, [lastAddedLocationId, locations]);
+  }, [isConnected]);
+
+  useEffect(() => {
+    if (!lastAddedLocationId) return;
+    const loc = isConnected
+      ? getLocationById(lastAddedLocationId)
+      : effectiveLocations.find((l) => l.id === lastAddedLocationId);
+    if (loc) {
+      setSelectedLocation(loc);
+      setShowLocationSearch(false);
+      setSearchQuery('');
+    }
+    setLastAddedLocationId(null);
+  }, [lastAddedLocationId, effectiveLocations, isConnected, getLocationById, setLastAddedLocationId]);
+
+  const effectiveLocations = isConnected ? locations : offlineLocations;
+  const getEffectiveLocationById = (id: string) => effectiveLocations.find((l) => l.id === id);
 
   // Pre-select location when opened from spot page (e.g. "Plan trip here")
   useEffect(() => {
     const locationId = params.locationId;
-    if (locationId && locations.length > 0) {
-      const loc = getLocationById(locationId);
+    if (locationId && effectiveLocations.length > 0) {
+      const loc = getEffectiveLocationById(locationId);
       if (loc) {
         setSelectedLocation(loc);
         setShowLocationSearch(false);
         setSearchQuery('');
       }
     }
-  }, [params.locationId, locations, getLocationById]);
+  }, [params.locationId, effectiveLocations.length]);
 
-  const topLevelLocations = locations.filter(l => !l.parent_location_id);
+  const topLevelLocations = isConnected ? locations.filter(l => !l.parent_location_id) : offlineLocations;
 
   // Use this location's conditions, or its parent's when it's a child (we only fetch for top-level)
   const getConditionsForLocation = useCallback((loc: Location) => {
@@ -235,16 +249,16 @@ export default function NewTripScreen() {
   }, [topLevelLocations.length]);
 
   const filteredLocations = searchQuery.trim()
-    ? searchLocations(searchQuery)
+    ? (isConnected ? searchLocations(searchQuery) : effectiveLocations.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase())))
     : [];
 
   const findLocationForSuggestion = useCallback((suggestion: SpotSuggestion): Location | undefined => {
-    return locations.find(l =>
+    return effectiveLocations.find(l =>
       l.name.toLowerCase() === suggestion.locationName.toLowerCase() ||
       suggestion.locationName.toLowerCase().includes(l.name.toLowerCase()) ||
       l.name.toLowerCase().includes(suggestion.locationName.toLowerCase().split(' - ')[0]),
     );
-  }, [locations]);
+  }, [effectiveLocations]);
 
   const handleDateChange = useCallback((_event: DateTimePickerEvent, date?: Date) => {
     if (Platform.OS === 'android') setShowDatePicker(false);
@@ -284,6 +298,23 @@ export default function NewTripScreen() {
       Alert.alert('Couldn\'t create trip', 'Something went wrong saving your trip. Check your connection and try again.');
     }
   }, [user, selectedLocation, planTrip, addRecentLocation, router, plannedDate, sessionType]);
+
+  const handleStartTripNow = useCallback(async () => {
+    if (!user || !selectedLocation) return;
+    if (!sessionType) {
+      Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const tripId = await startTrip(user.id, selectedLocation.id, 'fly', selectedLocation, sessionType);
+      setSaving(false);
+      router.replace(`/trip/${tripId}`);
+    } catch {
+      setSaving(false);
+      Alert.alert('Couldn\'t start trip', 'Something went wrong. Try again.');
+    }
+  }, [user, selectedLocation, sessionType, startTrip, router]);
 
   const handleSelectSuggestion = useCallback((suggestion: SpotSuggestion) => {
     const match = findLocationForSuggestion(suggestion);
@@ -558,18 +589,32 @@ export default function NewTripScreen() {
       </Modal>
 
       </ScrollView>
+      {!isConnected && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>Offline – showing downloaded waterways only</Text>
+        </View>
+      )}
       <View style={styles.pinnedButtonContainer}>
         <Pressable
           style={[styles.planButton, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
-          onPress={handlePlanTrip}
+          onPress={handleStartTripNow}
           disabled={!selectedLocation || !sessionType || saving}
         >
           {saving ? (
             <ActivityIndicator color={Colors.textInverse} />
           ) : (
-            <Text style={styles.planButtonText}>Create Trip</Text>
+            <Text style={styles.planButtonText}>Start trip now</Text>
           )}
         </Pressable>
+        {isConnected && (
+          <Pressable
+            style={[styles.planButtonSecondary, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
+            onPress={handlePlanTrip}
+            disabled={!selectedLocation || !sessionType || saving}
+          >
+            <Text style={styles.planButtonSecondaryText}>Create trip (plan for later)</Text>
+          </Pressable>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -587,6 +632,18 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl + 80,
   },
+  offlineBanner: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.warning + '20',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  offlineBannerText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
   pinnedButtonContainer: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.lg,
@@ -594,6 +651,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.border,
+    gap: Spacing.sm,
   },
   suggestedSpotsHeaderRow: {
     flexDirection: 'row',
@@ -929,5 +987,20 @@ const styles = StyleSheet.create({
     color: Colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
+  },
+  planButtonSecondary: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  planButtonSecondaryText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.text,
   },
 });

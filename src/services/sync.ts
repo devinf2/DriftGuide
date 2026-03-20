@@ -1,5 +1,11 @@
 import { supabase } from './supabase';
-import { Trip, TripEvent } from '@/src/types';
+import type {
+  Trip,
+  TripEvent,
+  EventConditionsSnapshot,
+  CatchData,
+  FlyChangeData,
+} from '@/src/types';
 
 export interface PendingSyncData {
   trips: Trip[];
@@ -64,12 +70,119 @@ export async function syncTripToCloud(trip: Trip, events: TripEvent[]): Promise<
         console.error('Error syncing events:', eventsError);
         return false;
       }
+
+      await syncCatchesAndConditions(trip, events);
     }
 
     return true;
   } catch (error) {
     console.error('Sync failed:', error);
     return false;
+  }
+}
+
+/** Build flat row for conditions_snapshots from event snapshot json. */
+function conditionsSnapshotToRow(snap: EventConditionsSnapshot | null): Record<string, unknown> | null {
+  if (!snap) return null;
+  const w = snap.weather;
+  const f = snap.waterFlow;
+  const capturedAt = snap.captured_at ? new Date(snap.captured_at).toISOString() : new Date().toISOString();
+  return {
+    temperature_f: w?.temperature_f ?? null,
+    condition: w?.condition ?? null,
+    cloud_cover: w?.cloud_cover ?? null,
+    wind_speed_mph: w?.wind_speed_mph ?? null,
+    wind_direction: w?.wind_direction ?? null,
+    barometric_pressure: w?.barometric_pressure ?? null,
+    humidity: w?.humidity ?? null,
+    flow_station_id: f?.station_id ?? null,
+    flow_station_name: f?.station_name ?? null,
+    flow_cfs: f?.flow_cfs ?? null,
+    water_temp_f: f?.water_temp_f ?? null,
+    gage_height_ft: f?.gage_height_ft ?? null,
+    turbidity_ntu: f?.turbidity_ntu ?? null,
+    flow_clarity: f?.clarity ?? null,
+    flow_clarity_source: f?.clarity_source ?? null,
+    flow_timestamp: f?.timestamp ?? null,
+    moon_phase: snap.moon_phase ?? null,
+    captured_at: capturedAt,
+  };
+}
+
+/** Resolve fly pattern/size/color for a catch from events (fly_change referenced by active_fly_event_id). */
+function getFlyForCatch(
+  catchData: CatchData,
+  events: TripEvent[]
+): { fly_pattern: string | null; fly_size: number | null; fly_color: string | null } {
+  if (!catchData.active_fly_event_id) return { fly_pattern: null, fly_size: null, fly_color: null };
+  const flyEvent = events.find(
+    (e) => e.id === catchData.active_fly_event_id && e.event_type === 'fly_change'
+  );
+  if (!flyEvent) return { fly_pattern: null, fly_size: null, fly_color: null };
+  const d = flyEvent.data as FlyChangeData;
+  const useDropper = catchData.caught_on_fly === 'dropper';
+  return {
+    fly_pattern: (useDropper && d.pattern2 ? d.pattern2 : d.pattern) ?? null,
+    fly_size: (useDropper && d.size2 != null ? d.size2 : d.size) ?? null,
+    fly_color: (useDropper && d.color2 ? d.color2 : d.color) ?? null,
+  };
+}
+
+/** Upsert conditions_snapshots and catches for all catch events; trigger keeps community_catches in sync. */
+async function syncCatchesAndConditions(trip: Trip, events: TripEvent[]): Promise<void> {
+  const catchEvents = events.filter((e) => e.event_type === 'catch');
+  if (catchEvents.length === 0) return;
+
+  for (const e of catchEvents) {
+    const snap = e.conditions_snapshot ?? null;
+    const row = conditionsSnapshotToRow(snap);
+    let conditionsSnapshotId: string | null = null;
+    if (row) {
+      const { data: inserted, error } = await supabase
+        .from('conditions_snapshots')
+        .insert(row)
+        .select('id')
+        .single();
+      if (!error && inserted?.id) {
+        conditionsSnapshotId = inserted.id;
+      }
+    }
+
+    const catchData = e.data as CatchData;
+    const { fly_pattern, fly_size, fly_color } = getFlyForCatch(catchData, events);
+
+    const catchRow = {
+      id: e.id,
+      user_id: trip.user_id,
+      trip_id: trip.id,
+      event_id: e.id,
+      location_id: trip.location_id ?? null,
+      latitude: e.latitude ?? null,
+      longitude: e.longitude ?? null,
+      timestamp: e.timestamp,
+      species: catchData.species ?? null,
+      size_inches: catchData.size_inches ?? null,
+      quantity: Math.max(1, catchData.quantity ?? 1),
+      released: catchData.released ?? null,
+      depth_ft: catchData.depth_ft ?? null,
+      structure: catchData.structure ?? null,
+      caught_on_fly: catchData.caught_on_fly ?? null,
+      active_fly_event_id: catchData.active_fly_event_id ?? null,
+      presentation_method: catchData.presentation_method ?? null,
+      note: catchData.note ?? null,
+      photo_url: catchData.photo_url ?? null,
+      conditions_snapshot_id: conditionsSnapshotId,
+      fly_pattern,
+      fly_size,
+      fly_color,
+    };
+
+    const { error: catchError } = await supabase.from('catches').upsert(catchRow, {
+      onConflict: 'id',
+    });
+    if (catchError) {
+      console.error('Error syncing catch', e.id, catchError);
+    }
   }
 }
 

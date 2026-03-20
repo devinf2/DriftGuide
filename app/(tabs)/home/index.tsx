@@ -109,11 +109,8 @@ export default function HomeScreen() {
   const [albumPhotos, setAlbumPhotos] = useState<Photo[]>([]);
   const [albumLoading, setAlbumLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [hotSpotData, setHotSpotData] = useState<{
-    suggestion: SpotSuggestion;
-    location: Location;
-    conditions: import('@/src/types').LocationConditions;
-  } | null>(null);
+  const [hotSpotList, setHotSpotList] = useState<HotSpotData[]>([]);
+  const [hotSpotsExpanded, setHotSpotsExpanded] = useState(false);
   const [hotSpotLoading, setHotSpotLoading] = useState(false);
   const [hotSpotRefreshKey, setHotSpotRefreshKey] = useState(0);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -155,7 +152,7 @@ export default function HomeScreen() {
     }
     const topLevel = locations.filter((l) => !l.parent_location_id);
     if (topLevel.length === 0) {
-      setHotSpotData(null);
+      setHotSpotList([]);
       setHotSpotLoading(false);
       return;
     }
@@ -167,9 +164,10 @@ export default function HomeScreen() {
         if (lat == null || lng == null) return false;
         return haversineDistance(userCoords.latitude, userCoords.longitude, lat, lng) <= HOT_SPOT_RADIUS_KM;
       });
-    const spotsToUse = (candidates && candidates.length > 0 ? candidates : userCoords ? [] : topLevel) as typeof topLevel;
+    // When user is far from all spots, still show hot spots from all top-level locations
+    const spotsToUse = (candidates && candidates.length > 0 ? candidates : topLevel) as typeof topLevel;
     if (spotsToUse.length === 0) {
-      setHotSpotData(null);
+      setHotSpotList([]);
       setHotSpotLoading(false);
       return;
     }
@@ -179,31 +177,31 @@ export default function HomeScreen() {
       if (cancelled) return;
       getTopFishingSpots(spotsToUse, conditionsMap).then((suggestions) => {
         if (cancelled) return;
-        const first = suggestions[0];
-        if (!first) {
-          setHotSpotData(null);
-          setHotSpotLoading(false);
-          return;
+        const list: HotSpotData[] = [];
+        const suggestionName = (s: SpotSuggestion) => s.locationName.toLowerCase().trim();
+        const primaryPart = (s: SpotSuggestion) => suggestionName(s).split(/[\s]*[-–—][\s]*/)[0]?.trim() ?? suggestionName(s);
+        for (const suggestion of suggestions.slice(0, 3)) {
+          const loc = locations.find(
+            (l) => {
+              const ln = l.name.toLowerCase();
+              const sn = suggestionName(suggestion);
+              const pp = primaryPart(suggestion);
+              return ln === sn ||
+                sn.includes(ln) ||
+                ln.includes(pp) ||
+                pp.includes(ln);
+            },
+          );
+          if (!loc) continue;
+          const conditions =
+            conditionsMap.get(loc.id) ??
+            (loc.parent_location_id ? conditionsMap.get(loc.parent_location_id) : undefined);
+          const conditionsToUse =
+            conditions ??
+            (conditionsMap.size > 0 ? Array.from(conditionsMap.values())[0] : undefined);
+          if (conditionsToUse) list.push({ suggestion, location: loc, conditions: conditionsToUse });
         }
-        const loc = locations.find(
-          (l) =>
-            l.name.toLowerCase() === first.locationName.toLowerCase() ||
-            first.locationName.toLowerCase().includes(l.name.toLowerCase()) ||
-            l.name.toLowerCase().includes(first.locationName.toLowerCase().split(' - ')[0]),
-        );
-        if (!loc) {
-          setHotSpotData(null);
-          setHotSpotLoading(false);
-          return;
-        }
-        const conditions =
-          conditionsMap.get(loc.id) ??
-          (loc.parent_location_id ? conditionsMap.get(loc.parent_location_id) : undefined);
-        if (conditions) {
-          setHotSpotData({ suggestion: first, location: loc, conditions });
-        } else {
-          setHotSpotData(null);
-        }
+        setHotSpotList(list);
         setHotSpotLoading(false);
       });
     });
@@ -334,12 +332,36 @@ export default function HomeScreen() {
           <View style={styles.hotSpotCard}>
             <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.lg }} />
           </View>
-        ) : hotSpotData ? (
-          <HotSpotCard
-            hotSpotData={hotSpotData}
-            onPress={() => router.push(`/spot/${hotSpotData.location.id}`)}
-          />
-        ) : null}
+        ) : (
+          <>
+            {hotSpotList.slice(0, hotSpotsExpanded ? 3 : 1).map((hotSpot) => (
+              <View key={hotSpot.location.id} style={styles.hotSpotCardWrap}>
+                <HotSpotCard
+                  hotSpotData={hotSpot}
+                  onPress={() => router.push(`/spot/${hotSpot.location.id}`)}
+                />
+              </View>
+            ))}
+            {hotSpotList.length > 1 && !hotSpotsExpanded && (
+              <Pressable
+                style={styles.seeMoreHotSpots}
+                onPress={() => setHotSpotsExpanded(true)}
+              >
+                <Text style={styles.seeMoreHotSpotsText}>See more ({hotSpotList.length - 1} more)</Text>
+                <Ionicons name="chevron-down" size={18} color={Colors.primary} />
+              </Pressable>
+            )}
+            {hotSpotsExpanded && hotSpotList.length > 1 && (
+              <Pressable
+                style={styles.seeMoreHotSpots}
+                onPress={() => setHotSpotsExpanded(false)}
+              >
+                <Text style={styles.seeMoreHotSpotsText}>See less</Text>
+                <Ionicons name="chevron-up" size={18} color={Colors.primary} />
+              </Pressable>
+            )}
+          </>
+        )}
       </View>
 
       {plannedTrips.length > 0 && (
@@ -478,6 +500,9 @@ const styles = StyleSheet.create({
   hotSpotSection: {
     marginBottom: Spacing.lg,
   },
+  hotSpotCardWrap: {
+    marginBottom: Spacing.sm,
+  },
   hotSpotCard: {
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
@@ -532,6 +557,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textTertiary,
     marginTop: Spacing.xs,
+  },
+  seeMoreHotSpots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+  },
+  seeMoreHotSpotsText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.primary,
   },
   albumTile: {
     backgroundColor: Colors.surface,

@@ -665,6 +665,130 @@ export async function getSpotDetailedReport(
   }
 }
 
+function buildHowToFishPrompt(
+  locationName: string,
+  conditionsSummary: string,
+  season: string,
+  timeOfDay: string,
+): string {
+  return [
+    'You are an expert Utah fly fishing guide. In 2–4 short sentences, describe how to fish this spot right now.',
+    'Cover: typical depth (e.g. 4–8 ft under indicator, tight to the bank), technique (e.g. indicator nymphing, euro, dry, streamer), and any presentation tip (e.g. slow drift, strip pause).',
+    'Be specific and actionable. No JSON, no labels—just a short paragraph.',
+    '',
+    `Location: ${locationName}`,
+    `Season: ${season}, Time: ${timeOfDay}`,
+    `Current conditions: ${conditionsSummary}`,
+    '',
+    'Respond with plain text only.',
+  ].join('\n');
+}
+
+function buildGuideGreetingPrompt(
+  locationName: string,
+  conditionsSummary: string,
+  season: string,
+  timeOfDay: string,
+): string {
+  return [
+    'You are a friendly, expert fishing guide. Write a single short opening message (3–5 sentences) as if you are greeting the angler for the first time today.',
+    'Include: (1) A brief greeting like "Hey, I\'m your fishing guide today!" (2) For this location, the best time to fish right now. (3) The top flies to have. (4) A clear recommendation: which one fly to start with and how to fish it (e.g. depth, indicator, technique).',
+    'Sound conversational and helpful. No bullet points, no JSON—one flowing paragraph.',
+    '',
+    `Location: ${locationName}`,
+    `Season: ${season}, Time: ${timeOfDay}`,
+    `Current conditions: ${conditionsSummary}`,
+    '',
+    'Respond with plain text only.',
+  ].join('\n');
+}
+
+/** Single greeting from the AI Guide: best time, top flies, and recommend one fly + how to fish. Shown as the first "message" in the Guide tab. */
+export async function getGuideGreeting(
+  locationName: string,
+  conditions: import('@/src/types').LocationConditions,
+): Promise<string> {
+  const fallback = `Hey, I'm your fishing guide today! For ${locationName}, the best time to fish is morning or evening. Top flies: Pheasant Tail #18, Parachute Adams #16, RS2 #20. I'd recommend starting with a Pheasant Tail under an indicator, 4–6 feet deep, and fishing slow drifts in the seams.`;
+  if (!OPENAI_API_KEY) return fallback;
+
+  const parts: string[] = [
+    `${conditions.sky.label}, ${conditions.temperature.temp_f}°F`,
+    `Wind ${conditions.wind.speed_mph}mph`,
+  ];
+  if (conditions.water.flow_cfs != null) parts.push(`Flow ${conditions.water.flow_cfs} CFS`);
+  parts.push(`Water ${conditions.water.clarity}`);
+  const conditionsSummary = parts.join('; ');
+
+  const now = new Date();
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          { role: 'system', content: 'You are a friendly Utah fly fishing guide. Write one short, conversational paragraph. No JSON.' },
+          { role: 'user', content: buildGuideGreetingPrompt(locationName, conditionsSummary, getSeason(now), getTimeOfDay(now)) },
+        ],
+        max_tokens: 280,
+        temperature: 0.6,
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content?.trim();
+    return content && content.length > 0 ? content : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Fetch "how to fish it" paragraph (depth, indicator, technique) for Strategy tab. */
+export async function getSpotHowToFish(
+  locationName: string,
+  conditions: import('@/src/types').LocationConditions,
+): Promise<string> {
+  const fallback = `At ${locationName}, match depth and technique to the flow and clarity. Indicator nymphing is often effective; adjust weight and depth as conditions change.`;
+  if (!OPENAI_API_KEY) return fallback;
+
+  const parts: string[] = [
+    `${conditions.sky.label}, ${conditions.temperature.temp_f}°F`,
+    `Wind ${conditions.wind.speed_mph}mph`,
+  ];
+  if (conditions.water.flow_cfs != null) parts.push(`Flow ${conditions.water.flow_cfs} CFS`);
+  parts.push(`Water ${conditions.water.clarity}`);
+  const conditionsSummary = parts.join('; ');
+
+  const now = new Date();
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          { role: 'system', content: 'You are an expert Utah fly fishing guide. Write a short, actionable paragraph. No JSON.' },
+          { role: 'user', content: buildHowToFishPrompt(locationName, conditionsSummary, getSeason(now), getTimeOfDay(now)) },
+        ],
+        max_tokens: 200,
+        temperature: 0.6,
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content?.trim();
+    return content && content.length > 0 ? content : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Options for fly-of-the-day (home screen when no active trip). */
 export interface FlyOfTheDayOptions {
   locationName?: string;

@@ -74,8 +74,29 @@ export interface AddPhotoOptions {
   captured_at?: string | null;
 }
 
-export async function addPhoto(options: AddPhotoOptions): Promise<Photo> {
+/** Thrown when photo is queued for offline upload; UI can show "Saved locally; will upload when online". */
+export class PhotoQueuedOfflineError extends Error {
+  constructor() {
+    super('Photo saved locally; will upload when online.');
+    this.name = 'PhotoQueuedOfflineError';
+  }
+}
+
+export async function addPhoto(
+  options: AddPhotoOptions,
+  opts?: { isOnline?: boolean },
+): Promise<Photo> {
   const { userId, tripId, uri, caption, species, fly_pattern, fly_size, fly_color, fly_id, captured_at } = options;
+  const isOnline = opts?.isOnline !== false;
+
+  if (!isOnline) {
+    const { savePendingPhoto, buildPendingFromAddPhotoOptions } = await import('./pendingPhotoStorage');
+    await savePendingPhoto({
+      ...buildPendingFromAddPhotoOptions(options, 'trip'),
+    });
+    throw new PhotoQueuedOfflineError();
+  }
+
   const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
   const path = `photos/${userId}/${uuidv4()}.${ext}`;
 
