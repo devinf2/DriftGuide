@@ -14,8 +14,10 @@ import {
     useMemo,
     useRef,
     useState,
+    type ComponentType,
     type ReactNode,
 } from 'react';
+import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 export type MapboxMapMarker = {
@@ -25,6 +27,10 @@ export type MapboxMapMarker = {
   children?: ReactNode;
   /** Native tap → `PointAnnotation.onSelected` */
   onPress?: () => void;
+  /**
+   * When set (including `null`), renders a catch pin — circular photo or fish icon — instead of `children`.
+   */
+  catchPhotoUrl?: string | null;
 };
 
 export type TripMapboxMapRef = {
@@ -41,6 +47,40 @@ function roundZoom(z: number): number {
 
 function clampZoom(z: number): number {
   return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
+}
+
+function TripMapboxMarkerItem({
+  m,
+  PointAnnotation,
+}: {
+  m: MapboxMapMarker;
+  PointAnnotation: ComponentType<Record<string, unknown>>;
+}) {
+  const annotRef = useRef<{ refresh?: () => void } | null>(null);
+  const isCatchPin = m.catchPhotoUrl !== undefined;
+  const inner = isCatchPin ? (
+    <JournalCatchMapPin
+      photoUrl={m.catchPhotoUrl}
+      onImageLoaded={() => annotRef.current?.refresh?.()}
+    />
+  ) : (
+    m.children ?? <MaterialIcons name="place" size={34} color={Colors.primaryLight} />
+  );
+  return (
+    <PointAnnotation
+      ref={(r: unknown) => {
+        annotRef.current = r as { refresh?: () => void } | null;
+      }}
+      id={m.id}
+      coordinate={m.coordinate}
+      title={m.title}
+      onSelected={m.onPress ? () => m.onPress?.() : undefined}
+    >
+      <View collapsable={false} pointerEvents="box-none">
+        {inner}
+      </View>
+    </PointAnnotation>
+  );
 }
 
 /** Width of one zoom step button (must match `styles.zoomButton`). */
@@ -257,17 +297,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             maxZoomLevel={MAP_MAX_ZOOM}
           />
           {markers.map((m) => (
-            <PointAnnotation
-              key={m.id}
-              id={m.id}
-              coordinate={m.coordinate}
-              title={m.title}
-              onSelected={m.onPress ? () => m.onPress?.() : undefined}
-            >
-              <View collapsable={false} pointerEvents="box-none">
-                {m.children ?? <MaterialIcons name="place" size={34} color={Colors.primaryLight} />}
-              </View>
-            </PointAnnotation>
+            <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} />
           ))}
           {showUserLocation ? <UserLocation visible /> : null}
         </MapView>

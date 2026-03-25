@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   Platform,
   Pressable,
@@ -9,6 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
 import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from '@/src/constants/mapbox';
 import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
@@ -17,6 +18,7 @@ import { dedupeConsecutiveLngLat, matchWalkingRoute } from '@/src/services/mapbo
 import type { CatchData, Trip, TripEvent } from '@/src/types';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
+import { getAnnotationsLayerID } from '@rnmapbox/maps';
 
 export type JournalWaypoint = {
   id: string;
@@ -25,6 +27,9 @@ export type JournalWaypoint = {
   title: string;
   pinColor: string;
   kind: 'start' | 'end' | 'catch';
+  /** `kind === 'catch'` only */
+  photoUrl?: string | null;
+  catchEventId?: string;
 };
 
 function loadMapbox(): Record<string, unknown> | null {
@@ -88,6 +93,8 @@ export function buildJournalWaypoints(trip: Trip, events: TripEvent[]): JournalW
       title: species ? `Catch · ${species}` : 'Catch',
       pinColor: Colors.primaryLight,
       kind: 'catch',
+      photoUrl: data.photo_url ?? null,
+      catchEventId: e.id,
     });
   }
 
@@ -128,6 +135,8 @@ type Props = {
   trip: Trip;
   events: TripEvent[];
   containerStyle?: StyleProp<ViewStyle>;
+  /** Tapping a catch pin (thumbnail or fish icon) */
+  onCatchWaypointPress?: (catchEventId: string) => void;
 };
 
 /**
@@ -135,8 +144,43 @@ type Props = {
  * Line uses Mapbox Map Matching (walking) to hug nearby trails, then falls back to a straight path.
  * Stroke uses water palette to read as a river route.
  */
-export function JournalTripRouteMapView({ trip, events, containerStyle }: Props) {
+function JournalCatchPointAnnotation({
+  w,
+  PointAnnotation,
+  onCatchWaypointPress,
+}: {
+  w: JournalWaypoint;
+  PointAnnotation: ComponentType<Record<string, unknown>>;
+  onCatchWaypointPress?: (catchEventId: string) => void;
+}) {
+  const annotRef = useRef<{ refresh?: () => void } | null>(null);
+  const catchId = w.catchEventId;
+  return (
+    <PointAnnotation
+      ref={(r: unknown) => {
+        annotRef.current = r as { refresh?: () => void } | null;
+      }}
+      id={w.id}
+      coordinate={[w.lng, w.lat]}
+      title={w.title}
+      onSelected={
+        onCatchWaypointPress && catchId ? () => onCatchWaypointPress(catchId) : undefined
+      }
+    >
+      <View collapsable={false} pointerEvents="box-none">
+        <JournalCatchMapPin
+          photoUrl={w.photoUrl}
+          onImageLoaded={() => annotRef.current?.refresh?.()}
+        />
+      </View>
+    </PointAnnotation>
+  );
+}
+
+export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchWaypointPress }: Props) {
   const rawMod = useMemo(() => loadMapbox(), []);
+  /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
+  const pointAnnotationLayerBelowId = useMemo(() => getAnnotationsLayerID('PointAnnotations'), []);
   const tokenApplied = useRef(false);
   const cameraRef = useRef<{
     fitBounds?: (
@@ -160,7 +204,6 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
     properties: Record<string, unknown>;
     geometry: { type: 'LineString'; coordinates: [number, number][] };
   } | null>(null);
-  const [routeMode, setRouteMode] = useState<'loading' | 'matched' | 'straight' | 'none'>('none');
 
   const mod = useMemo(() => {
     if (!rawMod) return null;
@@ -186,11 +229,9 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
     let cancelled = false;
     if (pathLngLat.length < 2) {
       setRouteFeature(null);
-      setRouteMode('none');
       return;
     }
 
-    setRouteMode('loading');
     const straight = {
       type: 'Feature' as const,
       properties: {},
@@ -209,10 +250,8 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
           properties: {},
           geometry: { type: 'LineString', coordinates: matched },
         });
-        setRouteMode('matched');
       } else {
         setRouteFeature(straight);
-        setRouteMode('straight');
       }
     })();
 
@@ -321,8 +360,14 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
         />
         {routeFeature ? (
           <ShapeSource id="journalTripRoute" shape={routeFeature}>
+            {/*
+              PointAnnotation renders to a dedicated style layer (see getAnnotationsLayerID).
+              `slot="bottom"` is not enough — that slot can still stack above that layer.
+              Place the glow directly under the point-annotation layer, then stack the core on top of the glow.
+            */}
             <LineLayer
               id="journalRouteGlow"
+              belowLayerID={pointAnnotationLayerBelowId}
               style={{
                 lineColor: Colors.secondaryLight,
                 lineWidth: 12,
@@ -333,6 +378,7 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
             />
             <LineLayer
               id="journalRouteCore"
+              aboveLayerID="journalRouteGlow"
               style={{
                 lineColor: Colors.water,
                 lineWidth: 5,
@@ -343,19 +389,26 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
             />
           </ShapeSource>
         ) : null}
-        {waypoints.map((w) => (
-          <PointAnnotation key={w.id} id={w.id} coordinate={[w.lng, w.lat]} title={w.title}>
-            {w.kind === 'catch' ? (
-              <MaterialIcons name="place" size={34} color={w.pinColor} />
-            ) : (
-              <LabeledEndpointMapPin
-                label={w.kind === 'start' ? 'Start' : 'End'}
-                backgroundColor={w.pinColor}
-                icon={w.kind === 'start' ? 'place' : 'flag'}
-              />
-            )}
-          </PointAnnotation>
-        ))}
+        {waypoints.map((w) =>
+          w.kind === 'catch' ? (
+            <JournalCatchPointAnnotation
+              key={w.id}
+              w={w}
+              PointAnnotation={PointAnnotation}
+              onCatchWaypointPress={onCatchWaypointPress}
+            />
+          ) : (
+            <PointAnnotation key={w.id} id={w.id} coordinate={[w.lng, w.lat]} title={w.title}>
+              <View collapsable={false} pointerEvents="box-none">
+                <LabeledEndpointMapPin
+                  label={w.kind === 'start' ? 'Start' : 'End'}
+                  backgroundColor={w.pinColor}
+                  icon={w.kind === 'start' ? 'place' : 'flag'}
+                />
+              </View>
+            </PointAnnotation>
+          ),
+        )}
       </MapView>
 
       <View style={styles.zoomCluster} pointerEvents="box-none">
@@ -379,17 +432,6 @@ export function JournalTripRouteMapView({ trip, events, containerStyle }: Props)
           <MaterialIcons name="remove" size={22} color={Colors.text} />
         </Pressable>
       </View>
-
-      {routeMode === 'loading' ? (
-        <View style={styles.routeBadge}>
-          <Text style={styles.routeBadgeText}>Fitting route to nearby paths…</Text>
-        </View>
-      ) : null}
-      {routeMode === 'straight' && pathLngLat.length >= 2 ? (
-        <View style={styles.routeBadge}>
-          <Text style={styles.routeBadgeText}>Straight-line path (no trail match nearby)</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -440,22 +482,5 @@ const styles = StyleSheet.create({
   zoomDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.border,
-  },
-  routeBadge: {
-    position: 'absolute',
-    top: Spacing.md,
-    left: Spacing.md,
-    right: Spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-  },
-  routeBadgeText: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    textAlign: 'center',
   },
 });

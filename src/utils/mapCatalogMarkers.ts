@@ -11,6 +11,9 @@ export type CatalogMapMarker = {
   /** Set on trip start/end pins only; catalog pins omit. */
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
+  /** Trip/catch pins only; catalog pins omit. */
+  catchEventId?: string;
+  catchPhotoUrl?: string | null;
 };
 
 /**

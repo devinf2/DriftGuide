@@ -884,6 +884,7 @@ export default function TripDashboardScreen() {
           mapLocation={mapLocation}
           mapLocationLoading={mapLocationLoading}
           mapLocationError={mapLocationError}
+          onSelectCatch={(ev) => setCatchUIMode(ev)}
           onRequestLocation={async () => {
             setMapLocationLoading(true);
             setMapLocationError(null);
@@ -1054,7 +1055,7 @@ function FishingTab({
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            applyEvents(events.filter((e) => e.id !== event.id));
+            applyEvents(events.filter((ev: TripEvent) => ev.id !== event.id));
           },
         },
       ]);
@@ -1411,6 +1412,8 @@ type TripMapMarker = {
   color: string;
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
+  catchEventId?: string;
+  catchPhotoUrl?: string | null;
 };
 
 function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker[] {
@@ -1455,6 +1458,8 @@ function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker
       lat: e.latitude,
       title: speciesLabel ? `Catch · ${speciesLabel}` : 'Catch',
       color: Colors.primaryLight,
+      catchEventId: e.id,
+      catchPhotoUrl: catchData.photo_url ?? null,
     });
   }
 
@@ -1470,6 +1475,7 @@ function TripMapTab({
   mapLocationLoading: _mapLocationLoading,
   mapLocationError,
   onRequestLocation,
+  onSelectCatch,
 }: {
   trip: Trip;
   events: TripEvent[];
@@ -1479,6 +1485,7 @@ function TripMapTab({
   mapLocationLoading: boolean;
   mapLocationError: string | null;
   onRequestLocation: () => Promise<void>;
+  onSelectCatch: (event: TripEvent) => void;
 }) {
   const addCatch = useTripStore((s) => s.addCatch);
   const locations = useLocationStore((s) => s.locations);
@@ -1547,6 +1554,8 @@ function TripMapTab({
         lat: c.latitude,
         title: c.species?.trim() ? `Catch · ${c.species.trim()}` : 'Saved catch',
         color: Colors.secondary,
+        catchEventId: c.id,
+        catchPhotoUrl: null as string | null,
       }));
   }, [cachedPins, dataViewport, tripCatchIds]);
 
@@ -1570,22 +1579,36 @@ function TripMapTab({
 
   const mapboxMarkers = useMemo(
     () =>
-      markersForMap.map((m) => ({
-        id: m.id,
-        coordinate: [m.lon, m.lat] as [number, number],
-        title: m.title,
-        children:
-          m.endpointLabel != null ? (
-            <LabeledEndpointMapPin
-              label={m.endpointLabel}
-              backgroundColor={m.color}
-              icon={m.endpointIcon ?? 'place'}
-            />
-          ) : (
-            <MaterialIcons name="place" size={34} color={m.color} />
-          ),
-      })),
-    [markersForMap],
+      markersForMap.map((m) => {
+        if (m.catchEventId != null) {
+          return {
+            id: m.id,
+            coordinate: [m.lon, m.lat] as [number, number],
+            title: m.title,
+            catchPhotoUrl: m.catchPhotoUrl ?? null,
+            onPress: () => {
+              const ev = tripEvents.find((e) => e.id === m.catchEventId);
+              if (ev) onSelectCatch(ev);
+            },
+          };
+        }
+        return {
+          id: m.id,
+          coordinate: [m.lon, m.lat] as [number, number],
+          title: m.title,
+          children:
+            m.endpointLabel != null ? (
+              <LabeledEndpointMapPin
+                label={m.endpointLabel}
+                backgroundColor={m.color}
+                icon={m.endpointIcon ?? 'place'}
+              />
+            ) : (
+              <MaterialIcons name="place" size={34} color={m.color} />
+            ),
+        };
+      }),
+    [markersForMap, tripEvents, onSelectCatch],
   );
 
   const syncDataViewportFromMap = useCallback(() => {

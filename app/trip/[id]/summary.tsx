@@ -44,6 +44,8 @@ export default function TripSummaryScreen() {
     caption?: string;
   } | null>(null);
   const [tripPinModal, setTripPinModal] = useState<TripEndpointKind | null>(null);
+  /** Map tab: catch pin tapped when there is no photo (full-screen flow uses `fullScreenPhoto`) */
+  const [mapCatchDetailEvent, setMapCatchDetailEvent] = useState<TripEvent | null>(null);
 
   useEffect(() => {
     setJournalEditMode(false);
@@ -93,6 +95,26 @@ export default function TripSummaryScreen() {
       caption: data.note ?? undefined,
     });
   }, [trip?.location?.name]);
+
+  const handleMapCatchWaypointPress = useCallback(
+    (catchEventId: string) => {
+      const ev = events.find((e) => e.id === catchEventId && e.event_type === 'catch');
+      if (!ev) return;
+      const data = ev.data as CatchData;
+      if (data.photo_url) {
+        setFullScreenPhoto({
+          url: data.photo_url,
+          location: trip?.location?.name ?? undefined,
+          date: formatTripDate(ev.timestamp),
+          species: data.species ?? undefined,
+          caption: data.note ?? undefined,
+        });
+      } else {
+        setMapCatchDetailEvent(ev);
+      }
+    },
+    [events, trip?.location?.name],
+  );
 
   const persistTripPins = useCallback(
     async (nextTrip: Trip, nextEvents: TripEvent[]): Promise<boolean> => {
@@ -234,6 +256,61 @@ export default function TripSummaryScreen() {
               </View>
             </ScrollView>
           )}
+        </View>
+      </Modal>
+
+      {/* Map tab: catch without photo */}
+      <Modal
+        visible={mapCatchDetailEvent != null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMapCatchDetailEvent(null)}
+      >
+        <View style={styles.mapCatchModalRoot}>
+          <Pressable style={styles.mapCatchModalDim} onPress={() => setMapCatchDetailEvent(null)} />
+          {mapCatchDetailEvent ? (
+            <View style={[styles.mapCatchModalSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
+              <View style={styles.mapCatchModalHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.mapCatchModalTitle}>
+                    {(mapCatchDetailEvent.data as CatchData).species?.trim() || 'Catch'}
+                  </Text>
+                  <Text style={styles.mapCatchModalSubtitle}>
+                    {formatTripDate(mapCatchDetailEvent.timestamp)}
+                  </Text>
+                </View>
+                <Pressable onPress={() => setMapCatchDetailEvent(null)} hitSlop={12}>
+                  <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                </Pressable>
+              </View>
+              {(() => {
+                const d = mapCatchDetailEvent.data as CatchData;
+                return (
+                  <>
+                    {d.size_inches != null ? (
+                      <Text style={styles.mapCatchModalRow}>
+                        <MaterialCommunityIcons name="ruler" size={16} color={Colors.textSecondary} /> {d.size_inches}
+                        {'"'}{' '}
+                        {d.quantity != null && d.quantity > 1 ? `· ×${d.quantity}` : ''}
+                      </Text>
+                    ) : d.quantity != null && d.quantity > 1 ? (
+                      <Text style={styles.mapCatchModalRow}>
+                        <MaterialCommunityIcons name="fish" size={16} color={Colors.textSecondary} /> ×{d.quantity}
+                      </Text>
+                    ) : null}
+                    {d.released ? (
+                      <Text style={styles.mapCatchModalRow}>
+                        <MaterialCommunityIcons name="water" size={16} color={Colors.textSecondary} /> Released
+                      </Text>
+                    ) : null}
+                    {d.note?.trim() ? (
+                      <Text style={styles.mapCatchModalNote}>{d.note.trim()}</Text>
+                    ) : null}
+                  </>
+                );
+              })()}
+            </View>
+          ) : null}
         </View>
       </Modal>
 
@@ -413,6 +490,7 @@ export default function TripSummaryScreen() {
           events={events}
           editMode={journalEditMode}
           onRequestEditTripPin={(kind) => setTripPinModal(kind)}
+          onCatchWaypointPress={handleMapCatchWaypointPress}
         />
       )}
 
@@ -548,11 +626,13 @@ function SummaryMapTab({
   events,
   editMode,
   onRequestEditTripPin,
+  onCatchWaypointPress,
 }: {
   trip: Trip;
   events: TripEvent[];
   editMode: boolean;
   onRequestEditTripPin: (kind: TripEndpointKind) => void;
+  onCatchWaypointPress: (catchEventId: string) => void;
 }) {
   const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
   const hasMapData = waypoints.length > 0;
@@ -575,7 +655,12 @@ function SummaryMapTab({
 
   return (
     <View style={styles.summaryMapTabRoot}>
-      <JournalTripRouteMapView trip={trip} events={events} containerStyle={styles.summaryMapNative} />
+      <JournalTripRouteMapView
+        trip={trip}
+        events={events}
+        containerStyle={styles.summaryMapNative}
+        onCatchWaypointPress={onCatchWaypointPress}
+      />
       <ScrollView
         style={styles.summaryMapLegendScroll}
         contentContainerStyle={styles.summaryMapLegendContent}
@@ -1002,6 +1087,49 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textTertiary,
     marginTop: Spacing.xs,
+  },
+
+  mapCatchModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  mapCatchModalDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  mapCatchModalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderTopRightRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    maxHeight: '55%',
+  },
+  mapCatchModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: Spacing.md,
+  },
+  mapCatchModalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  mapCatchModalSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: 4,
+  },
+  mapCatchModalRow: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    marginBottom: Spacing.sm,
+  },
+  mapCatchModalNote: {
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+    marginTop: Spacing.xs,
+    lineHeight: 22,
   },
 
   conditionCard: {
