@@ -1,45 +1,78 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, ScrollView, TextInput, Alert,
-  KeyboardAvoidingView, Keyboard, Platform, ActivityIndicator, Image, Dimensions,
-  Modal,
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Image,
+    Keyboard,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable, ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
-/** MapLibre requires native code; not available in Expo Go. Load optionally so trip screen still works. */
-let MapView: any = null;
-let Camera: any = null;
-let UserLocation: any = null;
-try {
-  const MapLibre = require('@maplibre/maplibre-react-native');
-  MapView = MapLibre.MapView;
-  Camera = MapLibre.Camera;
-  UserLocation = MapLibre.UserLocation;
-} catch {
-  // Expo Go or environment without MapLibre native module
-}
-
+import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
+import { CatchDetailsModal, type CatchDetailsSubmitAdd } from '@/src/components/catch/CatchDetailsModal';
+import { ChangeFlyPickerModal, splitFlyChangeData } from '@/src/components/fly/ChangeFlyPickerModal';
+import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/TripMapboxMapView';
+import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
+import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
+import { SAMPLE_OFFLINE_BOUNDING_BOX } from '@/src/constants/offlineSampleRegion';
+import { downloadSampleOfflineRegion } from '@/src/services/mapboxOfflineRegion';
+import {
+  cachedPinFromCatchEvent,
+  enqueuePendingCatch,
+  getCachedCatchPins,
+  mergeCachedCatchesFromRows,
+  mergeCachedPins,
+  removePendingCatchByEventId,
+  type CachedCatchPin,
+} from '@/src/services/mapCatchLocalStore';
+import { prefetchCatchesForBounds } from '@/src/services/mapCatchPrefetch';
+import { fetchCatchesInBounds, upsertCatchEventToCloud } from '@/src/services/sync';
+import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
+import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
+import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
+import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
+import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
+import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { useLocationStore } from '@/src/stores/locationStore';
+import { useTripStore } from '@/src/stores/tripStore';
+import {
+  AIQueryData,
+  CatchData,
+  Fly,
+  FlyChangeData,
+  NoteData,
+  Photo,
+  PresentationMethod,
+  Structure,
+  Trip,
+  TripEvent,
+} from '@/src/types';
+import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
+import {
+  findActiveFlyEventIdBefore,
+  sortEventsByTime,
+  timestampBetween,
+  upsertEventSorted,
+} from '@/src/utils/journalTimeline';
+import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
+import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
+import { tripMapDefaultCenterCoordinate, tripMapDefaultZoom } from '@/src/utils/mapViewport';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import * as ExpoLocation from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { v4 as uuidv4 } from 'uuid';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { useTripStore } from '@/src/stores/tripStore';
-import { formatTripDuration, formatEventTime, formatTripDate, formatFishCount, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
-import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
-import { FlyChangeData, TripEvent, NoteData, CatchData, AIQueryData, Fly, WaterClarity, PresentationMethod, Structure } from '@/src/types';
-import * as ExpoLocation from 'expo-location';
-import { getMoonPhase, MOON_PHASE_LABELS } from '@/src/utils/moonPhase';
-import { MoonPhaseShape } from '@/src/components/MoonPhaseShape';
-import { getHourlyForecast } from '@/src/services/weather';
-import { FLY_NAMES, FLY_SIZES, FLY_COLORS, COMMON_FLIES_BY_NAME, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
-import { CLARITY_LABELS, CLARITY_DESCRIPTIONS, getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_DESCRIPTIONS, FLOW_STATUS_COLORS, buildConditionsSummary, inferClarityFromWeather } from '@/src/services/waterFlow';
-import { askAI, getSeason, getTimeOfDay, getSpotFishingSummary, getSpotHowToFish } from '@/src/services/ai';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
-import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getWeatherIconName, formatSkyLabel, buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
-import * as ImagePicker from 'expo-image-picker';
-import { fetchPhotos, addPhoto, PhotoQueuedOfflineError } from '@/src/services/photoService';
-import { savePendingPhoto, buildPendingFromAddPhotoOptions } from '@/src/services/pendingPhotoStorage';
-import { Photo } from '@/src/types';
-import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 
 type TabKey = 'fish' | 'photos' | 'conditions' | 'ai' | 'map';
 
@@ -51,41 +84,20 @@ export default function TripDashboardScreen() {
   const {
     activeTrip, events, fishCount, currentFly, currentFly2, nextFlyRecommendation,
     weatherData, waterFlowData, conditionsLoading, recommendationLoading,
-    addCatch, removeCatch, changeFly, addNote, addBite, addFishOn, addAIQuery, endTrip,
-    fetchConditions, refreshSmartRecommendation,
+    addCatch, removeCatch, changeFly, updateFlyChangeEvent, addNote, addBite, addFishOn, addAIQuery, endTrip,
+    pauseTrip, resumeTrip, isTripPaused,
+    fetchConditions, refreshSmartRecommendation, replaceActiveTripEvents,
   } = useTripStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>('fish');
   const [elapsed, setElapsed] = useState('0m');
   const [showFlyPicker, setShowFlyPicker] = useState(false);
-  const [pickerName, setPickerName] = useState<string | null>(null);
-  const [pickerSize, setPickerSize] = useState<number | null>(null);
-  const [pickerColor, setPickerColor] = useState<string | null>(null);
-  const [pickerName2, setPickerName2] = useState<string | null>(null);
-  const [pickerSize2, setPickerSize2] = useState<number | null>(null);
-  const [pickerColor2, setPickerColor2] = useState<string | null>(null);
-  const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper'>('primary');
+  const [flyPickerEditEvent, setFlyPickerEditEvent] = useState<TripEvent | null>(null);
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [noteText, setNoteText] = useState('');
 
-  const [showCatchModal, setShowCatchModal] = useState(false);
-  const [catchSpecies, setCatchSpecies] = useState('');
-  const [catchSize, setCatchSize] = useState('');
-  const [catchNote, setCatchNote] = useState('');
-  const [catchPhotoUri, setCatchPhotoUri] = useState<string | null>(null);
-  const [catchPhotoUploading, setCatchPhotoUploading] = useState(false);
-  const [catchDepth, setCatchDepth] = useState('');
-  const [catchFlyName, setCatchFlyName] = useState<string>('');
-  const [catchFlySize, setCatchFlySize] = useState<number | null>(null);
-  const [catchFlyColor, setCatchFlyColor] = useState<string | null>(null);
-  const [catchFlyName2, setCatchFlyName2] = useState<string | null>(null);
-  const [catchFlySize2, setCatchFlySize2] = useState<number | null>(null);
-  const [catchFlyColor2, setCatchFlyColor2] = useState<string | null>(null);
-  const [catchPresentation, setCatchPresentation] = useState<PresentationMethod | null>(null);
-  const [catchReleased, setCatchReleased] = useState<boolean | null>(true);
-  const [catchStructure, setCatchStructure] = useState<Structure | null>(null);
-  const lastKnownCatchLat = useRef<number | null>(null);
-  const lastKnownCatchLon = useRef<number | null>(null);
+  /** `add` opens new-catch flow; a catch event opens the same details editor for in-trip edits */
+  const [catchUIMode, setCatchUIMode] = useState<'add' | TripEvent | null>(null);
 
   const [tripPhotos, setTripPhotos] = useState<Photo[]>([]);
   const [tripPhotosLoading, setTripPhotosLoading] = useState(false);
@@ -125,12 +137,24 @@ export default function TripDashboardScreen() {
 
   useEffect(() => {
     if (!activeTrip) return;
-    const interval = setInterval(() => {
-      setElapsed(formatTripDuration(activeTrip.start_time, null));
-    }, 1000);
-    setElapsed(formatTripDuration(activeTrip.start_time, null));
+    const tick = () => {
+      const s = useTripStore.getState();
+      const ms = getLiveFishingElapsedMs(
+        s.fishingElapsedMs,
+        s.fishingSegmentStartedAt,
+        s.isTripPaused,
+        s.activeTrip?.start_time ?? null,
+      );
+      setElapsed(formatFishingElapsedLabel(ms));
+    };
+    if (isTripPaused) {
+      tick();
+      return;
+    }
+    const interval = setInterval(tick, 1000);
+    tick();
     return () => clearInterval(interval);
-  }, [activeTrip]);
+  }, [activeTrip, isTripPaused]);
 
   useEffect(() => {
     if (activeTrip && !conditionsFetched.current) {
@@ -309,187 +333,86 @@ export default function TripDashboardScreen() {
     [userFlies]
   );
 
-  useEffect(() => {
-    if (showCatchModal && catchFlyName?.trim()) {
-      setCatchPresentation(getPresentationForFly(catchFlyName, catchFlySize, catchFlyColor));
-    }
-  }, [showCatchModal, catchFlyName, catchFlySize, catchFlyColor, getPresentationForFly]);
-
   const handleFishPlus = useCallback(() => {
-    setCatchCaughtOnFly('primary');
-    setCatchPresentation(getPresentationForCurrentFly());
-    setCatchFlyName(currentFly?.pattern ?? flyPickerNames[0] ?? '');
-    setCatchFlySize(currentFly?.size ?? null);
-    setCatchFlyColor(currentFly?.color ?? null);
-    setCatchFlyName2(currentFly2?.pattern ?? null);
-    setCatchFlySize2(currentFly2?.size ?? null);
-    setCatchFlyColor2(currentFly2?.color ?? null);
-    setShowCatchModal(true);
-  }, [getPresentationForCurrentFly, currentFly, currentFly2, flyPickerNames]);
+    if (isTripPaused) return;
+    setCatchUIMode('add');
+  }, [isTripPaused]);
 
-  const handlePickCatchPhoto = useCallback(async (source: 'camera' | 'library') => {
-    if (source === 'camera') {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow camera access to take a photo.');
-        return;
-      }
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: false,
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets?.[0]?.uri) setCatchPhotoUri(result.assets[0].uri);
-    } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow photo library access to choose a photo.');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets?.[0]?.uri) setCatchPhotoUri(result.assets[0].uri);
-    }
-  }, []);
+  const handleEditCatch = useCallback((ev: TripEvent) => {
+    if (isTripPaused) return;
+    setCatchUIMode(ev);
+  }, [isTripPaused]);
 
-  const handleConfirmCatchDetails = useCallback(async () => {
-    if (!catchFlyName?.trim()) return;
-    const species = catchSpecies.trim() || null;
-    const sizeNum = catchSize.trim() ? parseFloat(catchSize.trim()) : null;
-    const depthNum = catchDepth.trim() ? parseFloat(catchDepth.trim()) : null;
-    const matchPrimary = userFlies.find(
-      (f) =>
-        f.name === catchFlyName.trim() &&
-        (f.size ?? null) === (catchFlySize ?? null) &&
-        (f.color ?? null) === (catchFlyColor ?? null)
-    );
-    const primary = {
-      pattern: catchFlyName.trim(),
-      size: catchFlySize ?? null,
-      color: catchFlyColor ?? null,
-      fly_id: matchPrimary?.fly_id ?? undefined,
-      fly_color_id: matchPrimary?.fly_color_id ?? undefined,
-      fly_size_id: matchPrimary?.fly_size_id ?? undefined,
-    };
-    const dropper =
-      catchFlyName2 != null && catchFlyName2.trim()
-        ? (() => {
-            const match2 = userFlies.find(
-              (f) =>
-                f.name === catchFlyName2.trim() &&
-                (f.size ?? null) === (catchFlySize2 ?? null) &&
-                (f.color ?? null) === (catchFlyColor2 ?? null)
-            );
-            return {
-              pattern: catchFlyName2.trim(),
-              size: catchFlySize2 ?? null,
-              color: catchFlyColor2 ?? null,
-              fly_id: match2?.fly_id ?? undefined,
-              fly_color_id: match2?.fly_color_id ?? undefined,
-              fly_size_id: match2?.fly_size_id ?? undefined,
-            };
-          })()
-        : null;
-    const flyChanged =
-      currentFly?.pattern !== primary.pattern ||
-      (currentFly?.size ?? null) !== primary.size ||
-      (currentFly?.color ?? null) !== primary.color ||
-      (currentFly2?.pattern ?? null) !== (dropper?.pattern ?? null) ||
-      (currentFly2?.size ?? null) !== (dropper?.size ?? null) ||
-      (currentFly2?.color ?? null) !== (dropper?.color ?? null);
-    if (flyChanged) {
-      changeFly(primary, dropper);
-    }
-    let lat: number | null = null;
-    let lon: number | null = null;
-    try {
-      const { status } = await ExpoLocation.getForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await ExpoLocation.getCurrentPositionAsync({
-          accuracy: ExpoLocation.Accuracy.Balanced,
-        });
-        lat = loc.coords.latitude;
-        lon = loc.coords.longitude;
-        lastKnownCatchLat.current = lat;
-        lastKnownCatchLon.current = lon;
+  const handleCatchSubmitAdd = useCallback(
+    async (payload: CatchDetailsSubmitAdd) => {
+      if (!activeTrip?.id || !activeTrip?.user_id) return;
+      const { primary, dropper, catchFields, latitude, longitude, photoUri } = payload;
+      const flyChanged =
+        currentFly?.pattern !== primary.pattern ||
+        (currentFly?.size ?? null) !== primary.size ||
+        (currentFly?.color ?? null) !== primary.color ||
+        (currentFly2?.pattern ?? null) !== (dropper?.pattern ?? null) ||
+        (currentFly2?.size ?? null) !== (dropper?.size ?? null) ||
+        (currentFly2?.color ?? null) !== (dropper?.color ?? null);
+      if (flyChanged) {
+        changeFly(primary, dropper ?? null);
       }
-    } catch {
-      lat = lastKnownCatchLat.current;
-      lon = lastKnownCatchLon.current;
-    }
-    let photoUrl: string | null = null;
-    const photoOptions = activeTrip?.id && activeTrip?.user_id && catchPhotoUri
-      ? {
-          userId: activeTrip.user_id,
-          tripId: activeTrip.id,
-          uri: catchPhotoUri,
-          caption: catchNote.trim() || undefined,
-          species: species ?? undefined,
-          fly_pattern: primary.pattern,
-          fly_size: primary.size ?? undefined,
-          fly_color: primary.color ?? undefined,
-          fly_id: primary.fly_id ?? undefined,
-          captured_at: new Date().toISOString(),
+      const species = catchFields.species ?? null;
+      const photoOptions =
+        photoUri
+          ? {
+              userId: activeTrip.user_id,
+              tripId: activeTrip.id,
+              uri: photoUri,
+              caption: catchFields.note?.trim() || undefined,
+              species: species ?? undefined,
+              fly_pattern: primary.pattern,
+              fly_size: primary.size ?? undefined,
+              fly_color: primary.color ?? undefined,
+              fly_id: primary.fly_id ?? undefined,
+              captured_at: new Date().toISOString(),
+            }
+          : null;
+
+      let photoUrl: string | null = null;
+      if (photoOptions && isConnected) {
+        try {
+          const photo = await addPhoto(photoOptions, { isOnline: true });
+          photoUrl = photo.url;
+        } catch (e) {
+          Alert.alert('Upload failed', (e as Error).message);
+          throw e;
         }
-      : null;
-
-    if (photoOptions && isConnected) {
-      setCatchPhotoUploading(true);
-      try {
-        const photo = await addPhoto(photoOptions, { isOnline: true });
-        photoUrl = photo.url;
-      } catch (e) {
-        Alert.alert('Upload failed', (e as Error).message);
-        setCatchPhotoUploading(false);
-        return;
       }
-      setCatchPhotoUploading(false);
-    }
 
-    const eventId = addCatch(
-      {
-        species: species ?? undefined,
-        size_inches: sizeNum ?? undefined,
-        note: catchNote.trim() || undefined,
-        photo_url: photoUrl ?? undefined,
-        caught_on_fly: catchCaughtOnFly,
-        quantity: 1,
-        depth_ft: depthNum ?? undefined,
-        presentation_method: catchPresentation ?? undefined,
-        released: catchReleased ?? undefined,
-        structure: catchStructure ?? undefined,
-      },
-      lat,
-      lon,
-    );
+      const eventId = addCatch(
+        {
+          ...catchFields,
+          photo_url: photoUrl ?? undefined,
+        },
+        latitude,
+        longitude,
+      );
 
-    if (photoOptions && !photoUrl && eventId) {
-      try {
-        await savePendingPhoto({
-          ...buildPendingFromAddPhotoOptions(photoOptions, 'catch', eventId),
-        });
-      } catch {
-        // non-blocking
+      if (photoOptions && !photoUrl && eventId) {
+        try {
+          await savePendingPhoto({
+            ...buildPendingFromAddPhotoOptions(photoOptions, 'catch', eventId),
+          });
+        } catch {
+          // non-blocking
+        }
       }
-    }
-    setCatchSpecies('');
-    setCatchSize('');
-    setCatchNote('');
-    setCatchPhotoUri(null);
-    setCatchDepth('');
-    setCatchFlyName('');
-    setCatchFlySize(null);
-    setCatchFlyColor(null);
-    setCatchFlyName2(null);
-    setCatchFlySize2(null);
-    setCatchFlyColor2(null);
-    setCatchPresentation(null);
-    setCatchReleased(true);
-    setCatchStructure(null);
-    setShowCatchModal(false);
-  }, [addCatch, changeFly, activeTrip?.id, activeTrip?.user_id, userFlies, currentFly, currentFly2, catchSpecies, catchSize, catchNote, catchPhotoUri, catchCaughtOnFly, catchDepth, catchFlyName, catchFlySize, catchFlyColor, catchFlyName2, catchFlySize2, catchFlyColor2, catchPresentation, catchReleased, catchStructure, isConnected]);
+    },
+    [addCatch, changeFly, activeTrip?.id, activeTrip?.user_id, currentFly, currentFly2, isConnected],
+  );
+
+  const handleCatchSubmitEdit = useCallback(
+    async (nextEvents: TripEvent[]) => {
+      replaceActiveTripEvents(nextEvents);
+    },
+    [replaceActiveTripEvents],
+  );
 
   const handleEndTrip = () => {
     Alert.alert('End Trip', `End this trip with ${formatFishCount(fishCount)}?`, [
@@ -512,6 +435,27 @@ export default function TripDashboardScreen() {
     ]);
   };
 
+  const handlePauseTrip = () => {
+    Alert.alert(
+      'Pause trip',
+      'The fishing timer stops and you can use Home and other tabs. Resume when you are back on the water.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pause',
+          onPress: async () => {
+            await pauseTrip();
+            router.replace('/home');
+          },
+        },
+      ],
+    );
+  };
+
+  const handleResumeTrip = async () => {
+    await resumeTrip();
+  };
+
   const handleAddNote = () => {
     if (noteText.trim()) {
       addNote(noteText.trim());
@@ -520,55 +464,48 @@ export default function TripDashboardScreen() {
     }
   };
 
-  const openFlyPicker = () => {
-    setPickerName(currentFly?.pattern ?? null);
-    setPickerSize(currentFly?.size ?? null);
-    setPickerColor(currentFly?.color ?? null);
-    setPickerName2(currentFly2?.pattern ?? null);
-    setPickerSize2(currentFly2?.size ?? null);
-    setPickerColor2(currentFly2?.color ?? null);
+  const openFlyPicker = useCallback(() => {
+    setFlyPickerEditEvent(null);
     setShowFlyPicker(true);
-  };
+  }, []);
 
-  const handleConfirmFly = () => {
-    if (!pickerName) return;
-    const matchPrimary = userFlies.find(
-      (f) => f.name === pickerName?.trim() && (f.size ?? null) === (pickerSize ?? null) && (f.color ?? null) === (pickerColor ?? null)
-    );
-    const primary = {
-      pattern: pickerName,
-      size: pickerSize ?? null,
-      color: pickerColor ?? null,
-      fly_id: matchPrimary?.fly_id ?? undefined,
-      fly_color_id: matchPrimary?.fly_color_id ?? undefined,
-      fly_size_id: matchPrimary?.fly_size_id ?? undefined,
-    };
-    const dropper =
-      pickerName2 && pickerName2.trim()
-        ? (() => {
-            const match2 = userFlies.find(
-              (f) =>
-                f.name === pickerName2?.trim() &&
-                (f.size ?? null) === (pickerSize2 ?? null) &&
-                (f.color ?? null) === (pickerColor2 ?? null)
-            );
-            return {
-              pattern: pickerName2.trim(),
-              size: pickerSize2 ?? null,
-              color: pickerColor2 ?? null,
-              fly_id: match2?.fly_id ?? undefined,
-              fly_color_id: match2?.fly_color_id ?? undefined,
-              fly_size_id: match2?.fly_size_id ?? undefined,
-            };
-          })()
-        : null;
-    changeFly(primary, dropper);
+  const handleEditFlyChange = useCallback(
+    (ev: TripEvent) => {
+      if (isTripPaused) return;
+      setFlyPickerEditEvent(ev);
+      setShowFlyPicker(true);
+    },
+    [isTripPaused],
+  );
+
+  const flyPickerSeeds = useMemo(() => {
+    if (flyPickerEditEvent?.event_type === 'fly_change') {
+      return splitFlyChangeData(flyPickerEditEvent.data as FlyChangeData);
+    }
+    return { primary: currentFly, dropper: currentFly2 };
+  }, [flyPickerEditEvent, currentFly, currentFly2]);
+
+  const handleFlyPickerConfirm = useCallback(
+    (primary: FlyChangeData, dropper: FlyChangeData | null) => {
+      if (flyPickerEditEvent) {
+        updateFlyChangeEvent(flyPickerEditEvent.id, primary, dropper);
+      } else {
+        changeFly(primary, dropper);
+      }
+      setShowFlyPicker(false);
+      setFlyPickerEditEvent(null);
+    },
+    [flyPickerEditEvent, changeFly, updateFlyChangeEvent],
+  );
+
+  const closeFlyPicker = useCallback(() => {
     setShowFlyPicker(false);
-  };
+    setFlyPickerEditEvent(null);
+  }, []);
 
   const handleAskAI = useCallback(async () => {
     const question = aiInput.trim();
-    if (!question || aiLoading) return;
+    if (!question || aiLoading || isTripPaused) return;
 
     const userMsg = { id: Date.now().toString(), role: 'user' as const, text: question };
     setAiMessages(prev => [...prev, userMsg]);
@@ -602,7 +539,7 @@ export default function TripDashboardScreen() {
     addAIQuery(question, response);
 
     setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
-  }, [aiInput, aiLoading, activeTrip, weatherData, waterFlowData, currentFly, currentFly2, fishCount, events, userFlies]);
+  }, [aiInput, aiLoading, isTripPaused, activeTrip, weatherData, waterFlowData, currentFly, currentFly2, fishCount, events, userFlies]);
 
   if (!activeTrip) {
     return (
@@ -724,13 +661,24 @@ export default function TripDashboardScreen() {
           <Text style={styles.locationName}>
             {activeTrip.location?.name || 'Fishing Trip'}
           </Text>
-          <Text style={styles.timerText}>{elapsed}</Text>
+          <Text style={[styles.timerText, isTripPaused && styles.timerTextPaused]}>
+            {isTripPaused ? `Paused \u00B7 ${elapsed}` : elapsed}
+          </Text>
         </View>
         <View style={styles.headerRight}>
           {!isConnected && (
             <View style={styles.offlineBadge}>
               <Text style={styles.offlineBadgeText}>Offline</Text>
             </View>
+          )}
+          {isTripPaused ? (
+            <Pressable style={styles.pauseResumeButton} onPress={handleResumeTrip}>
+              <Text style={styles.pauseResumeButtonText}>Resume</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.pauseResumeButton} onPress={handlePauseTrip}>
+              <Text style={styles.pauseResumeButtonText}>Pause</Text>
+            </Pressable>
           )}
           <Pressable style={styles.endButton} onPress={handleEndTrip}>
             <Text style={styles.endButtonText}>End</Text>
@@ -763,80 +711,64 @@ export default function TripDashboardScreen() {
       </View>
 
       {/* Tab Content */}
-      {activeTab === 'fish' && (
-        <FishingTab
-          nextFlyRecommendation={nextFlyRecommendation}
-          recommendationLoading={recommendationLoading}
-          changeFly={changeFly}
-          currentFly={currentFly}
-          currentFly2={currentFly2}
-          openFlyPicker={openFlyPicker}
-          fishCount={fishCount}
-          removeCatch={removeCatch}
-          onFishPlus={handleFishPlus}
-          showCatchModal={showCatchModal}
-          setShowCatchModal={setShowCatchModal}
-          catchSpecies={catchSpecies}
-          setCatchSpecies={setCatchSpecies}
-          catchSize={catchSize}
-          setCatchSize={setCatchSize}
-          catchNote={catchNote}
-          setCatchNote={setCatchNote}
-          catchPhotoUri={catchPhotoUri}
-          setCatchPhotoUri={setCatchPhotoUri}
-          onPickCatchPhoto={handlePickCatchPhoto}
-          catchPhotoUploading={catchPhotoUploading}
-          handleConfirmCatchDetails={handleConfirmCatchDetails}
-          catchCaughtOnFly={catchCaughtOnFly}
-          setCatchCaughtOnFly={setCatchCaughtOnFly}
-          catchDepth={catchDepth}
-          setCatchDepth={setCatchDepth}
-          catchFlyName={catchFlyName}
-          setCatchFlyName={setCatchFlyName}
-          catchFlySize={catchFlySize}
-          setCatchFlySize={setCatchFlySize}
-          catchFlyColor={catchFlyColor}
-          setCatchFlyColor={setCatchFlyColor}
-          catchFlyName2={catchFlyName2}
-          setCatchFlyName2={setCatchFlyName2}
-          catchFlySize2={catchFlySize2}
-          setCatchFlySize2={setCatchFlySize2}
-          catchFlyColor2={catchFlyColor2}
-          setCatchFlyColor2={setCatchFlyColor2}
-          catchPresentation={catchPresentation}
-          setCatchPresentation={setCatchPresentation}
-          catchReleased={catchReleased}
-          setCatchReleased={setCatchReleased}
-          catchStructure={catchStructure}
-          setCatchStructure={setCatchStructure}
-          showNoteInput={showNoteInput}
-          setShowNoteInput={setShowNoteInput}
-          noteText={noteText}
-          setNoteText={setNoteText}
-          handleAddNote={handleAddNote}
-          addBite={addBite}
-          addFishOn={addFishOn}
-          showFlyPicker={showFlyPicker}
-          setShowFlyPicker={setShowFlyPicker}
-          pickerName={pickerName}
-          setPickerName={setPickerName}
-          pickerSize={pickerSize}
-          setPickerSize={setPickerSize}
-          pickerColor={pickerColor}
-          setPickerColor={setPickerColor}
-          pickerName2={pickerName2}
-          setPickerName2={setPickerName2}
-          pickerSize2={pickerSize2}
-          setPickerSize2={setPickerSize2}
-          pickerColor2={pickerColor2}
-          setPickerColor2={setPickerColor2}
-          handleConfirmFly={handleConfirmFly}
-          events={events}
-          flyPickerNames={flyPickerNames}
-          userFlies={userFlies}
-          tripPhotos={tripPhotos}
-          onCatchPhotoPress={handleCatchPhotoPress}
-        />
+      {activeTab === 'fish' && activeTrip && (
+        <>
+          <FishingTab
+            activeTrip={activeTrip}
+            replaceActiveTripEvents={replaceActiveTripEvents}
+            nextFlyRecommendation={nextFlyRecommendation}
+            recommendationLoading={recommendationLoading}
+            changeFly={changeFly}
+            currentFly={currentFly}
+            currentFly2={currentFly2}
+            openFlyPicker={openFlyPicker}
+            fishCount={fishCount}
+            removeCatch={removeCatch}
+            onFishPlus={handleFishPlus}
+            onEditCatch={handleEditCatch}
+            onEditFlyChange={handleEditFlyChange}
+            showNoteInput={showNoteInput}
+            setShowNoteInput={setShowNoteInput}
+            noteText={noteText}
+            setNoteText={setNoteText}
+            handleAddNote={handleAddNote}
+            addBite={addBite}
+            addFishOn={addFishOn}
+            events={events}
+            flyPickerNames={flyPickerNames}
+            userFlies={userFlies}
+            onCatchPhotoPress={handleCatchPhotoPress}
+            tripPaused={isTripPaused}
+          />
+          <CatchDetailsModal
+            visible={catchUIMode != null}
+            onClose={() => setCatchUIMode(null)}
+            mode={catchUIMode === 'add' || catchUIMode == null ? 'add' : 'edit'}
+            trip={activeTrip}
+            userId={activeTrip.user_id}
+            isConnected={isConnected}
+            userFlies={userFlies}
+            flyPickerNames={flyPickerNames}
+            allEvents={events}
+            editingEvent={catchUIMode != null && catchUIMode !== 'add' ? catchUIMode : null}
+            seedPrimary={currentFly}
+            seedDropper={currentFly2}
+            getPresentationForFly={getPresentationForFly}
+            onSubmitAdd={handleCatchSubmitAdd}
+            onSubmitEdit={handleCatchSubmitEdit}
+          />
+          <ChangeFlyPickerModal
+            visible={showFlyPicker}
+            onClose={closeFlyPicker}
+            userFlies={userFlies}
+            flyPickerNames={flyPickerNames}
+            seedKey={flyPickerEditEvent?.id ?? 'rig'}
+            initialPrimary={flyPickerSeeds.primary}
+            initialDropper={flyPickerSeeds.dropper}
+            title={flyPickerEditEvent ? 'Edit fly change' : 'Select Fly'}
+            onConfirm={handleFlyPickerConfirm}
+          />
+        </>
       )}
 
       {activeTab === 'photos' && (
@@ -891,13 +823,31 @@ export default function TripDashboardScreen() {
                   {strategyLoading ? (
                     <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
                   ) : strategyTopFlies.length > 0 ? (
-                    <View style={styles.strategyFliesWrap}>
-                      {strategyTopFlies.map((fly, i) => (
-                        <View key={i} style={styles.strategyFlyRow}>
-                          <View style={styles.strategyFlyBullet} />
-                          <Text style={styles.strategyFlyName} numberOfLines={2}>{fly}</Text>
-                        </View>
-                      ))}
+                    <View style={styles.strategyFliesColumns}>
+                      <View style={styles.strategyFliesColumn}>
+                        {strategyTopFlies.map((fly, i) =>
+                          i % 2 === 0 ? (
+                            <View key={i} style={styles.strategyFlyRow}>
+                              <View style={styles.strategyFlyBullet} />
+                              <Text style={styles.strategyFlyName} numberOfLines={2}>
+                                {fly}
+                              </Text>
+                            </View>
+                          ) : null,
+                        )}
+                      </View>
+                      <View style={styles.strategyFliesColumn}>
+                        {strategyTopFlies.map((fly, i) =>
+                          i % 2 === 1 ? (
+                            <View key={i} style={styles.strategyFlyRow}>
+                              <View style={styles.strategyFlyBullet} />
+                              <Text style={styles.strategyFlyName} numberOfLines={2}>
+                                {fly}
+                              </Text>
+                            </View>
+                          ) : null,
+                        )}
+                      </View>
                     </View>
                   ) : (
                     <Text style={styles.strategyPlaceholder}>No fly suggestions.</Text>
@@ -927,6 +877,10 @@ export default function TripDashboardScreen() {
 
       {activeTab === 'map' && (
         <TripMapTab
+          trip={activeTrip}
+          events={events}
+          userId={activeTrip.user_id}
+          isConnected={isConnected}
           mapLocation={mapLocation}
           mapLocationLoading={mapLocationLoading}
           mapLocationError={mapLocationError}
@@ -962,66 +916,217 @@ export default function TripDashboardScreen() {
 /* ─── Fishing Tab ─── */
 
 function FishingTab({
+  activeTrip,
+  replaceActiveTripEvents,
   nextFlyRecommendation, recommendationLoading, changeFly, currentFly, currentFly2,
-  openFlyPicker, fishCount, removeCatch, onFishPlus,
-  showCatchModal, setShowCatchModal, catchSpecies, setCatchSpecies,
-  catchSize, setCatchSize, catchNote, setCatchNote,
-  catchPhotoUri, setCatchPhotoUri, onPickCatchPhoto, catchPhotoUploading,
-  handleConfirmCatchDetails, catchCaughtOnFly, setCatchCaughtOnFly,
-  catchDepth, setCatchDepth,
-  catchFlyName, setCatchFlyName, catchFlySize, setCatchFlySize, catchFlyColor, setCatchFlyColor,
-  catchFlyName2, setCatchFlyName2, catchFlySize2, setCatchFlySize2, catchFlyColor2, setCatchFlyColor2,
-  catchPresentation, setCatchPresentation, catchReleased, setCatchReleased,
-  catchStructure, setCatchStructure,
+  openFlyPicker, fishCount, removeCatch, onFishPlus, onEditCatch, onEditFlyChange,
   showNoteInput, setShowNoteInput, noteText, setNoteText, handleAddNote,
   addBite, addFishOn,
-  showFlyPicker, setShowFlyPicker, pickerName, setPickerName,
-  pickerSize, setPickerSize, pickerColor, setPickerColor,
-  pickerName2, setPickerName2, pickerSize2, setPickerSize2, pickerColor2, setPickerColor2,
-  handleConfirmFly, events,
-  flyPickerNames = FLY_NAMES,
-  userFlies = [],
-  tripPhotos = [],
+  events,
+  flyPickerNames: _flyPickerNames = FLY_NAMES,
+  userFlies: _userFlies = [],
   onCatchPhotoPress,
+  tripPaused = false,
 }: any) {
-  const [catchFlyDropdownOpen, setCatchFlyDropdownOpen] = useState<null | 'name' | 'size' | 'color' | 'name2' | 'size2' | 'color2'>(null);
-  const [catchSpeciesDropdownOpen, setCatchSpeciesDropdownOpen] = useState(false);
-  const [flyNameSearch, setFlyNameSearch] = useState('');
-  const [showTripPhotoPicker, setShowTripPhotoPicker] = useState(false);
+  const sortedEvents = useMemo(() => sortEventsByTime(events), [events]);
+  const [rowActions, setRowActions] = useState<{ event: TripEvent; index: number } | null>(null);
+  const [noteModal, setNoteModal] = useState<TripEvent | null>(null);
+  const [aiModal, setAiModal] = useState<TripEvent | null>(null);
 
-  const flyNamesWithOther = useMemo(() => {
-    const hasOther = flyPickerNames.some((n: string) => n === 'Other');
-    return hasOther ? flyPickerNames : [...flyPickerNames, 'Other'];
-  }, [flyPickerNames]);
+  const closeRowMenu = useCallback(() => setRowActions(null), []);
 
-  const filteredFlyNames = useMemo(() => {
-    const q = flyNameSearch.trim().toLowerCase();
-    if (!q) return flyNamesWithOther;
-    const filtered = flyNamesWithOther.filter((n: string) => n.toLowerCase().includes(q));
-    return filtered.includes('Other') ? filtered : [...filtered, 'Other'];
-  }, [flyNamesWithOther, flyNameSearch]);
+  const applyEvents = useCallback(
+    (next: TripEvent[]) => {
+      replaceActiveTripEvents(next);
+    },
+    [replaceActiveTripEvents],
+  );
 
-  const catchFlyDropdownOptions: { label: string; value: string | number }[] =
-    catchFlyDropdownOpen === null
-      ? []
-      : catchFlyDropdownOpen === 'name' || catchFlyDropdownOpen === 'name2'
-        ? flyNamesWithOther.map((n: string) => ({ label: n, value: n }))
-        : catchFlyDropdownOpen === 'size' || catchFlyDropdownOpen === 'size2'
-          ? FLY_SIZES.map((s: number) => ({ label: `#${s}`, value: s }))
-          : FLY_COLORS.map((c: string) => ({ label: c, value: c }));
+  const insertNoteAt = useCallback(
+    (index: number, placement: 'above' | 'below') => {
+      closeRowMenu();
+      const ev = sortedEvents[index];
+      if (!ev || !activeTrip) return;
+      const prevTs = placement === 'above' ? (index > 0 ? sortedEvents[index - 1].timestamp : null) : ev.timestamp;
+      const nextTs =
+        placement === 'above' ? ev.timestamp : index < sortedEvents.length - 1 ? sortedEvents[index + 1].timestamp : null;
+      const ts =
+        placement === 'above'
+          ? timestampBetween(prevTs, nextTs, activeTrip)
+          : timestampBetween(prevTs, nextTs, activeTrip);
 
-  const handleCatchFlyDropdownSelect = (value: string | number) => {
-    if (catchFlyDropdownOpen === 'name') setCatchFlyName(String(value));
-    else if (catchFlyDropdownOpen === 'size') setCatchFlySize(value as number);
-    else if (catchFlyDropdownOpen === 'color') setCatchFlyColor(String(value));
-    else if (catchFlyDropdownOpen === 'name2') setCatchFlyName2(String(value));
-    else if (catchFlyDropdownOpen === 'size2') setCatchFlySize2(value as number);
-    else if (catchFlyDropdownOpen === 'color2') setCatchFlyColor2(String(value));
-    setCatchFlyDropdownOpen(null);
-  };
+      const newEvent: TripEvent = {
+        id: uuidv4(),
+        trip_id: activeTrip.id,
+        event_type: 'note',
+        timestamp: ts,
+        data: { text: '' } as NoteData,
+        conditions_snapshot: null,
+        latitude: null,
+        longitude: null,
+      };
+      const next = upsertEventSorted(events, newEvent);
+      applyEvents(next);
+      setNoteModal(newEvent);
+    },
+    [sortedEvents, activeTrip, events, applyEvents, closeRowMenu],
+  );
+
+  const insertFishAt = useCallback(
+    (index: number, placement: 'above' | 'below') => {
+      closeRowMenu();
+      const ev = sortedEvents[index];
+      if (!ev || !activeTrip) return;
+      const prevTs = placement === 'above' ? (index > 0 ? sortedEvents[index - 1].timestamp : null) : ev.timestamp;
+      const nextTs =
+        placement === 'above' ? ev.timestamp : index < sortedEvents.length - 1 ? sortedEvents[index + 1].timestamp : null;
+      const ts =
+        placement === 'above'
+          ? timestampBetween(prevTs, nextTs, activeTrip)
+          : timestampBetween(prevTs, nextTs, activeTrip);
+
+      const activeFly = findActiveFlyEventIdBefore(events, ts);
+      const newEvent: TripEvent = {
+        id: uuidv4(),
+        trip_id: activeTrip.id,
+        event_type: 'catch',
+        timestamp: ts,
+        data: {
+          species: null,
+          size_inches: null,
+          note: null,
+          photo_url: null,
+          active_fly_event_id: activeFly,
+          caught_on_fly: 'primary',
+          quantity: 1,
+          depth_ft: null,
+          presentation_method: null,
+          released: null,
+          structure: null,
+        } as CatchData,
+        conditions_snapshot: null,
+        latitude: null,
+        longitude: null,
+      };
+      const next = upsertEventSorted(events, newEvent);
+      applyEvents(next);
+      onEditCatch(newEvent);
+    },
+    [sortedEvents, activeTrip, events, applyEvents, closeRowMenu, onEditCatch],
+  );
+
+  const insertFlyChangeAt = useCallback(
+    (index: number, placement: 'above' | 'below') => {
+      closeRowMenu();
+      const ev = sortedEvents[index];
+      if (!ev || !activeTrip) return;
+      const prevTs = placement === 'above' ? (index > 0 ? sortedEvents[index - 1].timestamp : null) : ev.timestamp;
+      const nextTs =
+        placement === 'above' ? ev.timestamp : index < sortedEvents.length - 1 ? sortedEvents[index + 1].timestamp : null;
+      const ts =
+        placement === 'above'
+          ? timestampBetween(prevTs, nextTs, activeTrip)
+          : timestampBetween(prevTs, nextTs, activeTrip);
+
+      const newEvent: TripEvent = {
+        id: uuidv4(),
+        trip_id: activeTrip.id,
+        event_type: 'fly_change',
+        timestamp: ts,
+        data: seedFlyChangeDataForTimestamp(events, ts),
+        conditions_snapshot: null,
+        latitude: null,
+        longitude: null,
+      };
+      const next = upsertEventSorted(events, newEvent);
+      applyEvents(next);
+      onEditFlyChange(newEvent);
+    },
+    [sortedEvents, activeTrip, events, applyEvents, closeRowMenu, onEditFlyChange],
+  );
+
+  const confirmDelete = useCallback(
+    (event: TripEvent) => {
+      closeRowMenu();
+      Alert.alert('Remove entry?', 'This removes this row from the trip timeline.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            applyEvents(events.filter((e) => e.id !== event.id));
+          },
+        },
+      ]);
+    },
+    [events, applyEvents, closeRowMenu],
+  );
+
+  const rowMenuActions: TripTimelineRowAction[] = useMemo(() => {
+    if (!rowActions) return [];
+    const { event, index } = rowActions;
+    const actions: TripTimelineRowAction[] = [];
+
+    if (event.event_type === 'catch') {
+      actions.push({ label: 'Edit fish…', onPress: () => { closeRowMenu(); onEditCatch(event); } });
+      actions.push({ label: 'Add note above', onPress: () => void insertNoteAt(index, 'above') });
+      actions.push({ label: 'Add note below', onPress: () => void insertNoteAt(index, 'below') });
+      actions.push({ label: 'Add fish above', onPress: () => void insertFishAt(index, 'above') });
+      actions.push({ label: 'Add fish below', onPress: () => void insertFishAt(index, 'below') });
+      actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChangeAt(index, 'above') });
+      actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChangeAt(index, 'below') });
+    } else if (event.event_type === 'note') {
+      actions.push({ label: 'Edit note…', onPress: () => { closeRowMenu(); setNoteModal(event); } });
+      actions.push({ label: 'Add note above', onPress: () => void insertNoteAt(index, 'above') });
+      actions.push({ label: 'Add note below', onPress: () => void insertNoteAt(index, 'below') });
+      actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChangeAt(index, 'above') });
+      actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChangeAt(index, 'below') });
+    } else if (event.event_type === 'fly_change') {
+      actions.push({ label: 'Edit fly change…', onPress: () => { closeRowMenu(); onEditFlyChange(event); } });
+      actions.push({ label: 'Add note above', onPress: () => void insertNoteAt(index, 'above') });
+      actions.push({ label: 'Add note below', onPress: () => void insertNoteAt(index, 'below') });
+      actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChangeAt(index, 'above') });
+      actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChangeAt(index, 'below') });
+    } else if (event.event_type === 'ai_query') {
+      actions.push({ label: 'Edit AI entry…', onPress: () => { closeRowMenu(); setAiModal(event); } });
+      actions.push({ label: 'Add note above', onPress: () => void insertNoteAt(index, 'above') });
+      actions.push({ label: 'Add note below', onPress: () => void insertNoteAt(index, 'below') });
+      actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChangeAt(index, 'above') });
+      actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChangeAt(index, 'below') });
+    } else {
+      actions.push({ label: 'Add note above', onPress: () => void insertNoteAt(index, 'above') });
+      actions.push({ label: 'Add note below', onPress: () => void insertNoteAt(index, 'below') });
+      actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChangeAt(index, 'above') });
+      actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChangeAt(index, 'below') });
+    }
+
+    actions.push({ label: 'Delete', destructive: true, onPress: () => confirmDelete(event) });
+    return actions;
+  }, [
+    rowActions,
+    closeRowMenu,
+    onEditCatch,
+    onEditFlyChange,
+    insertNoteAt,
+    insertFishAt,
+    insertFlyChangeAt,
+    confirmDelete,
+  ]);
 
   return (
     <View style={{ flex: 1 }}>
+      {tripPaused ? (
+        <View style={styles.fishingPausedNotice}>
+          <MaterialCommunityIcons name="pause-circle-outline" size={22} color={Colors.textSecondary} />
+          <Text style={styles.fishingPausedNoticeText}>
+            Trip is paused. Tap Resume in the header to log catches, flies, and notes.
+          </Text>
+        </View>
+      ) : null}
+      <View
+        style={{ flex: 1, opacity: tripPaused ? 0.38 : 1 }}
+        pointerEvents={tripPaused ? 'none' : 'auto'}
+      >
       {/* Next Fly Recommendation */}
       {nextFlyRecommendation && (
         <Pressable
@@ -1094,374 +1199,6 @@ function FishingTab({
         </Pressable>
       </View>
 
-      {/* Add fish details modal — use Modal so overlay doesn't steal scroll touches */}
-      <Modal visible={showCatchModal} transparent animationType="fade" statusBarTranslucent>
-        <View style={styles.catchModalBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => {
-              Keyboard.dismiss();
-              setShowCatchModal(false);
-            }}
-          />
-          <View style={styles.catchModalOverlay}>
-          <View style={styles.catchModal} onStartShouldSetResponder={() => true}>
-            <View style={styles.catchModalHeader}>
-              <Text style={styles.catchModalTitle}>Add fish details</Text>
-            </View>
-            <ScrollView
-              style={styles.catchModalScroll}
-              contentContainerStyle={styles.catchModalScrollContent}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              showsVerticalScrollIndicator={true}
-              scrollEventThrottle={16}
-              bounces={true}
-              overScrollMode="always"
-            >
-            {/* Fly (editable name, size, color) — one row */}
-            <Text style={styles.flyFieldLabel}>{catchFlyName2 != null ? 'Primary fly' : 'Fly'}</Text>
-            <View style={styles.catchFlyDropdownRowWrap}>
-              <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('name')}>
-                <Text style={[styles.catchFlyDropdownValue, !catchFlyName && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                  {catchFlyName || 'Name'}
-                </Text>
-                <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-              </Pressable>
-              <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('size')}>
-                <Text style={[styles.catchFlyDropdownValue, catchFlySize == null && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                  {catchFlySize != null ? `#${catchFlySize}` : 'Size'}
-                </Text>
-                <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-              </Pressable>
-              <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('color')}>
-                <Text style={[styles.catchFlyDropdownValue, !catchFlyColor && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                  {catchFlyColor || 'Color'}
-                </Text>
-                <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-              </Pressable>
-            </View>
-
-            {/* Second fly (dropper) */}
-            {catchFlyName2 != null ? (
-              <>
-                <Text style={[styles.flyFieldLabel, { marginTop: Spacing.md }]}>Dropper</Text>
-                <Pressable
-                  style={[styles.addDropperButton, { marginBottom: Spacing.sm }]}
-                  onPress={() => { setCatchFlyName2(null); setCatchFlySize2(null); setCatchFlyColor2(null); }}
-                >
-                  <Text style={styles.addDropperButtonText}>Remove dropper</Text>
-                </Pressable>
-                <View style={styles.catchFlyDropdownRowWrap}>
-                  <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('name2')}>
-                    <Text style={[styles.catchFlyDropdownValue, !catchFlyName2 && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                      {catchFlyName2 || 'Name'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-                  </Pressable>
-                  <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('size2')}>
-                    <Text style={[styles.catchFlyDropdownValue, catchFlySize2 == null && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                      {catchFlySize2 != null ? `#${catchFlySize2}` : 'Size'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-                  </Pressable>
-                  <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('color2')}>
-                    <Text style={[styles.catchFlyDropdownValue, !catchFlyColor2 && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                      {catchFlyColor2 || 'Color'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-                  </Pressable>
-                </View>
-                <Text style={styles.flyFieldLabel}>Which fly caught?</Text>
-                <View style={styles.catchFlyRadioRow}>
-                  <Pressable
-                    style={styles.catchFlyRadioOption}
-                    onPress={() => setCatchCaughtOnFly('primary')}
-                  >
-                    <MaterialIcons
-                      name={catchCaughtOnFly === 'primary' ? 'radio-button-checked' : 'radio-button-unchecked'}
-                      size={22}
-                      color={catchCaughtOnFly === 'primary' ? Colors.primary : Colors.textSecondary}
-                    />
-                    <Text style={[styles.catchFlyRadioLabel, catchCaughtOnFly === 'primary' && styles.catchFlyRadioLabelActive]}>
-                      {catchFlyName}{catchFlySize ? ` #${catchFlySize}` : ''}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.catchFlyRadioOption}
-                    onPress={() => setCatchCaughtOnFly('dropper')}
-                  >
-                    <MaterialIcons
-                      name={catchCaughtOnFly === 'dropper' ? 'radio-button-checked' : 'radio-button-unchecked'}
-                      size={22}
-                      color={catchCaughtOnFly === 'dropper' ? Colors.primary : Colors.textSecondary}
-                    />
-                    <Text style={[styles.catchFlyRadioLabel, catchCaughtOnFly === 'dropper' && styles.catchFlyRadioLabelActive]}>
-                      {catchFlyName2}{catchFlySize2 ? ` #${catchFlySize2}` : ''}
-                    </Text>
-                  </Pressable>
-                </View>
-              </>
-            ) : (
-              <Pressable style={styles.addDropperButton} onPress={() => { setCatchFlyName2(flyPickerNames[0] ?? ''); setCatchFlySize2(null); setCatchFlyColor2(null); }}>
-                <Text style={styles.addDropperButtonText}>Add dropper</Text>
-              </Pressable>
-            )}
-
-            <Text style={styles.flyFieldLabel}>Photo</Text>
-            <View style={styles.catchPhotoRow}>
-              {catchPhotoUri ? (
-                <View style={styles.catchPhotoPreviewWrap}>
-                  <Image source={{ uri: catchPhotoUri }} style={styles.catchPhotoPreview} />
-                  <Pressable
-                    style={styles.catchPhotoRemove}
-                    onPress={() => setCatchPhotoUri(null)}
-                  >
-                    <MaterialIcons name="close" size={18} color={Colors.textInverse} />
-                  </Pressable>
-                </View>
-              ) : (
-                <>
-                  <Pressable
-                    style={styles.catchPhotoButton}
-                    onPress={() => onPickCatchPhoto('camera')}
-                  >
-                    <MaterialIcons name="photo-camera" size={22} color={Colors.primary} />
-                    <Text style={styles.catchPhotoButtonLabel}>Camera</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.catchPhotoButton}
-                    onPress={() => onPickCatchPhoto('library')}
-                  >
-                    <MaterialIcons name="photo-library" size={22} color={Colors.primary} />
-                    <Text style={styles.catchPhotoButtonLabel}>Upload</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.catchPhotoButton}
-                    onPress={() => setShowTripPhotoPicker(true)}
-                  >
-                    <MaterialIcons name="collections" size={22} color={Colors.primary} />
-                    <Text style={styles.catchPhotoButtonLabel}>From trip</Text>
-                  </Pressable>
-                </>
-              )}
-            </View>
-
-            {/* Trip photo picker modal — select from trip photos like photo library */}
-            <Modal
-              visible={showTripPhotoPicker}
-              animationType="slide"
-              transparent
-              onRequestClose={() => setShowTripPhotoPicker(false)}
-            >
-              <Pressable style={styles.tripPhotoPickerOverlay} onPress={() => setShowTripPhotoPicker(false)}>
-                <Pressable style={styles.tripPhotoPickerCard} onPress={() => {}}>
-                  <View style={styles.tripPhotoPickerHeader}>
-                    <Text style={styles.tripPhotoPickerTitle}>Select from trip</Text>
-                    <Pressable hitSlop={12} onPress={() => setShowTripPhotoPicker(false)}>
-                      <MaterialIcons name="close" size={24} color={Colors.textSecondary} />
-                    </Pressable>
-                  </View>
-                  {tripPhotos.length === 0 ? (
-                    <View style={styles.tripPhotoPickerEmpty}>
-                      <MaterialIcons name="photo-library" size={48} color={Colors.textTertiary} />
-                      <Text style={styles.tripPhotoPickerEmptyText}>No photos in this trip yet</Text>
-                      <Text style={styles.tripPhotoPickerEmptyHint}>Add photos in the Photos tab or take one with Camera / Upload</Text>
-                    </View>
-                  ) : (
-                    <ScrollView style={styles.tripPhotoPickerScroll} contentContainerStyle={styles.tripPhotoPickerGrid}>
-                      {tripPhotos.map((photo) => (
-                        <Pressable
-                          key={photo.id}
-                          style={styles.tripPhotoPickerThumbWrap}
-                          onPress={() => {
-                            setCatchPhotoUri(photo.url);
-                            setShowTripPhotoPicker(false);
-                          }}
-                        >
-                          <Image source={{ uri: photo.url }} style={styles.tripPhotoPickerThumb} />
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  )}
-                </Pressable>
-              </Pressable>
-            </Modal>
-
-            <Text style={styles.flyFieldLabel}>Notes</Text>
-            <TextInput
-              style={[styles.catchModalInput, styles.catchModalNoteInput]}
-              placeholder="Optional note"
-              placeholderTextColor={Colors.textTertiary}
-              value={catchNote}
-              onChangeText={setCatchNote}
-              multiline
-            />
-            <Text style={styles.flyFieldLabel}>Size (inches)</Text>
-            <TextInput
-              style={styles.catchModalInput}
-              placeholder="e.g. 14"
-              placeholderTextColor={Colors.textTertiary}
-              value={catchSize}
-              onChangeText={setCatchSize}
-              keyboardType="decimal-pad"
-            />
-            <Text style={styles.flyFieldLabel}>Species</Text>
-            <Pressable style={styles.catchFlyDropdownRow} onPress={() => setCatchSpeciesDropdownOpen(true)}>
-              <Text style={[styles.catchFlyDropdownValue, !catchSpecies && styles.catchFlyDropdownPlaceholder]} numberOfLines={1}>
-                {catchSpecies || 'Select species'}
-              </Text>
-              <MaterialIcons name="keyboard-arrow-down" size={16} color={Colors.textSecondary} />
-            </Pressable>
-            {(!catchSpecies || !SPECIES_OPTIONS.includes(catchSpecies)) && (
-              <TextInput
-                style={styles.catchModalInput}
-                placeholder="Species name (when Other is selected)"
-                placeholderTextColor={Colors.textTertiary}
-                value={catchSpecies}
-                onChangeText={setCatchSpecies}
-              />
-            )}
-
-            <Text style={styles.flyFieldLabel}>Catch Depth</Text>
-            <TextInput
-              style={styles.catchModalInput}
-              placeholder="e.g. 3"
-              placeholderTextColor={Colors.textTertiary}
-              value={catchDepth}
-              onChangeText={setCatchDepth}
-              keyboardType="decimal-pad"
-            />
-
-            <Text style={styles.flyFieldLabel}>Presentation</Text>
-            <View style={styles.chipRow}>
-              {(['dry', 'nymph', 'streamer', 'wet', 'other'] as const).map((m) => (
-                <Pressable
-                  key={m}
-                  style={[styles.chip, catchPresentation === m && styles.chipActive]}
-                  onPress={() => setCatchPresentation(m)}
-                >
-                  <Text style={[styles.chipText, catchPresentation === m && styles.chipTextActive]}>
-                    {m.charAt(0).toUpperCase() + m.slice(1)}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.flyFieldLabel}>Released?</Text>
-            <View style={styles.chipRow}>
-              <Pressable
-                style={[styles.chip, catchReleased === true && styles.chipActive]}
-                onPress={() => setCatchReleased(true)}
-              >
-                <Text style={[styles.chipText, catchReleased === true && styles.chipTextActive]}>Released</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.chip, catchReleased === false && styles.chipActive]}
-                onPress={() => setCatchReleased(false)}
-              >
-                <Text style={[styles.chipText, catchReleased === false && styles.chipTextActive]}>Kept</Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.flyFieldLabel}>Water Structure</Text>
-            <View style={styles.chipRow}>
-              {(['pool', 'riffle', 'run', 'undercut_bank', 'eddy', 'other'] as const).map((s) => (
-                <Pressable
-                  key={s}
-                  style={[styles.chip, catchStructure === s && styles.chipActive]}
-                  onPress={() => setCatchStructure(s)}
-                >
-                  <Text style={[styles.chipText, catchStructure === s && styles.chipTextActive]}>
-                    {s === 'undercut_bank' ? 'Undercut' : s.charAt(0).toUpperCase() + s.slice(1)}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </ScrollView>
-            {/* Fly dropdown picker modal (outside ScrollView to avoid nested scroll) */}
-            <Modal visible={catchFlyDropdownOpen !== null} transparent animationType="fade">
-              <View style={styles.catchFlyPickerOverlay}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={() => setCatchFlyDropdownOpen(null)} />
-                <View style={styles.catchFlyPickerSheet}>
-                  <ScrollView style={styles.catchFlyPickerList} keyboardShouldPersistTaps="handled">
-                    {catchFlyDropdownOptions.map((opt) => {
-                      const isSelected =
-                        (catchFlyDropdownOpen === 'name' && opt.value === catchFlyName) ||
-                        (catchFlyDropdownOpen === 'size' && opt.value === catchFlySize) ||
-                        (catchFlyDropdownOpen === 'color' && opt.value === catchFlyColor) ||
-                        (catchFlyDropdownOpen === 'name2' && opt.value === catchFlyName2) ||
-                        (catchFlyDropdownOpen === 'size2' && opt.value === catchFlySize2) ||
-                        (catchFlyDropdownOpen === 'color2' && opt.value === catchFlyColor2);
-                      return (
-                        <Pressable
-                          key={String(opt.value)}
-                          style={[styles.catchFlyPickerOption, isSelected && styles.catchFlyPickerOptionActive]}
-                          onPress={() => handleCatchFlyDropdownSelect(opt.value)}
-                        >
-                          <Text style={[styles.catchFlyPickerOptionText, isSelected && styles.catchFlyPickerOptionTextActive]}>{opt.label}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            </Modal>
-            {/* Species dropdown picker modal */}
-            <Modal visible={catchSpeciesDropdownOpen} transparent animationType="fade">
-              <View style={styles.catchFlyPickerOverlay}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={() => setCatchSpeciesDropdownOpen(false)} />
-                <View style={styles.catchFlyPickerSheet}>
-                  <ScrollView style={styles.catchFlyPickerList} keyboardShouldPersistTaps="handled">
-                    {SPECIES_OPTIONS.map((species) => {
-                      const isOther = species === 'Other';
-                      const isSelected = isOther
-                        ? !catchSpecies || !SPECIES_OPTIONS.slice(0, -1).includes(catchSpecies)
-                        : catchSpecies === species;
-                      return (
-                        <Pressable
-                          key={species}
-                          style={[styles.catchFlyPickerOption, isSelected && styles.catchFlyPickerOptionActive]}
-                          onPress={() => {
-                            setCatchSpecies(isOther ? '' : species);
-                            setCatchSpeciesDropdownOpen(false);
-                          }}
-                        >
-                          <Text style={[styles.catchFlyPickerOptionText, isSelected && styles.catchFlyPickerOptionTextActive]}>{species}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            </Modal>
-            <View style={styles.catchModalActions}>
-              <Pressable
-                style={styles.catchModalCancel}
-                onPress={() => {
-                  setCatchPhotoUri(null);
-                  setShowCatchModal(false);
-                }}
-              >
-                <Text style={styles.catchModalCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={styles.confirmFlyButton}
-                onPress={handleConfirmCatchDetails}
-                disabled={catchPhotoUploading}
-              >
-                {catchPhotoUploading ? (
-                  <ActivityIndicator size="small" color={Colors.textInverse} />
-                ) : (
-                  <Text style={styles.confirmFlyButtonText}>Add fish</Text>
-                )}
-              </Pressable>
-            </View>
-          </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Quick log: Bite / Fish On */}
       <View style={[styles.actionRow, styles.actionRowTight]}>
         <Pressable style={styles.actionButton} onPress={() => addBite?.()}>
@@ -1504,223 +1241,104 @@ function FishingTab({
         </View>
       )}
 
-      {/* Fly Picker — sheet-style modal (max 82% height) */}
-      <Modal
-        visible={showFlyPicker}
-        animationType="slide"
-        presentationStyle="fullScreen"
-      >
-        <SafeAreaView style={styles.flyPickerModalContainer} edges={['top', 'left', 'right', 'bottom']}>
-          <Pressable style={styles.flyPickerBackdrop} onPress={() => setShowFlyPicker(false)} />
-          <View style={[styles.flyPickerSheet, styles.flyPickerSheetSized]}>
-            <View style={styles.flyPickerHeader}>
-              <Text style={styles.flyPickerTitle}>Select Fly</Text>
-              <Pressable onPress={() => setShowFlyPicker(false)} hitSlop={12}>
-                <Text style={styles.flyPickerClose}>Cancel</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              style={styles.flyPickerScroll}
-              contentContainerStyle={styles.flyPickerContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={true}
-            >
-              {/* Fly thumbnail(s) — from fly catalog/box only */}
-              {(pickerName || pickerName2) && (() => {
-                const matchPrimary = userFlies.find(
-                  (f: Fly) => f.name === (pickerName ?? '')?.trim() && (f.size ?? null) === (pickerSize ?? null) && (f.color ?? null) === (pickerColor ?? null)
-                );
-                const matchDropper = pickerName2 != null && (pickerName2 as string).trim()
-                  ? userFlies.find(
-                      (f: Fly) => f.name === (pickerName2 as string).trim() && (f.size ?? null) === (pickerSize2 ?? null) && (f.color ?? null) === (pickerColor2 ?? null)
-                    )
-                  : null;
-                const primaryUrl = matchPrimary?.photo_url ?? null;
-                const dropperUrl = matchDropper?.photo_url ?? null;
-                if (!primaryUrl && !dropperUrl) return null;
-                return (
-                  <>
-                    <Text style={styles.flyFieldLabel}>Thumbnail</Text>
-                    <View style={styles.flyThumbnailRow}>
-                      {primaryUrl ? (
-                        <Image source={{ uri: primaryUrl }} style={styles.flyThumbnailImage} />
-                      ) : null}
-                      {dropperUrl ? (
-                        <Image source={{ uri: dropperUrl }} style={styles.flyThumbnailImage} />
-                      ) : null}
-                    </View>
-                  </>
-                );
-              })()}
-
-            <Text style={styles.flyFieldLabel}>Name{flyPickerNames !== FLY_NAMES ? ' (from Fly Box)' : ''}</Text>
-            <TextInput
-              style={styles.flyNameSearchInput}
-              placeholder="Search fly name..."
-              placeholderTextColor={Colors.textTertiary}
-              value={flyNameSearch}
-              onChangeText={setFlyNameSearch}
-            />
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-              <View style={styles.chipRow}>
-                {filteredFlyNames.map((name: string) => (
-                  <Pressable
-                    key={name}
-                    style={[styles.chip, pickerName === name && styles.chipActive]}
-                    onPress={() => setPickerName(name)}
-                  >
-                    <Text style={[styles.chipText, pickerName === name && styles.chipTextActive]}>{name}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
-
-            <Text style={styles.flyFieldLabel}>Size</Text>
-            <View style={styles.chipRow}>
-              {FLY_SIZES.map((size: number) => (
-                <Pressable
-                  key={size}
-                  style={[styles.chip, pickerSize === size && styles.chipActive]}
-                  onPress={() => setPickerSize(size)}
-                >
-                  <Text style={[styles.chipText, pickerSize === size && styles.chipTextActive]}>#{size}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.flyFieldLabel}>Color</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-              <View style={styles.chipRow}>
-                {FLY_COLORS.map((color: string) => (
-                  <Pressable
-                    key={color}
-                    style={[styles.chip, pickerColor === color && styles.chipActive]}
-                    onPress={() => setPickerColor(color)}
-                  >
-                    <Text style={[styles.chipText, pickerColor === color && styles.chipTextActive]}>{color}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
-
-            {/* Second fly (dropper) */}
-            <Text style={[styles.flyFieldLabel, { marginTop: Spacing.md }]}>Second fly (dropper)</Text>
-            {pickerName2 === null ? (
-              <Pressable style={styles.addDropperButton} onPress={() => setPickerName2('')}>
-                <Text style={styles.addDropperButtonText}>Add dropper (e.g. hopper-dropper)</Text>
-              </Pressable>
-            ) : (
-              <>
-                <Pressable
-                  style={styles.addDropperButton}
-                  onPress={() => { setPickerName2(null); setPickerSize2(null); setPickerColor2(null); }}
-                >
-                  <Text style={styles.addDropperButtonText}>Remove dropper</Text>
-                </Pressable>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                  <View style={styles.chipRow}>
-                    {filteredFlyNames.map((name: string) => (
-                      <Pressable
-                        key={name}
-                        style={[styles.chip, pickerName2 === name && styles.chipActive]}
-                        onPress={() => setPickerName2(name)}
-                      >
-                        <Text style={[styles.chipText, pickerName2 === name && styles.chipTextActive]}>{name}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </ScrollView>
-                <View style={styles.chipRow}>
-                  {FLY_SIZES.map((size: number) => (
-                    <Pressable
-                      key={size}
-                      style={[styles.chip, pickerSize2 === size && styles.chipActive]}
-                      onPress={() => setPickerSize2(size)}
-                    >
-                      <Text style={[styles.chipText, pickerSize2 === size && styles.chipTextActive]}>#{size}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                  <View style={styles.chipRow}>
-                    {FLY_COLORS.map((color: string) => (
-                      <Pressable
-                        key={color}
-                        style={[styles.chip, pickerColor2 === color && styles.chipActive]}
-                        onPress={() => setPickerColor2(color)}
-                      >
-                        <Text style={[styles.chipText, pickerColor2 === color && styles.chipTextActive]}>{color}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </ScrollView>
-              </>
-            )}
-          </ScrollView>
-
-            <View style={styles.flyPickerFooter}>
-              <Pressable
-                style={[styles.confirmFlyButton, !pickerName && styles.confirmFlyButtonDisabled]}
-                onPress={handleConfirmFly}
-                disabled={!pickerName}
-              >
-                <Text style={styles.confirmFlyButtonText}>
-                    {pickerName
-                      ? pickerName2
-                        ? `Select ${pickerName}${pickerSize ? ` #${pickerSize}` : ''} / ${pickerName2}${pickerSize2 ? ` #${pickerSize2}` : ''}`
-                        : `Select ${pickerName}${pickerSize ? ` #${pickerSize}` : ''}${pickerColor ? ` · ${pickerColor}` : ''}`
-                      : 'Choose a fly name'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </SafeAreaView>
-      </Modal>
-
       {/* Event Timeline */}
       <ScrollView style={[styles.timeline, { zIndex: 0 }]} keyboardShouldPersistTaps="handled">
         <Text style={styles.timelineTitle}>Timeline</Text>
-        {[...events].reverse().map((event: TripEvent) => (
-          <View key={event.id} style={styles.timelineItem}>
-            <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
-            <View style={styles.timelineContent}>
-              <View style={styles.timelineDot}>
-                {event.event_type === 'catch' ? (
-                  <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
-                ) : event.event_type === 'fly_change' ? (
-                  <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
-                ) : event.event_type === 'ai_query' ? (
-                  <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
-                ) : event.event_type === 'bite' ? (
-                  <MaterialCommunityIcons name="fish" size={14} color={Colors.accent} />
-                ) : event.event_type === 'fish_on' ? (
-                  <MaterialIcons name="touch-app" size={14} color={Colors.primary} />
-                ) : event.event_type === 'got_off' ? (
-                  <MaterialIcons name="highlight-off" size={14} color={Colors.textSecondary} />
-                ) : (
-                  <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
-                )}
-              </View>
-              <View style={styles.timelineTextBlock}>
-                <Text style={styles.timelineText}>
-                  {getEventDescription(event)}
-                </Text>
-                {event.event_type === 'catch' ? (
-                  <CatchDetailsBlock data={event.data as CatchData} />
-                ) : null}
-                {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
-                  <Pressable onPress={() => onCatchPhotoPress?.(event)}>
-                    <Image
-                      source={{ uri: (event.data as CatchData).photo_url! }}
-                      style={styles.timelineCatchThumb}
-                    />
-                  </Pressable>
-                ) : null}
+        <Text style={styles.timelineEditHint}>
+          Tap ⋮ on a row to edit, add notes, fish, or fly changes above/below, or delete.
+        </Text>
+        {[...sortedEvents].reverse().map((event: TripEvent, revIdx: number) => {
+          const index = sortedEvents.length - 1 - revIdx;
+          return (
+            <View key={event.id} style={styles.timelineItem}>
+              <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
+              <View style={styles.timelineContent}>
+                <View style={styles.timelineDot}>
+                  {event.event_type === 'catch' ? (
+                    <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
+                  ) : event.event_type === 'fly_change' ? (
+                    <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
+                  ) : event.event_type === 'ai_query' ? (
+                    <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
+                  ) : event.event_type === 'bite' ? (
+                    <MaterialCommunityIcons name="fish" size={14} color={Colors.accent} />
+                  ) : event.event_type === 'fish_on' ? (
+                    <MaterialIcons name="touch-app" size={14} color={Colors.primary} />
+                  ) : event.event_type === 'got_off' ? (
+                    <MaterialIcons name="highlight-off" size={14} color={Colors.textSecondary} />
+                  ) : (
+                    <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
+                  )}
+                </View>
+                <View style={styles.timelineTextBlock}>
+                  <Text style={styles.timelineText}>
+                    {getEventDescription(event)}
+                  </Text>
+                  {event.event_type === 'catch' ? (
+                    <CatchDetailsBlock data={event.data as CatchData} />
+                  ) : null}
+                  {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
+                    <Pressable onPress={() => onCatchPhotoPress?.(event)}>
+                      <Image
+                        source={{ uri: (event.data as CatchData).photo_url! }}
+                        style={styles.timelineCatchThumb}
+                      />
+                    </Pressable>
+                  ) : null}
+                </View>
+                <Pressable
+                  style={styles.timelineRowMenuBtn}
+                  onPress={() => setRowActions({ event, index })}
+                  hitSlop={12}
+                  accessibilityLabel="Timeline row actions"
+                >
+                  <MaterialIcons name="more-vert" size={22} color={Colors.textSecondary} />
+                </Pressable>
               </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
       </ScrollView>
+
+      <Modal visible={rowActions != null} transparent animationType="fade" onRequestClose={closeRowMenu}>
+        <View style={styles.tripTimelineActionOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeRowMenu} />
+          <View style={styles.tripTimelineActionSheet}>
+            {rowMenuActions.map((a) => (
+              <Pressable
+                key={a.label}
+                style={styles.tripTimelineActionRow}
+                onPress={() => {
+                  a.onPress();
+                }}
+              >
+                <Text style={[styles.tripTimelineActionLabel, a.destructive && styles.tripTimelineActionDestructive]}>
+                  {a.label}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable style={styles.tripTimelineActionRow} onPress={closeRowMenu}>
+              <Text style={styles.tripTimelineActionCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <TripTimelineNoteModal
+        visible={noteModal != null}
+        event={noteModal}
+        allEvents={events}
+        onClose={() => setNoteModal(null)}
+        onApply={applyEvents}
+      />
+      <TripTimelineAiModal
+        visible={aiModal != null}
+        event={aiModal}
+        allEvents={events}
+        onClose={() => setAiModal(null)}
+        onApply={applyEvents}
+      />
+      </View>
     </View>
   );
 }
@@ -1783,27 +1401,269 @@ function PhotosTab({
   );
 }
 
-/* ─── Map Tab (MapLibre + OSM-style: water, streams, dams) ─── */
+/* ─── Map Tab (Mapbox: terrain + pins) ─── */
 
-// OSM-style map (good water/dam/stream detail). No API key required.
-const MAP_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+type TripMapMarker = {
+  id: string;
+  lon: number;
+  lat: number;
+  title: string;
+  color: string;
+  endpointLabel?: 'Start' | 'End';
+  endpointIcon?: 'place' | 'flag';
+};
+
+function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker[] {
+  const markers: TripMapMarker[] = [];
+
+  const startLat = trip.start_latitude ?? null;
+  const startLon = trip.start_longitude ?? null;
+  if (startLat != null && startLon != null) {
+    markers.push({
+      id: 'trip-start',
+      lon: startLon,
+      lat: startLat,
+      title: 'Start',
+      color: Colors.primary,
+      endpointLabel: 'Start',
+      endpointIcon: 'place',
+    });
+  }
+
+  const endLat = trip.end_latitude ?? null;
+  const endLon = trip.end_longitude ?? null;
+  if (endLat != null && endLon != null) {
+    markers.push({
+      id: 'trip-end',
+      lon: endLon,
+      lat: endLat,
+      title: 'End',
+      color: Colors.secondary,
+      endpointLabel: 'End',
+      endpointIcon: 'flag',
+    });
+  }
+
+  for (const e of tripEvents) {
+    if (e.event_type !== 'catch') continue;
+    if (e.latitude == null || e.longitude == null) continue;
+    const catchData = e.data as CatchData;
+    const speciesLabel = catchData.species?.trim();
+    markers.push({
+      id: `catch-${e.id}`,
+      lon: e.longitude,
+      lat: e.latitude,
+      title: speciesLabel ? `Catch · ${speciesLabel}` : 'Catch',
+      color: Colors.primaryLight,
+    });
+  }
+
+  return markers;
+}
 
 function TripMapTab({
+  trip,
+  events: tripEvents,
+  userId,
+  isConnected,
   mapLocation,
-  mapLocationLoading,
+  mapLocationLoading: _mapLocationLoading,
   mapLocationError,
   onRequestLocation,
 }: {
+  trip: Trip;
+  events: TripEvent[];
+  userId: string;
+  isConnected: boolean;
   mapLocation: { lat: number; lon: number } | null;
   mapLocationLoading: boolean;
   mapLocationError: string | null;
   onRequestLocation: () => Promise<void>;
 }) {
+  const addCatch = useTripStore((s) => s.addCatch);
+  const locations = useLocationStore((s) => s.locations);
+  const fetchLocations = useLocationStore((s) => s.fetchLocations);
+  const mapRef = useRef<TripMapboxMapRef>(null);
+  const [centerCoordinate, setCenterCoordinate] = useState<[number, number]>(() =>
+    tripMapDefaultCenterCoordinate(trip),
+  );
+  const [zoomLevel, setZoomLevel] = useState(() => tripMapDefaultZoom(trip));
+  const [cameraKey, setCameraKey] = useState(0);
+  /** Viewport for pins / queries: always from native map ref (see syncDataViewportFromMap). */
+  const [dataViewport, setDataViewport] = useState<BoundingBox | null>(null);
+  const [cachedPins, setCachedPins] = useState<CachedCatchPin[]>([]);
+  const [offlineBusy, setOfflineBusy] = useState(false);
+  const viewportDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    if (mapLocation == null && !mapLocationLoading) {
-      onRequestLocation();
+    void getCachedCatchPins().then(setCachedPins);
+  }, []);
+
+  useEffect(() => {
+    if (locations.length === 0) void fetchLocations();
+  }, [locations.length, fetchLocations]);
+
+  useEffect(
+    () => () => {
+      if (viewportDebounceRef.current) clearTimeout(viewportDebounceRef.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    void onRequestLocation();
+  }, [onRequestLocation]);
+
+  useEffect(() => {
+    setCenterCoordinate(tripMapDefaultCenterCoordinate(trip));
+    setZoomLevel(tripMapDefaultZoom(trip));
+    setCameraKey((k) => k + 1);
+  }, [
+    trip.id,
+    trip.start_latitude,
+    trip.start_longitude,
+    trip.location?.latitude,
+    trip.location?.longitude,
+  ]);
+
+  const tripCatchIds = useMemo(
+    () =>
+      new Set(
+        tripEvents
+          .filter((e) => e.event_type === 'catch' && e.latitude != null && e.longitude != null)
+          .map((e) => e.id),
+      ),
+    [tripEvents],
+  );
+
+  const cacheMarkersForViewport = useMemo((): TripMapMarker[] => {
+    if (!dataViewport) return [];
+    return cachedPins
+      .filter((c) => isPointInBoundingBox(c.latitude, c.longitude, dataViewport))
+      .filter((c) => !tripCatchIds.has(c.id))
+      .map((c) => ({
+        id: `catch-cache-${c.id}`,
+        lon: c.longitude,
+        lat: c.latitude,
+        title: c.species?.trim() ? `Catch · ${c.species.trim()}` : 'Saved catch',
+        color: Colors.secondary,
+      }));
+  }, [cachedPins, dataViewport, tripCatchIds]);
+
+  const catalogMarkersForViewport = useMemo(
+    () =>
+      catalogLocationMarkersInViewport(locations, dataViewport, trip.location_id ?? undefined),
+    [locations, dataViewport, trip.location_id],
+  );
+
+  const allMarkers = useMemo(() => {
+    const tripMarkers = buildTripMapMarkers(trip, tripEvents);
+    return [...catalogMarkersForViewport, ...tripMarkers, ...cacheMarkersForViewport];
+  }, [trip, tripEvents, catalogMarkersForViewport, cacheMarkersForViewport]);
+
+  const markersForMap = useMemo(() => {
+    if (!dataViewport) {
+      return allMarkers;
     }
-  }, [mapLocation, mapLocationLoading]);
+    return allMarkers.filter((m) => isPointInBoundingBox(m.lat, m.lon, dataViewport));
+  }, [allMarkers, dataViewport]);
+
+  const mapboxMarkers = useMemo(
+    () =>
+      markersForMap.map((m) => ({
+        id: m.id,
+        coordinate: [m.lon, m.lat] as [number, number],
+        title: m.title,
+        children:
+          m.endpointLabel != null ? (
+            <LabeledEndpointMapPin
+              label={m.endpointLabel}
+              backgroundColor={m.color}
+              icon={m.endpointIcon ?? 'place'}
+            />
+          ) : (
+            <MaterialIcons name="place" size={34} color={m.color} />
+          ),
+      })),
+    [markersForMap],
+  );
+
+  const syncDataViewportFromMap = useCallback(() => {
+    if (viewportDebounceRef.current) clearTimeout(viewportDebounceRef.current);
+    viewportDebounceRef.current = setTimeout(() => {
+      void (async () => {
+        const bbox = await mapRef.current?.getVisibleRegion();
+        if (!bbox) return;
+        setDataViewport(bbox);
+        if (userId && isConnected) {
+          const rows = await fetchCatchesInBounds(userId, bbox);
+          await mergeCachedCatchesFromRows(rows);
+        }
+        setCachedPins(await getCachedCatchPins());
+      })();
+    }, 400);
+  }, [userId, isConnected]);
+
+  const handleAddFish = useCallback(async () => {
+    try {
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location', 'Permission is needed to tag a catch with GPS.');
+        return;
+      }
+      const loc = await ExpoLocation.getCurrentPositionAsync({
+        accuracy: ExpoLocation.Accuracy.Lowest,
+      });
+      const lat = loc.coords.latitude;
+      const lng = loc.coords.longitude;
+      const clientEventId = uuidv4();
+      const id = addCatch({}, lat, lng, clientEventId);
+      if (!id) {
+        Alert.alert('Trip', 'No active trip to log a catch.');
+        return;
+      }
+      const { activeTrip: at, events: ev } = useTripStore.getState();
+      const catchEvent = ev.find((e) => e.id === id && e.event_type === 'catch');
+      if (at && catchEvent) {
+        const refreshPins = () => void getCachedCatchPins().then(setCachedPins);
+        if (isConnected) {
+          void upsertCatchEventToCloud(at, catchEvent, ev).then(async (ok) => {
+            if (ok) {
+              const pin = cachedPinFromCatchEvent(catchEvent);
+              if (pin) await mergeCachedPins([pin]);
+              await removePendingCatchByEventId(id);
+            } else {
+              await enqueuePendingCatch({ trip: at, event: catchEvent, allEvents: ev });
+            }
+            refreshPins();
+          });
+        } else {
+          void enqueuePendingCatch({ trip: at, event: catchEvent, allEvents: ev }).then(refreshPins);
+        }
+      }
+      setCenterCoordinate([lng, lat]);
+      setZoomLevel(USER_LOCATION_ZOOM);
+      setCameraKey((k) => k + 1);
+    } catch {
+      Alert.alert('Location', 'Could not read GPS for this catch.');
+    }
+  }, [addCatch, isConnected]);
+
+  const handleDownloadOffline = useCallback(async () => {
+    setOfflineBusy(true);
+    try {
+      await downloadSampleOfflineRegion();
+      if (userId) {
+        await prefetchCatchesForBounds(userId, SAMPLE_OFFLINE_BOUNDING_BOX);
+        setCachedPins(await getCachedCatchPins());
+      }
+      Alert.alert('Offline', 'Sample Utah Valley map region download completed.');
+    } catch (e) {
+      Alert.alert('Offline', (e as Error).message);
+    } finally {
+      setOfflineBusy(false);
+    }
+  }, [userId]);
 
   if (Platform.OS === 'web') {
     return (
@@ -1814,53 +1674,53 @@ function TripMapTab({
     );
   }
 
-  if (mapLocationError) {
-    return (
-      <View style={styles.mapTabPlaceholder}>
-        <MaterialIcons name="location-off" size={48} color={Colors.textTertiary} />
-        <Text style={styles.mapTabPlaceholderText}>{mapLocationError}</Text>
-        <Pressable style={styles.mapTabRetryButton} onPress={onRequestLocation}>
-          <Text style={styles.mapTabRetryButtonText}>Try again</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  if (mapLocationLoading || !mapLocation) {
-    return (
-      <View style={styles.mapTabPlaceholder}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.mapTabPlaceholderText}>Getting your location…</Text>
-      </View>
-    );
-  }
-
-  if (!MapView || !Camera || !UserLocation) {
-    return (
-      <View style={styles.mapTabPlaceholder}>
-        <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
-        <Text style={styles.mapTabPlaceholderText}>
-          Map requires a development build. Use Expo Go for other trip features.
-        </Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.mapTabContainer}>
-      <MapView
-        style={styles.mapTabMap}
-        mapStyle={MAP_STYLE_URL}
-        compassEnabled
-      >
-        <Camera
-          defaultSettings={{
-            centerCoordinate: [mapLocation.lon, mapLocation.lat],
-            zoomLevel: 15,
-          }}
-        />
-        <UserLocation visible />
-      </MapView>
+      {mapLocationError ? (
+        <View style={styles.mapTabBanner}>
+          <MaterialIcons name="location-off" size={18} color={Colors.warning} />
+          <Text style={styles.mapTabBannerText} numberOfLines={2}>
+            {mapLocationError}
+          </Text>
+          <Pressable onPress={() => void onRequestLocation()} hitSlop={8}>
+            <Text style={styles.mapTabBannerRetry}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      <TripMapboxMapView
+        ref={mapRef}
+        containerStyle={styles.mapTabMap}
+        centerCoordinate={centerCoordinate}
+        zoomLevel={zoomLevel}
+        cameraKey={String(cameraKey)}
+        markers={mapboxMarkers}
+        showUserLocation={mapLocation != null}
+        onZoomLevelChange={setZoomLevel}
+        onMapIdle={() => {
+          void syncDataViewportFromMap();
+        }}
+      />
+      <View style={styles.mapTabFabColumn} pointerEvents="box-none">
+        <Pressable
+          style={({ pressed }) => [styles.mapTabFishFab, pressed && styles.mapTabFabPressed]}
+          onPress={() => void handleAddFish()}
+        >
+          <MaterialIcons name="add" size={26} color={Colors.textInverse} />
+          <Text style={styles.mapTabFishFabLabel}>Fish</Text>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [
+            styles.mapTabOfflineFab,
+            offlineBusy && styles.mapTabFabDisabled,
+            pressed && !offlineBusy && styles.mapTabFabPressed,
+          ]}
+          onPress={() => void handleDownloadOffline()}
+          disabled={offlineBusy}
+        >
+          <MaterialIcons name="download" size={22} color={Colors.textInverse} />
+          <Text style={styles.mapTabOfflineFabLabel}>{offlineBusy ? '…' : 'Area'}</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -1993,6 +1853,153 @@ function getEventDescription(event: TripEvent): string {
   }
 }
 
+type TripTimelineRowAction = { label: string; destructive?: boolean; onPress: () => void };
+
+function seedFlyChangeDataForTimestamp(allEvents: TripEvent[], timestampIso: string): FlyChangeData {
+  const priorId = findActiveFlyEventIdBefore(allEvents, timestampIso);
+  if (!priorId) return { pattern: 'Unknown', size: null, color: null };
+  const prior = allEvents.find((e) => e.id === priorId && e.event_type === 'fly_change');
+  if (!prior) return { pattern: 'Unknown', size: null, color: null };
+  const d = prior.data as FlyChangeData;
+  return {
+    pattern: d.pattern,
+    size: d.size,
+    color: d.color,
+    fly_id: d.fly_id,
+    fly_color_id: d.fly_color_id,
+    fly_size_id: d.fly_size_id,
+    ...(d.pattern2 != null && String(d.pattern2).trim()
+      ? {
+          pattern2: d.pattern2,
+          size2: d.size2 ?? null,
+          color2: d.color2 ?? null,
+          fly_id2: d.fly_id2,
+          fly_color_id2: d.fly_color_id2,
+          fly_size_id2: d.fly_size_id2,
+        }
+      : {}),
+  };
+}
+
+function TripTimelineNoteModal({
+  visible,
+  event,
+  allEvents,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  event: TripEvent | null;
+  allEvents: TripEvent[];
+  onClose: () => void;
+  onApply: (nextEvents: TripEvent[]) => void;
+}) {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    if (event) setText((event.data as NoteData).text ?? '');
+  }, [event?.id]);
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.tripTimelineModalRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <View style={styles.tripTimelineModalHeader}>
+          <Pressable onPress={onClose}>
+            <Text style={styles.tripTimelineModalCancel}>Cancel</Text>
+          </Pressable>
+          <Text style={styles.tripTimelineModalTitle}>Note</Text>
+          <Pressable
+            onPress={() => {
+              if (!event) return;
+              const next: TripEvent = {
+                ...event,
+                data: { text: text.trim() || 'Note' } as NoteData,
+              };
+              onApply(upsertEventSorted(allEvents, next));
+              onClose();
+            }}
+          >
+            <Text style={styles.tripTimelineModalSave}>Save</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          style={styles.tripTimelineNoteBody}
+          value={text}
+          onChangeText={setText}
+          placeholder="Write a note…"
+          placeholderTextColor={Colors.textTertiary}
+          multiline
+        />
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function TripTimelineAiModal({
+  visible,
+  event,
+  allEvents,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  event: TripEvent | null;
+  allEvents: TripEvent[];
+  onClose: () => void;
+  onApply: (nextEvents: TripEvent[]) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [r, setR] = useState('');
+  useEffect(() => {
+    if (!event) return;
+    const d = event.data as AIQueryData;
+    setQ(d.question ?? '');
+    setR(d.response ?? '');
+  }, [event?.id]);
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.tripTimelineModalRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <View style={styles.tripTimelineModalHeader}>
+          <Pressable onPress={onClose}>
+            <Text style={styles.tripTimelineModalCancel}>Cancel</Text>
+          </Pressable>
+          <Text style={styles.tripTimelineModalTitle}>AI entry</Text>
+          <Pressable
+            onPress={() => {
+              if (!event) return;
+              const next: TripEvent = {
+                ...event,
+                data: { question: q.trim() || 'Question', response: r.trim() || null } as AIQueryData,
+              };
+              onApply(upsertEventSorted(allEvents, next));
+              onClose();
+            }}
+          >
+            <Text style={styles.tripTimelineModalSave}>Save</Text>
+          </Pressable>
+        </View>
+        <ScrollView style={styles.tripTimelineModalScroll} keyboardShouldPersistTaps="handled">
+          <Text style={styles.tripTimelineFieldLabel}>Question</Text>
+          <TextInput style={styles.tripTimelineInput} value={q} onChangeText={setQ} multiline />
+          <Text style={styles.tripTimelineFieldLabel}>Response</Text>
+          <TextInput
+            style={[styles.tripTimelineInput, styles.tripTimelineTallInput]}
+            value={r}
+            onChangeText={setR}
+            multiline
+          />
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 /* ─── Styles ─── */
 
 const styles = StyleSheet.create({
@@ -2040,6 +2047,10 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.8)',
     marginTop: 2,
   },
+  timerTextPaused: {
+    color: 'rgba(255,255,255,0.95)',
+    fontWeight: '600',
+  },
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2064,6 +2075,17 @@ const styles = StyleSheet.create({
   cachedDataBannerText: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  pauseResumeButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  pauseResumeButtonText: {
+    color: Colors.textInverse,
+    fontWeight: '600',
+    fontSize: FontSize.sm,
   },
   endButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -2146,7 +2168,14 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontStyle: 'italic',
   },
-  strategyFliesWrap: {
+  strategyFliesColumns: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  strategyFliesColumn: {
+    flex: 1,
+    minWidth: 0,
     gap: 2,
   },
   strategyFlyRow: {
@@ -2251,6 +2280,22 @@ const styles = StyleSheet.create({
   },
 
   // Fishing Tab
+  fishingPausedNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.borderLight,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  fishingPausedNoticeText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
   nextFlyBanner: {
     backgroundColor: Colors.accent,
     paddingVertical: Spacing.sm + 2,
@@ -2410,101 +2455,6 @@ const styles = StyleSheet.create({
     color: Colors.textInverse,
     fontWeight: '600',
   },
-  flyPickerModalContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'transparent',
-  },
-  flyPickerBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  flyPickerSheet: {
-    width: '100%',
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: BorderRadius.lg,
-    borderTopRightRadius: BorderRadius.lg,
-    overflow: 'hidden',
-  },
-  flyPickerSheetSized: {
-    maxHeight: Dimensions.get('window').height * 0.82,
-    height: Dimensions.get('window').height * 0.82,
-  },
-  flyPickerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    backgroundColor: Colors.surface,
-  },
-  flyPickerTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  flyPickerClose: {
-    fontSize: FontSize.md,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  flyPickerScroll: {
-    flex: 1,
-  },
-  flyPickerContent: {
-    padding: Spacing.lg,
-    paddingBottom: Spacing.lg,
-  },
-  flyPickerFooter: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    paddingBottom: Spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.surface,
-  },
-  flyThumbnailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  flyThumbnailImage: {
-    width: 64,
-    height: 64,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.border,
-  },
-  flyThumbnailRemove: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-  },
-  flyThumbnailRemoveText: {
-    fontSize: FontSize.sm,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  flyThumbnailAdd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: Colors.border,
-  },
-  flyThumbnailAddText: {
-    fontSize: FontSize.sm,
-    color: Colors.textTertiary,
-  },
   flyFieldLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
@@ -2513,63 +2463,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: Spacing.sm,
     marginTop: Spacing.sm,
-  },
-  flyNameSearchInput: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    marginBottom: Spacing.sm,
-  },
-  chipScroll: {
-    marginBottom: Spacing.xs,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.xs,
-    marginBottom: Spacing.xs,
-  },
-  chip: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs + 2,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-  },
-  chipActive: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primary + '15',
-  },
-  chipText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: '500',
-  },
-  chipTextActive: {
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  confirmFlyButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  confirmFlyButtonDisabled: {
-    backgroundColor: Colors.border,
-  },
-  confirmFlyButtonText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: '600',
   },
   catchModalBackdrop: {
     flex: 1,
@@ -2698,20 +2591,6 @@ const styles = StyleSheet.create({
   catchFlyRadioLabelActive: {
     color: Colors.text,
     fontWeight: '600',
-  },
-  addDropperButton: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    marginBottom: Spacing.sm,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderStyle: 'dashed',
-    alignSelf: 'flex-start',
-  },
-  addDropperButtonText: {
-    fontSize: FontSize.sm,
-    color: Colors.primary,
   },
   modalOverlay: {
     flex: 1,
@@ -2876,69 +2755,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  tripPhotoPickerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  tripPhotoPickerCard: {
-    backgroundColor: Colors.background,
-    borderTopLeftRadius: BorderRadius.lg,
-    borderTopRightRadius: BorderRadius.lg,
-    maxHeight: '80%',
-    paddingBottom: Spacing.xl,
-  },
-  tripPhotoPickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  tripPhotoPickerTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  tripPhotoPickerEmpty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: Spacing.xl * 2,
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.sm,
-  },
-  tripPhotoPickerEmptyText: {
-    fontSize: FontSize.md,
-    color: Colors.text,
-    fontWeight: '500',
-  },
-  tripPhotoPickerEmptyHint: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  tripPhotoPickerScroll: {
-    maxHeight: 400,
-  },
-  tripPhotoPickerGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-    padding: Spacing.lg,
-    paddingBottom: Spacing.xl,
-  },
-  tripPhotoPickerThumbWrap: {
-    width: (Dimensions.get('window').width - Spacing.lg * 2 - Spacing.sm * 2) / 3,
-    aspectRatio: 1,
-  },
-  tripPhotoPickerThumb: {
-    width: '100%',
-    height: '100%',
-    borderRadius: BorderRadius.md,
-    backgroundColor: Colors.surface,
-  },
   quantityRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2997,13 +2813,114 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.xs,
     marginTop: Spacing.md,
+  },
+  timelineEditHint: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    marginBottom: Spacing.md,
+  },
+  timelineRowMenuBtn: {
+    padding: Spacing.xs,
+  },
+  tripTimelineActionOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  tripTimelineActionSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderTopRightRadius: BorderRadius.lg,
+    paddingBottom: Spacing.xl,
+  },
+  tripTimelineActionRow: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  tripTimelineActionLabel: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+  },
+  tripTimelineActionDestructive: {
+    color: Colors.error,
+  },
+  tripTimelineActionCancel: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.primary,
+    textAlign: 'center',
+  },
+  tripTimelineModalRoot: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  tripTimelineModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  tripTimelineModalTitle: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  tripTimelineModalCancel: {
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+  },
+  tripTimelineModalSave: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  tripTimelineModalScroll: {
+    flex: 1,
+    padding: Spacing.lg,
+  },
+  tripTimelineFieldLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginBottom: Spacing.xs,
+    marginTop: Spacing.sm,
+  },
+  tripTimelineInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.text,
+    backgroundColor: Colors.surface,
+  },
+  tripTimelineTallInput: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  tripTimelineNoteBody: {
+    flex: 1,
+    margin: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.text,
+    textAlignVertical: 'top',
   },
   timelineItem: {
     flexDirection: 'row',
     gap: Spacing.md,
     marginBottom: Spacing.md,
+    alignItems: 'flex-start',
   },
   timelineTime: {
     fontSize: FontSize.xs,
@@ -3079,6 +2996,78 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: '600',
     color: '#fff',
+  },
+  mapTabBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  mapTabBannerText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  mapTabBannerRetry: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  mapTabFabColumn: {
+    position: 'absolute',
+    right: Spacing.md,
+    /* Clear bottom strip: Mapbox (i) + zoom stack live above trip safe area */
+    bottom: Spacing.lg + 96,
+    gap: Spacing.sm,
+    alignItems: 'flex-end',
+  },
+  mapTabFishFab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    backgroundColor: Colors.primary,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+  },
+  mapTabOfflineFab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    backgroundColor: Colors.info,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+  },
+  mapTabFabPressed: {
+    opacity: 0.88,
+  },
+  mapTabFabDisabled: {
+    opacity: 0.55,
+  },
+  mapTabFishFabLabel: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.textInverse,
+  },
+  mapTabOfflineFabLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.textInverse,
   },
 
   // AI Guide Tab

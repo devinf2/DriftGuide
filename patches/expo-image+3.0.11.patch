@@ -1,0 +1,14 @@
+diff --git a/node_modules/expo-image/ios/ContentPosition.swift b/node_modules/expo-image/ios/ContentPosition.swift
+index 73c34ca..16b1d09 100644
+--- a/node_modules/expo-image/ios/ContentPosition.swift
++++ b/node_modules/expo-image/ios/ContentPosition.swift
+@@ -10,7 +10,8 @@ typealias ContentPositionValue = Either<Double, String>
+  - Note: Its intention is to behave like the CSS [`object-position`](https://developer.mozilla.org/en-US/docs/Web/CSS/object-position) property.
+  */
+ struct ContentPosition: Record {
+-  static let center = Self()
++  /// Computed default avoids Swift 6 "not concurrency-safe" on `static let` for `Record` types.
++  static var center: ContentPosition { ContentPosition() }
+ 
+   @Field
+   var top: ContentPositionValue?

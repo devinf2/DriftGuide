@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import { Trip, TripEvent, FlyChangeData, CatchData, NoteData, FishingType, WeatherData, WaterFlowData, Location, NextFlyRecommendation, EventConditionsSnapshot, SessionType } from '@/src/types';
 import { getMoonPhase } from '@/src/utils/moonPhase';
-import * as ExpoLocation from 'expo-location';
+import { captureTripBookmarkCoords } from '@/src/utils/tripGps';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
 import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
 import { getFallbackRecommendation, getSmartFlyRecommendation, getSeason, getTimeOfDay } from '@/src/services/ai';
@@ -12,12 +12,18 @@ import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { getCachedConditions } from '@/src/services/waterwayCache';
+import { latestFlyChangeRigFromEvents, totalFishFromEvents } from '@/src/utils/journalTimeline';
 
 const IN_TRIP_SYNC_DEBOUNCE_MS = 5000;
 let inTripSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface TripState {
   activeTrip: Trip | null;
+  /** Milliseconds of active fishing time (excludes paused intervals). */
+  fishingElapsedMs: number;
+  /** ISO start of the current running segment; null while paused. */
+  fishingSegmentStartedAt: string | null;
+  isTripPaused: boolean;
   events: TripEvent[];
   currentFly: FlyChangeData | null;
   currentFly2: FlyChangeData | null;
@@ -39,17 +45,26 @@ interface TripState {
   deleteTrip: (tripId: string) => Promise<void>;
   fetchPlannedTrips: (userId: string) => Promise<void>;
   startTrip: (userId: string, locationId: string | null, fishingType: FishingType, location?: Location, sessionType?: SessionType | null) => Promise<string>;
+  pauseTrip: () => Promise<void>;
+  resumeTrip: () => Promise<void>;
   endTrip: () => Promise<{ synced: boolean }>;
   updateTripSurvey: (tripId: string, payload: { rating: number | null; user_reported_clarity: string | null; notes: string | null }) => Promise<boolean>;
   retryPendingSyncs: () => Promise<void>;
-  isSyncingPending: boolean;
   isOnline: boolean;
   setOnlineStatus: (online: boolean) => void;
   scheduleInTripSync: () => void;
-  addCatch: (data?: Partial<CatchData>, latitude?: number | null, longitude?: number | null) => string | undefined;
+  addCatch: (
+    data?: Partial<CatchData>,
+    latitude?: number | null,
+    longitude?: number | null,
+    /** Stable client id for offline-first sync (omit to assign a new uuid). */
+    clientEventId?: string | null,
+  ) => string | undefined;
   updateEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
   removeCatch: () => void;
   changeFly: (primary: FlyChangeData, dropper?: FlyChangeData | null, latitude?: number | null, longitude?: number | null) => void;
+  /** Update an existing fly_change row (timeline edit). Syncs current rig if that event is active. */
+  updateFlyChangeEvent: (eventId: string, primary: FlyChangeData, dropper?: FlyChangeData | null) => void;
   addNote: (text: string, latitude?: number | null, longitude?: number | null) => void;
   addBite: (latitude?: number | null, longitude?: number | null) => void;
   addFishOn: (latitude?: number | null, longitude?: number | null) => void;
@@ -59,6 +74,7 @@ interface TripState {
   fetchConditions: () => Promise<void>;
   refreshSmartRecommendation: () => Promise<void>;
   clearActiveTrip: () => void;
+  replaceActiveTripEvents: (events: TripEvent[]) => void;
 }
 
 function buildConditionsSnapshot(weather: WeatherData | null, waterFlow: WaterFlowData | null): EventConditionsSnapshot | null {
@@ -75,6 +91,9 @@ export const useTripStore = create<TripState>()(
   persist(
     (set, get) => ({
       activeTrip: null,
+      fishingElapsedMs: 0,
+      fishingSegmentStartedAt: null,
+      isTripPaused: false,
       events: [],
       currentFly: null,
       currentFly2: null,
@@ -127,24 +146,14 @@ export const useTripStore = create<TripState>()(
       },
 
       startPlannedTrip: async (tripId) => {
+        if (get().activeTrip?.status === 'active') return null;
         const { plannedTrips, weatherData, waterFlowData } = get();
         const planned = plannedTrips.find(t => t.id === tripId);
         if (!planned) return null;
 
-        let startLat: number | null = null;
-        let startLon: number | null = null;
-        try {
-          const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            const loc = await ExpoLocation.getCurrentPositionAsync({
-              accuracy: ExpoLocation.Accuracy.Balanced,
-            });
-            startLat = loc.coords.latitude;
-            startLon = loc.coords.longitude;
-          }
-        } catch {
-          // leave null
-        }
+        const startCoords = await captureTripBookmarkCoords();
+        const startLat = startCoords?.latitude ?? null;
+        const startLon = startCoords?.longitude ?? null;
 
         const startEvent: TripEvent = {
           id: uuidv4(),
@@ -153,8 +162,8 @@ export const useTripStore = create<TripState>()(
           timestamp: new Date().toISOString(),
           data: { text: 'Trip started' },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
-          latitude: null,
-          longitude: null,
+          latitude: startLat,
+          longitude: startLon,
         };
 
         const activatedTrip: Trip = {
@@ -174,6 +183,9 @@ export const useTripStore = create<TripState>()(
 
         set(state => ({
           activeTrip: activatedTrip,
+          fishingElapsedMs: 0,
+          fishingSegmentStartedAt: activatedTrip.start_time,
+          isTripPaused: false,
           events: [startEvent],
           currentFly: null,
           currentFly2: null,
@@ -213,21 +225,13 @@ export const useTripStore = create<TripState>()(
       },
 
       startTrip: async (userId, locationId, fishingType, location, sessionType) => {
+        const existing = get().activeTrip;
+        if (existing?.status === 'active') return existing.id;
+
         const tripId = uuidv4();
-        let startLat: number | null = null;
-        let startLon: number | null = null;
-        try {
-          const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            const loc = await ExpoLocation.getCurrentPositionAsync({
-              accuracy: ExpoLocation.Accuracy.Balanced,
-            });
-            startLat = loc.coords.latitude;
-            startLon = loc.coords.longitude;
-          }
-        } catch {
-          // leave null
-        }
+        const startCoords = await captureTripBookmarkCoords();
+        const startLat = startCoords?.latitude ?? null;
+        const startLon = startCoords?.longitude ?? null;
         const trip: Trip = {
           id: tripId,
           user_id: userId,
@@ -260,14 +264,17 @@ export const useTripStore = create<TripState>()(
           timestamp: new Date().toISOString(),
           data: { text: 'Trip started' },
           conditions_snapshot: null,
-          latitude: null,
-          longitude: null,
+          latitude: startLat,
+          longitude: startLon,
         };
 
         const recommendation = getFallbackRecommendation(fishingType, null, null);
 
         set({
           activeTrip: trip,
+          fishingElapsedMs: 0,
+          fishingSegmentStartedAt: trip.start_time,
+          isTripPaused: false,
           events: [startEvent],
           currentFly: null,
           currentFly2: null,
@@ -284,24 +291,82 @@ export const useTripStore = create<TripState>()(
         return tripId;
       },
 
+      pauseTrip: async () => {
+        const {
+          activeTrip,
+          events,
+          weatherData,
+          waterFlowData,
+          fishingElapsedMs,
+          fishingSegmentStartedAt,
+          isTripPaused,
+        } = get();
+        if (!activeTrip || activeTrip.status !== 'active' || isTripPaused) return;
+
+        const now = Date.now();
+        const segmentIso = fishingSegmentStartedAt ?? activeTrip.start_time;
+        const segmentStart = new Date(segmentIso).getTime();
+        const nextElapsed = (fishingElapsedMs ?? 0) + Math.max(0, now - segmentStart);
+
+        const coords = await captureTripBookmarkCoords();
+        const pauseEvent: TripEvent = {
+          id: uuidv4(),
+          trip_id: activeTrip.id,
+          event_type: 'note',
+          timestamp: new Date().toISOString(),
+          data: { text: 'Trip paused' },
+          conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
+          latitude: coords?.latitude ?? null,
+          longitude: coords?.longitude ?? null,
+        };
+
+        const nextEvents = [...events, pauseEvent];
+        set({
+          fishingElapsedMs: nextElapsed,
+          fishingSegmentStartedAt: null,
+          isTripPaused: true,
+          events: nextEvents,
+        });
+        get().scheduleInTripSync();
+        if (get().isOnline) {
+          syncTripToCloud(activeTrip, nextEvents).catch(() => {});
+        }
+      },
+
+      resumeTrip: async () => {
+        const { activeTrip, events, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || activeTrip.status !== 'active' || !isTripPaused) return;
+
+        const c = await captureTripBookmarkCoords();
+        const resumeEvent: TripEvent = {
+          id: uuidv4(),
+          trip_id: activeTrip.id,
+          event_type: 'note',
+          timestamp: new Date().toISOString(),
+          data: { text: 'Trip resumed' },
+          conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
+          latitude: c?.latitude ?? null,
+          longitude: c?.longitude ?? null,
+        };
+        const nextEvents = [...events, resumeEvent];
+        set({
+          fishingSegmentStartedAt: new Date().toISOString(),
+          isTripPaused: false,
+          events: nextEvents,
+        });
+        get().scheduleInTripSync();
+        if (get().isOnline) {
+          syncTripToCloud(activeTrip, nextEvents).catch(() => {});
+        }
+      },
+
       endTrip: async (): Promise<{ synced: boolean }> => {
         const { activeTrip, events, fishCount, weatherData, waterFlowData, nextFlyRecommendation } = get();
         if (!activeTrip) return { synced: false };
 
-        let endLat: number | null = null;
-        let endLon: number | null = null;
-        try {
-          const { status } = await ExpoLocation.getForegroundPermissionsAsync();
-          if (status === 'granted') {
-            const loc = await ExpoLocation.getCurrentPositionAsync({
-              accuracy: ExpoLocation.Accuracy.Balanced,
-            });
-            endLat = loc.coords.latitude;
-            endLon = loc.coords.longitude;
-          }
-        } catch {
-          // leave null
-        }
+        const endCoords = await captureTripBookmarkCoords();
+        const endLat = endCoords?.latitude ?? null;
+        const endLon = endCoords?.longitude ?? null;
 
         const endedTrip: Trip = {
           ...activeTrip,
@@ -324,8 +389,8 @@ export const useTripStore = create<TripState>()(
           timestamp: new Date().toISOString(),
           data: { text: `Trip ended. Total fish: ${fishCount}` },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
-          latitude: null,
-          longitude: null,
+          latitude: endLat,
+          longitude: endLon,
         };
 
         const allEvents = [...events, endEvent];
@@ -345,6 +410,9 @@ export const useTripStore = create<TripState>()(
 
         set({
           activeTrip: endedTrip,
+          fishingElapsedMs: 0,
+          fishingSegmentStartedAt: null,
+          isTripPaused: false,
           events: allEvents,
           currentFly: null,
           currentFlyEventId: null,
@@ -378,6 +446,9 @@ export const useTripStore = create<TripState>()(
         }
         set({
           activeTrip: null,
+          fishingElapsedMs: 0,
+          fishingSegmentStartedAt: null,
+          isTripPaused: false,
           events: [],
           currentFly: null,
           currentFly2: null,
@@ -425,11 +496,14 @@ export const useTripStore = create<TripState>()(
         }, IN_TRIP_SYNC_DEBOUNCE_MS);
       },
 
-      addCatch: (data, latitude, longitude): string | undefined => {
-        const { activeTrip, currentFlyEventId, fishCount, weatherData, waterFlowData } = get();
-        if (!activeTrip) return undefined;
+      addCatch: (data, latitude, longitude, clientEventId): string | undefined => {
+        const { activeTrip, currentFlyEventId, fishCount, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return undefined;
         const qty = Math.max(1, data?.quantity ?? 1);
-        const eventId = uuidv4();
+        const eventId =
+          typeof clientEventId === 'string' && clientEventId.trim().length > 0
+            ? clientEventId.trim()
+            : uuidv4();
 
         const catchEvent: TripEvent = {
           id: eventId,
@@ -468,8 +542,8 @@ export const useTripStore = create<TripState>()(
       },
 
       updateEventPhotoUrl: (tripId, eventId, photoUrl) => {
-        const { activeTrip } = get();
-        if (!activeTrip || activeTrip.id !== tripId) return;
+        const { activeTrip, isTripPaused } = get();
+        if (!activeTrip || activeTrip.id !== tripId || isTripPaused) return;
         set((state) => ({
           events: state.events.map((e) =>
             e.id === eventId && e.event_type === 'catch'
@@ -479,9 +553,26 @@ export const useTripStore = create<TripState>()(
         }));
       },
 
+      replaceActiveTripEvents: (events) => {
+        const { activeTrip, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
+        const fishCount = totalFishFromEvents(events);
+        const rig = latestFlyChangeRigFromEvents(events);
+        set({
+          events,
+          fishCount,
+          activeTrip: { ...activeTrip, total_fish: fishCount },
+          currentFly: rig.primary,
+          currentFly2: rig.dropper,
+          currentFlyEventId: rig.eventId,
+        });
+        setTimeout(() => get().refreshSmartRecommendation(), 100);
+        get().scheduleInTripSync();
+      },
+
       removeCatch: () => {
-        const { events, fishCount } = get();
-        if (fishCount <= 0) return;
+        const { events, fishCount, isTripPaused } = get();
+        if (fishCount <= 0 || isTripPaused) return;
 
         const lastCatchIndex = [...events].reverse().findIndex(e => e.event_type === 'catch');
         if (lastCatchIndex === -1) return;
@@ -499,8 +590,8 @@ export const useTripStore = create<TripState>()(
       },
 
       changeFly: (primary, dropper, latitude, longitude) => {
-        const { activeTrip, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
 
         const eventId = uuidv4();
         const flyData: FlyChangeData = {
@@ -532,6 +623,8 @@ export const useTripStore = create<TripState>()(
           activeTrip.fishing_type,
           primary.pattern,
           activeTrip.weather_cache,
+          undefined,
+          dropper?.pattern ?? null,
         );
 
         set(state => ({
@@ -546,9 +639,49 @@ export const useTripStore = create<TripState>()(
         get().scheduleInTripSync();
       },
 
+      updateFlyChangeEvent: (eventId, primary, dropper) => {
+        const { activeTrip, events, currentFlyEventId, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
+        const target = events.find((e) => e.id === eventId && e.event_type === 'fly_change');
+        if (!target) return;
+
+        const flyData: FlyChangeData = {
+          pattern: primary.pattern,
+          size: primary.size ?? null,
+          color: primary.color ?? null,
+          fly_id: primary.fly_id ?? undefined,
+          fly_color_id: primary.fly_color_id ?? undefined,
+          fly_size_id: primary.fly_size_id ?? undefined,
+          ...(dropper
+            ? {
+                pattern2: dropper.pattern,
+                size2: dropper.size ?? null,
+                color2: dropper.color ?? null,
+                fly_id2: dropper.fly_id ?? null,
+                fly_color_id2: dropper.fly_color_id ?? null,
+                fly_size_id2: dropper.fly_size_id ?? null,
+              }
+            : {}),
+        };
+
+        set((state) => {
+          const nextEvents = state.events.map((e) =>
+            e.id === eventId && e.event_type === 'fly_change' ? { ...e, data: flyData } : e,
+          );
+          const patchCurrent =
+            eventId === state.currentFlyEventId
+              ? { currentFly: primary, currentFly2: dropper ?? null }
+              : {};
+          return { events: nextEvents, ...patchCurrent };
+        });
+
+        setTimeout(() => get().refreshSmartRecommendation(), 100);
+        get().scheduleInTripSync();
+      },
+
       addNote: (text, latitude, longitude) => {
-        const { activeTrip, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
 
         const noteEvent: TripEvent = {
           id: uuidv4(),
@@ -568,8 +701,8 @@ export const useTripStore = create<TripState>()(
       },
 
       addBite: (latitude, longitude) => {
-        const { activeTrip, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
 
         const event: TripEvent = {
           id: uuidv4(),
@@ -588,8 +721,8 @@ export const useTripStore = create<TripState>()(
       },
 
       addFishOn: (latitude, longitude) => {
-        const { activeTrip, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
 
         const event: TripEvent = {
           id: uuidv4(),
@@ -608,8 +741,8 @@ export const useTripStore = create<TripState>()(
       },
 
       addAIQuery: (question, response) => {
-        const { activeTrip, weatherData, waterFlowData } = get();
-        if (!activeTrip) return;
+        const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
+        if (!activeTrip || isTripPaused) return;
 
         const aiEvent: TripEvent = {
           id: uuidv4(),
@@ -636,13 +769,15 @@ export const useTripStore = create<TripState>()(
       },
 
       updateNextFlyRecommendation: () => {
-        const { activeTrip, currentFly } = get();
+        const { activeTrip, currentFly, currentFly2 } = get();
         if (!activeTrip) return;
 
         const recommendation = getFallbackRecommendation(
           activeTrip.fishing_type,
           currentFly?.pattern ?? null,
           activeTrip.weather_cache,
+          undefined,
+          currentFly2?.pattern ?? null,
         );
 
         set({ nextFlyRecommendation: recommendation });
@@ -719,6 +854,7 @@ export const useTripStore = create<TripState>()(
         try {
           const now = new Date();
           const primaryStr = currentFly ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}${currentFly.color ? ` (${currentFly.color})` : ''}` : null;
+          const dropperStr = currentFly2 ? `${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}${currentFly2.color ? ` (${currentFly2.color})` : ''}` : null;
 
           if (!isOnline) {
             const location = activeTrip.location;
@@ -732,6 +868,7 @@ export const useTripStore = create<TripState>()(
               primaryStr,
               cachedWeather,
               userFlies.length > 0 ? userFlies : null,
+              dropperStr,
             );
             set({ nextFlyRecommendation: recommendation, recommendationLoading: false });
             return;
@@ -743,7 +880,6 @@ export const useTripStore = create<TripState>()(
           } catch {
             // non-blocking: recommendations still work without fly box
           }
-          const dropperStr = currentFly2 ? `${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}${currentFly2.color ? ` (${currentFly2.color})` : ''}` : null;
           const recommendation = await getSmartFlyRecommendation({
             location: activeTrip.location || null,
             fishingType: activeTrip.fishing_type,
@@ -767,6 +903,9 @@ export const useTripStore = create<TripState>()(
       clearActiveTrip: () => {
         set({
           activeTrip: null,
+          fishingElapsedMs: 0,
+          fishingSegmentStartedAt: null,
+          isTripPaused: false,
           events: [],
           currentFly: null,
           currentFly2: null,
@@ -785,6 +924,9 @@ export const useTripStore = create<TripState>()(
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
         activeTrip: state.activeTrip,
+        fishingElapsedMs: state.fishingElapsedMs,
+        fishingSegmentStartedAt: state.fishingSegmentStartedAt,
+        isTripPaused: state.isTripPaused,
         events: state.events,
         currentFly: state.currentFly,
         currentFly2: state.currentFly2,
@@ -796,6 +938,16 @@ export const useTripStore = create<TripState>()(
         pendingSyncTrips: state.pendingSyncTrips,
         plannedTrips: state.plannedTrips,
       }),
+      merge: (persistedState, currentState) => {
+        const p = persistedState as Partial<TripState>;
+        const merged = { ...currentState, ...p };
+        if (merged.activeTrip?.status === 'active' && !merged.isTripPaused && merged.fishingSegmentStartedAt == null) {
+          merged.fishingSegmentStartedAt = merged.activeTrip.start_time;
+        }
+        merged.fishingElapsedMs = merged.fishingElapsedMs ?? 0;
+        merged.isTripPaused = merged.isTripPaused ?? false;
+        return merged;
+      },
     }
   )
 );

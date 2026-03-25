@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert, Image, Platform, Modal, Dimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { fetchTripEvents, fetchTripsFromCloud } from '@/src/services/sync';
+import { TripEndpointPinModal, type TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
+import { fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
 import { Trip, TripEvent, CatchData, FlyChangeData, NoteData, AIQueryData, WaterFlowData, NextFlyRecommendation, EventConditionsSnapshot, Photo } from '@/src/types';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
@@ -11,7 +12,11 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
+import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'ai' | 'map';
 
@@ -21,6 +26,8 @@ export default function TripSummaryScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const { deleteTrip } = useTripStore();
+  const { isConnected } = useNetworkStatus();
+  const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [events, setEvents] = useState<TripEvent[]>([]);
@@ -36,6 +43,12 @@ export default function TripSummaryScreen() {
     species?: string;
     caption?: string;
   } | null>(null);
+  const [tripPinModal, setTripPinModal] = useState<TripEndpointKind | null>(null);
+
+  useEffect(() => {
+    setJournalEditMode(false);
+    setTripPinModal(null);
+  }, [id]);
 
   useEffect(() => {
     async function load() {
@@ -80,6 +93,30 @@ export default function TripSummaryScreen() {
       caption: data.note ?? undefined,
     });
   }, [trip?.location?.name]);
+
+  const persistTripPins = useCallback(
+    async (nextTrip: Trip, nextEvents: TripEvent[]): Promise<boolean> => {
+      if (!isConnected) {
+        Alert.alert('Offline', 'Connect to the internet to save changes.');
+        return false;
+      }
+      if (!user || !id) return false;
+      setTrip(nextTrip);
+      setEvents(nextEvents);
+      const ok = await syncTripToCloud(nextTrip, nextEvents);
+      if (!ok) {
+        Alert.alert('Could not save', 'Try again.');
+        const trips = await fetchTripsFromCloud(user.id);
+        const found = trips.find((t) => t.id === id);
+        if (found) setTrip(found);
+        const ev = await fetchTripEvents(id);
+        setEvents(ev);
+        return false;
+      }
+      return true;
+    },
+    [isConnected, user, id],
+  );
 
   const handleTripPhotoPress = useCallback((photo: Photo) => {
     setFullScreenPhoto({
@@ -210,14 +247,27 @@ export default function TripSummaryScreen() {
             Summary
           </Text>
         </View>
-        <Pressable
-          onPress={handleDeleteTrip}
-          disabled={deleting}
-          style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
-          hitSlop={8}
-        >
-          <MaterialIcons name="delete-outline" size={22} color={Colors.textInverse} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={() => setJournalEditMode((v) => !v)}
+            style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+            hitSlop={8}
+          >
+            <MaterialIcons
+              name={journalEditMode ? 'check' : 'edit'}
+              size={22}
+              color={Colors.textInverse}
+            />
+          </Pressable>
+          <Pressable
+            onPress={handleDeleteTrip}
+            disabled={deleting}
+            style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
+            hitSlop={8}
+          >
+            <MaterialIcons name="delete-outline" size={22} color={Colors.textInverse} />
+          </Pressable>
+        </View>
       </View>
 
       {/* Date & Location */}
@@ -264,8 +314,18 @@ export default function TripSummaryScreen() {
       </View>
 
       {/* Tab Content */}
-      {activeTab === 'fishing' && (
-        <FishingTab events={events} onCatchPhotoPress={handleCatchPhotoPress} />
+      {activeTab === 'fishing' && user && trip && (
+        <JournalFishingTimeline
+          trip={trip}
+          events={events}
+          userId={user.id}
+          isConnected={isConnected}
+          editMode={journalEditMode}
+          onEventsChange={setEvents}
+          onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
+          onCatchPhotoPress={handleCatchPhotoPress}
+          onRequestEditTripPin={(kind) => setTripPinModal(kind)}
+        />
       )}
       {activeTab === 'photos' && (
         <SummaryPhotosTab
@@ -347,79 +407,27 @@ export default function TripSummaryScreen() {
         </ConditionsTab>
       )}
       {activeTab === 'ai' && <AIGuideTab trip={trip} events={events} />}
-      {activeTab === 'map' && <SummaryMapTab trip={trip} />}
-    </SafeAreaView>
-  );
-}
-
-/* ─── Fishing Tab (read-only) ─── */
-
-function FishingTab({ events, onCatchPhotoPress }: { events: TripEvent[]; onCatchPhotoPress?: (event: TripEvent) => void }) {
-  const flyChanges = events.filter(e => e.event_type === 'fly_change');
-  const uniqueFlies = [...new Set(
-    flyChanges.flatMap(e => {
-      const d = e.data as FlyChangeData;
-      return d.pattern2 ? [d.pattern, d.pattern2] : [d.pattern];
-    })
-  )];
-
-  return (
-    <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
-      {uniqueFlies.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Flies Used</Text>
-          <View style={styles.flyChips}>
-            {uniqueFlies.map((fly, i) => (
-              <View key={i} style={styles.flyChip}>
-                <Text style={styles.flyChipText}>{fly}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
+      {activeTab === 'map' && (
+        <SummaryMapTab
+          trip={trip}
+          events={events}
+          editMode={journalEditMode}
+          onRequestEditTripPin={(kind) => setTripPinModal(kind)}
+        />
       )}
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Timeline</Text>
-        {events.length === 0 ? (
-          <Text style={styles.emptyHint}>No events recorded for this trip.</Text>
-        ) : (
-          events.map((event) => (
-            <View key={event.id} style={styles.timelineItem}>
-              <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
-              <View style={styles.timelineContent}>
-                <View style={styles.timelineDot}>
-                  {event.event_type === 'catch' ? (
-                    <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
-                  ) : event.event_type === 'fly_change' ? (
-                    <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
-                  ) : event.event_type === 'ai_query' ? (
-                    <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
-                  ) : (
-                    <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
-                  )}
-                </View>
-                <View style={styles.timelineTextBlock}>
-                  <Text style={styles.timelineText}>
-                    {getEventDescription(event)}
-                  </Text>
-                  {event.event_type === 'catch' ? (
-                    <CatchDetailsBlock data={event.data as CatchData} />
-                  ) : null}
-                  {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
-                    <Pressable onPress={() => onCatchPhotoPress?.(event)}>
-                      <Image
-                        source={{ uri: (event.data as CatchData).photo_url! }}
-                        style={styles.timelineCatchThumb}
-                      />
-                    </Pressable>
-                  ) : null}
-                </View>
-              </View>
-            </View>
-          ))
-        )}
-      </View>
-    </ScrollView>
+      {user && (
+        <TripEndpointPinModal
+          visible={tripPinModal != null}
+          kind={tripPinModal ?? 'start'}
+          trip={trip}
+          events={events}
+          isConnected={isConnected}
+          onClose={() => setTripPinModal(null)}
+          onPersist={persistTripPins}
+        />
+      )}
+    </SafeAreaView>
   );
 }
 
@@ -533,72 +541,90 @@ function SummaryPhotosTab({
   );
 }
 
-/* ─── Map Tab (read-only: show start/end coords if stored) ─── */
+/* ─── Map Tab (read-only: route + pins; line snaps to nearby trails when possible) ─── */
 
-function SummaryMapTab({ trip }: { trip: Trip }) {
-  const startLat = trip.start_latitude ?? null;
-  const startLon = trip.start_longitude ?? null;
-  const endLat = trip.end_latitude ?? null;
-  const endLon = trip.end_longitude ?? null;
-  const hasAny = startLat != null && startLon != null;
+function SummaryMapTab({
+  trip,
+  events,
+  editMode,
+  onRequestEditTripPin,
+}: {
+  trip: Trip;
+  events: TripEvent[];
+  editMode: boolean;
+  onRequestEditTripPin: (kind: TripEndpointKind) => void;
+}) {
+  const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
+  const hasMapData = waypoints.length > 0;
 
-  return (
-    <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
-      {!hasAny ? (
+  const coordSummary = useMemo(() => tripStartEndDisplayCoords(trip, events), [trip, events]);
+
+  if (!hasMapData && !editMode) {
+    return (
+      <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
         <View style={styles.summaryMapEmpty}>
           <MaterialIcons name="map" size={40} color={Colors.textTertiary} />
           <Text style={styles.summaryMapEmptyText}>No map data saved for this trip</Text>
           <Text style={styles.emptyHint}>
-            Start and end locations are recorded when you start and end a trip with location permission.
+            Start and end GPS and catch locations appear here when recorded during the trip.
           </Text>
         </View>
-      ) : (
-        <View style={styles.summaryMapCard}>
-          <Text style={styles.sectionTitle}>Trip locations</Text>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <View style={styles.summaryMapTabRoot}>
+      <JournalTripRouteMapView trip={trip} events={events} containerStyle={styles.summaryMapNative} />
+      <ScrollView
+        style={styles.summaryMapLegendScroll}
+        contentContainerStyle={styles.summaryMapLegendContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.summaryMapLegendTitle}>Trip route</Text>
+        <Text style={styles.emptyHint}>
+          The teal line follows Mapbox walking paths near your track (trails and river corridors when
+          available). If no path matches, a straight line connects your points.
+        </Text>
+        {editMode ? (
+          <View style={styles.summaryMapEditPins}>
+            <Text style={styles.summaryMapEditPinsHint}>Adjust start and end pins for this trip.</Text>
+            <View style={styles.summaryMapEditPinsRow}>
+              <Pressable style={styles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('start')}>
+                <MaterialIcons name="place" size={18} color={Colors.primary} />
+                <Text style={styles.summaryMapEditPinBtnText}>Start pin</Text>
+              </Pressable>
+              <Pressable style={styles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('end')}>
+                <MaterialIcons name="flag" size={18} color={Colors.secondary} />
+                <Text style={styles.summaryMapEditPinBtnText}>End pin</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {coordSummary.startLat != null && coordSummary.startLon != null && (
           <View style={styles.summaryMapRow}>
             <MaterialIcons name="place" size={18} color={Colors.primary} />
             <Text style={styles.summaryMapLabel}>Start</Text>
             <Text style={styles.summaryMapCoords}>
-              {startLat.toFixed(5)}, {startLon.toFixed(5)}
+              {coordSummary.startLat.toFixed(5)}, {coordSummary.startLon.toFixed(5)}
             </Text>
           </View>
-          {endLat != null && endLon != null && (
-            <View style={styles.summaryMapRow}>
-              <MaterialIcons name="flag" size={18} color={Colors.accent} />
-              <Text style={styles.summaryMapLabel}>End</Text>
-              <Text style={styles.summaryMapCoords}>
-                {endLat.toFixed(5)}, {endLon.toFixed(5)}
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
-    </ScrollView>
+        )}
+        {coordSummary.endLat != null && coordSummary.endLon != null && (
+          <View style={styles.summaryMapRow}>
+            <MaterialIcons name="flag" size={18} color={Colors.secondary} />
+            <Text style={styles.summaryMapLabel}>End</Text>
+            <Text style={styles.summaryMapCoords}>
+              {coordSummary.endLat.toFixed(5)}, {coordSummary.endLon.toFixed(5)}
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
 /* ─── Helpers ─── */
-
-function formatCatchLabel(value: string): string {
-  return value.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function CatchDetailsBlock({ data }: { data: CatchData }) {
-  const lines: string[] = [];
-  if (data.note?.trim()) lines.push(data.note.trim());
-  if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
-  if (data.structure) lines.push(`Structure: ${formatCatchLabel(data.structure)}`);
-  if (data.presentation_method) lines.push(`Presentation: ${formatCatchLabel(data.presentation_method)}`);
-  if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
-  if (lines.length === 0) return null;
-  return (
-    <View style={styles.timelineCatchDetails}>
-      {lines.map((line, i) => (
-        <Text key={i} style={styles.timelineCatchDetailLine}>{line}</Text>
-      ))}
-    </View>
-  );
-}
 
 function getEventDescription(event: TripEvent): string {
   switch (event.event_type) {
@@ -669,6 +695,11 @@ const styles = StyleSheet.create({
   headerCenter: {
     flex: 1,
     alignItems: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
   },
   headerTitle: {
     fontSize: FontSize.lg,
@@ -761,6 +792,31 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
 
+  summaryMapTabRoot: {
+    flex: 1,
+    minHeight: 320,
+  },
+  summaryMapNative: {
+    flex: 1,
+    minHeight: 280,
+  },
+  summaryMapLegendScroll: {
+    maxHeight: 200,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  summaryMapLegendContent: {
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    paddingBottom: Spacing.xl,
+  },
+  summaryMapLegendTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+
   // Summary Photos tab
   summaryPhotosScroll: {
     flex: 1,
@@ -833,6 +889,35 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
   },
+  summaryMapEditPins: {
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  summaryMapEditPinsHint: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  summaryMapEditPinsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  summaryMapEditPinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  summaryMapEditPinBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.text,
+  },
 
   // Conditions summary
   summaryCard: {
@@ -883,68 +968,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
 
-  flyChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  flyChip: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  flyChipText: {
-    fontSize: FontSize.sm,
-    fontWeight: '500',
-    color: Colors.text,
-  },
-
-  timelineItem: {
-    flexDirection: 'row',
-    gap: Spacing.md,
-  },
-  timelineTime: {
-    fontSize: FontSize.xs,
-    color: Colors.textTertiary,
-    width: 65,
-    paddingTop: 2,
-  },
-  timelineContent: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'flex-start',
-  },
-  timelineDot: {
-    width: 20,
-    alignItems: 'center' as const,
-    paddingTop: 2,
-  },
-  timelineTextBlock: {
-    flex: 1,
-    gap: Spacing.sm,
-  },
-  timelineText: {
-    fontSize: FontSize.sm,
-    color: Colors.text,
-  },
-  timelineCatchThumb: {
-    width: 72,
-    height: 72,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.surface,
-  },
-  timelineCatchDetails: {
-    marginTop: Spacing.xs,
-    gap: 2,
-  },
-  timelineCatchDetailLine: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-  },
   fullScreenPhotoWrap: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.95)',

@@ -2,7 +2,10 @@ import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { useTripStore } from '@/src/stores/tripStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import { syncTripToCloud } from '@/src/services/sync';
+import { flushPendingCatches } from '@/src/services/mapCatchLocalStore';
+import { syncPendingUserCatches } from '@/src/services/userCatchService';
 import { refreshAllIfStale } from '@/src/services/waterwayCache';
 import { processPendingPhotos } from '@/src/services/processPendingPhotos';
 
@@ -11,6 +14,7 @@ const WATERWAY_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function SyncOnConnectivity() {
   const { isConnected } = useNetworkStatus();
+  const userId = useAuthStore((s) => s.user?.id);
   const retryPendingSyncs = useTripStore((s) => s.retryPendingSyncs);
   const setOnlineStatus = useTripStore((s) => s.setOnlineStatus);
   const lastRunRef = useRef<number>(0);
@@ -31,6 +35,10 @@ export function SyncOnConnectivity() {
       inProgressRef.current = true;
       try {
         await processPendingPhotos();
+        if (userId) {
+          await syncPendingUserCatches(userId);
+        }
+        await flushPendingCatches();
         await retryPendingSyncs();
         const { activeTrip, events } = useTripStore.getState();
         if (activeTrip && events) {
@@ -43,7 +51,7 @@ export function SyncOnConnectivity() {
     };
 
     run();
-  }, [isConnected, retryPendingSyncs]);
+  }, [isConnected, retryPendingSyncs, userId]);
 
   useEffect(() => {
     if (!isConnected) return;
@@ -55,6 +63,11 @@ export function SyncOnConnectivity() {
         lastRunRef.current = now;
         inProgressRef.current = true;
         processPendingPhotos()
+          .then(() => {
+            const uid = useAuthStore.getState().user?.id;
+            return uid ? syncPendingUserCatches(uid) : Promise.resolve();
+          })
+          .then(() => flushPendingCatches())
           .then(() => retryPendingSyncs())
           .then(() => {
             const { activeTrip: at, events: ev } = useTripStore.getState();

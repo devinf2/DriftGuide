@@ -40,7 +40,7 @@
       "expo-font",
       "expo-web-browser",
       "expo-apple-authentication",
-      "@maplibre/maplibre-react-native"
+      "@rnmapbox/maps"
     ],
     "experiments": {
       "typedRoutes": true

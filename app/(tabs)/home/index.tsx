@@ -7,15 +7,23 @@ import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { formatTripDuration } from '@/src/utils/formatters';
+import { formatFishCount } from '@/src/utils/formatters';
+import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { useEffect, useState, useCallback } from 'react';
-import { Trip, Photo, Location } from '@/src/types';
+import { Trip, Photo, Location, NextFlyRecommendation, LocationConditions } from '@/src/types';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
-import { getTopFishingSpots, type SpotSuggestion } from '@/src/services/ai';
+import {
+  getTopFishingSpots,
+  getFlyOfTheDay,
+  type FlyOfTheDayOptions,
+  type SpotSuggestion,
+} from '@/src/services/ai';
 import { fetchAllLocationConditions, getDriftGuideScore } from '@/src/services/conditions';
 import { fetchPhotos } from '@/src/services/photoService';
 import { haversineDistance } from '@/src/services/locationService';
+import { getLocationSuccessSummary } from '@/src/services/locationSuccess';
+import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 
 const ALBUM_GRID_GAP = Spacing.sm;
 /** Max distance (km) for Hot Spot—only recommend spots within ~80 miles. */
@@ -31,6 +39,12 @@ function getTimeGreeting(): string {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
+}
+
+function formatConditionsSummary(c: LocationConditions): string {
+  const flow =
+    c.water.flow_cfs != null ? `${Math.round(c.water.flow_cfs)} cfs` : 'flow n/a';
+  return `${c.sky.label}, ${Math.round(c.temperature.temp_f)}\u00B0F, wind ${Math.round(c.wind.speed_mph)} mph, ${c.water.clarity}, ${flow}`;
 }
 
 type HotSpotData = {
@@ -94,15 +108,18 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const {
     activeTrip,
+    isTripPaused,
     fishCount,
     currentFly,
-    nextFlyRecommendation,
+    resumeTrip,
+    endTrip,
     plannedTrips,
     plannedTripsLoading,
     fetchPlannedTrips,
     startPlannedTrip,
     deletePlannedTrip,
   } = useTripStore();
+  const fullHome = !activeTrip || isTripPaused;
   const { profile, user } = useAuthStore();
   const { locations, fetchLocations } = useLocationStore();
   const [elapsed, setElapsed] = useState('0m');
@@ -114,24 +131,38 @@ export default function HomeScreen() {
   const [hotSpotLoading, setHotSpotLoading] = useState(false);
   const [hotSpotRefreshKey, setHotSpotRefreshKey] = useState(0);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [flyOfDay, setFlyOfDay] = useState<NextFlyRecommendation | null>(null);
+  const [flyOfDayLoading, setFlyOfDayLoading] = useState(false);
 
   useEffect(() => {
     if (!activeTrip) return;
-    const interval = setInterval(() => {
-      setElapsed(formatTripDuration(activeTrip.start_time, null));
-    }, 1000);
-    setElapsed(formatTripDuration(activeTrip.start_time, null));
+    const tick = () => {
+      const s = useTripStore.getState();
+      const ms = getLiveFishingElapsedMs(
+        s.fishingElapsedMs,
+        s.fishingSegmentStartedAt,
+        s.isTripPaused,
+        s.activeTrip?.start_time ?? null,
+      );
+      setElapsed(formatFishingElapsedLabel(ms));
+    };
+    if (isTripPaused) {
+      tick();
+      return;
+    }
+    const interval = setInterval(tick, 1000);
+    tick();
     return () => clearInterval(interval);
-  }, [activeTrip]);
+  }, [activeTrip, isTripPaused]);
 
   useEffect(() => {
-    if (user && !activeTrip) {
+    if (user && fullHome) {
       fetchPlannedTrips(user.id);
     }
-  }, [user, activeTrip]);
+  }, [user, fullHome, fetchPlannedTrips]);
 
   useEffect(() => {
-    if (activeTrip) return;
+    if (!fullHome) return;
     let cancelled = false;
     ExpoLocation.requestForegroundPermissionsAsync().then(({ status }) => {
       if (cancelled || status !== 'granted') return;
@@ -142,10 +173,10 @@ export default function HomeScreen() {
       });
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [activeTrip]);
+  }, [fullHome]);
 
   useEffect(() => {
-    if (activeTrip) return;
+    if (!fullHome) return;
     if (locations.length === 0) {
       fetchLocations();
       return;
@@ -208,7 +239,46 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeTrip, locations, fetchLocations, hotSpotRefreshKey, userCoords?.latitude, userCoords?.longitude]);
+  }, [fullHome, locations, fetchLocations, hotSpotRefreshKey, userCoords?.latitude, userCoords?.longitude]);
+
+  const primaryHotSpotId = hotSpotList[0]?.location.id;
+
+  useEffect(() => {
+    if (!fullHome || !user?.id) {
+      setFlyOfDay(null);
+      setFlyOfDayLoading(false);
+      return;
+    }
+    if (hotSpotLoading) return;
+    let cancelled = false;
+    (async () => {
+      setFlyOfDayLoading(true);
+      try {
+        const userFlies = await fetchFlies(user.id).catch(() => getFliesFromCache(user.id));
+        if (cancelled) return;
+        const first = hotSpotList[0];
+        const opts: FlyOfTheDayOptions = { userFlies };
+        if (first) {
+          const successSummary = await getLocationSuccessSummary(first.location.id).catch(
+            () => 'No recent trip data.',
+          );
+          if (cancelled) return;
+          opts.locationName = first.location.name;
+          opts.conditionsSummary = formatConditionsSummary(first.conditions);
+          opts.locationSuccessSummary = successSummary;
+        }
+        const rec = await getFlyOfTheDay(user.id, opts);
+        if (!cancelled) setFlyOfDay(rec);
+      } catch {
+        if (!cancelled) setFlyOfDay(null);
+      } finally {
+        if (!cancelled) setFlyOfDayLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fullHome, user?.id, hotSpotLoading, primaryHotSpotId, hotSpotRefreshKey]);
 
   const loadAlbumPhotos = useCallback(async () => {
     if (!user?.id) return;
@@ -229,14 +299,14 @@ export default function HomeScreen() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (user && !activeTrip) loadAlbumPhotos();
-  }, [user, activeTrip, loadAlbumPhotos]);
+    if (user && fullHome) loadAlbumPhotos();
+  }, [user, fullHome, loadAlbumPhotos]);
 
   // Refetch album whenever this tab is focused (e.g. after adding a photo or switching back)
   useFocusEffect(
     useCallback(() => {
-      if (user?.id && !activeTrip) loadAlbumPhotos();
-    }, [user?.id, activeTrip, loadAlbumPhotos])
+      if (user?.id && fullHome) loadAlbumPhotos();
+    }, [user?.id, fullHome, loadAlbumPhotos])
   );
 
   const handleStartPlannedTrip = useCallback(async (tripId: string) => {
@@ -264,12 +334,39 @@ export default function HomeScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadAlbumPhotos();
-    if (user?.id && !activeTrip) fetchPlannedTrips(user.id);
-    if (!activeTrip) setHotSpotRefreshKey((k) => k + 1);
+    if (user?.id && fullHome) fetchPlannedTrips(user.id);
+    if (fullHome) setHotSpotRefreshKey((k) => k + 1);
     setRefreshing(false);
-  }, [loadAlbumPhotos, user?.id, activeTrip, fetchPlannedTrips]);
+  }, [loadAlbumPhotos, user?.id, fullHome, fetchPlannedTrips]);
 
-  if (activeTrip) {
+  const handleResumeTrip = useCallback(async () => {
+    await resumeTrip();
+    if (activeTrip?.id) router.push(`/trip/${activeTrip.id}`);
+  }, [resumeTrip, router, activeTrip?.id]);
+
+  const handleEndTripFromHome = useCallback(() => {
+    if (!activeTrip) return;
+    Alert.alert('End Trip', `End this trip with ${formatFishCount(fishCount)}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'End Trip',
+        style: 'destructive',
+        onPress: async () => {
+          const { synced } = await endTrip();
+          if (!synced) {
+            Alert.alert(
+              'Saved on device',
+              "Trip will sync when you're back online or when you open the app with connection.",
+              [{ text: 'OK' }],
+            );
+          }
+          router.replace(`/trip/${activeTrip.id}/survey`);
+        },
+      },
+    ]);
+  }, [activeTrip, fishCount, endTrip, router]);
+
+  if (activeTrip && !isTripPaused) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.activeTripWrapper}>
@@ -284,7 +381,7 @@ export default function HomeScreen() {
           <View style={styles.activeTripStats}>
             <View style={styles.stat}>
               <Text style={styles.statValue}>{elapsed}</Text>
-              <Text style={styles.statLabel}>Duration</Text>
+              <Text style={styles.statLabel}>Fishing time</Text>
             </View>
             <View style={styles.stat}>
               <Text style={styles.statValue}>{fishCount}</Text>
@@ -317,6 +414,35 @@ export default function HomeScreen() {
         </Text>
         <Text style={styles.subtitle}>Ready to hit the water?</Text>
       </View>
+
+      {activeTrip && isTripPaused && (
+        <View style={styles.pausedTripBanner}>
+          <Text style={styles.pausedTripLabel}>Trip paused</Text>
+          <Text style={styles.pausedTripTitle} numberOfLines={1}>
+            {activeTrip.location?.name || 'Fishing Trip'}
+          </Text>
+          <Text style={styles.pausedTripSub}>Resume or end when you’re back on the water.</Text>
+          <View style={styles.pausedTripStats}>
+            <View style={styles.pausedStat}>
+              <Text style={styles.pausedStatValue}>{elapsed}</Text>
+              <Text style={styles.pausedStatLabel}>Fishing time</Text>
+            </View>
+            <View style={styles.pausedStat}>
+              <Text style={styles.pausedStatValue}>{fishCount}</Text>
+              <Text style={styles.pausedStatLabel}>Fish</Text>
+            </View>
+          </View>
+          <View style={styles.pausedTripActions}>
+            <Pressable style={styles.resumeTripBtn} onPress={handleResumeTrip}>
+              <MaterialCommunityIcons name="play" size={22} color={Colors.textInverse} />
+              <Text style={styles.resumeTripBtnText}>Resume</Text>
+            </Pressable>
+            <Pressable style={styles.endTripFromHomeBtn} onPress={handleEndTripFromHome}>
+              <Text style={styles.endTripFromHomeBtnText}>End trip</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
 
       <Pressable
         style={styles.startButton}
@@ -442,6 +568,35 @@ export default function HomeScreen() {
                 />
               </Pressable>
             ))}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.flyOfDaySection}>
+        <Text style={styles.sectionTitle}>Fly of the day</Text>
+        {flyOfDayLoading || hotSpotLoading ? (
+          <View style={styles.flyOfDayCard}>
+            <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.md }} />
+          </View>
+        ) : flyOfDay ? (
+          <View style={styles.flyOfDayCard}>
+            <View style={styles.flyOfDayHeader}>
+              <MaterialCommunityIcons name="hook" size={22} color={Colors.accent} />
+              <Text style={styles.flyOfDayPattern} numberOfLines={2}>
+                {flyOfDay.pattern}
+                {flyOfDay.size != null ? ` #${flyOfDay.size}` : ''}
+                {flyOfDay.color ? ` \u00B7 ${flyOfDay.color}` : ''}
+              </Text>
+            </View>
+            {flyOfDay.reason ? (
+              <Text style={styles.flyOfDayReason} numberOfLines={4}>
+                {flyOfDay.reason}
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <View style={styles.flyOfDayCard}>
+            <Text style={styles.flyOfDayEmpty}>Pull to refresh for a recommendation.</Text>
           </View>
         )}
       </View>
@@ -636,6 +791,41 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md,
     overflow: 'hidden',
   },
+  flyOfDaySection: {
+    marginBottom: Spacing.lg,
+  },
+  flyOfDayCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.primary,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  flyOfDayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  flyOfDayPattern: {
+    flex: 1,
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  flyOfDayReason: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
+    lineHeight: 20,
+  },
+  flyOfDayEmpty: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    textAlign: 'center',
+    paddingVertical: Spacing.sm,
+  },
   plannedSection: {
     marginBottom: Spacing.lg,
   },
@@ -697,6 +887,82 @@ const styles = StyleSheet.create({
   deleteTripBtnText: {
     color: Colors.error,
     fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+  pausedTripBanner: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.lg,
+    marginBottom: Spacing.lg,
+  },
+  pausedTripLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.warning,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  pausedTripTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: '700',
+    color: Colors.text,
+    marginTop: Spacing.xs,
+  },
+  pausedTripSub: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.md,
+    lineHeight: 20,
+  },
+  pausedTripStats: {
+    flexDirection: 'row',
+    gap: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  pausedStat: {},
+  pausedStatValue: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  pausedStatLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: 2,
+  },
+  pausedTripActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'center',
+  },
+  resumeTripBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+  },
+  resumeTripBtnText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+  },
+  endTripFromHomeBtn: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.error,
+  },
+  endTripFromHomeBtnText: {
+    color: Colors.error,
+    fontSize: FontSize.md,
     fontWeight: '600',
   },
   activeTripCard: {

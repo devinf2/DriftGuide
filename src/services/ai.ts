@@ -1,5 +1,6 @@
 import { TripEvent, WeatherData, WaterFlowData, Location, FishingType, FlyChangeData, CatchData, NextFlyRecommendation, Fly } from '@/src/types';
 import { CLARITY_LABELS, CLARITY_DESCRIPTIONS } from '@/src/services/waterFlow';
+import { flyPatternsMatch, nextFlyRecommendationConflictsCurrent, normalizeFlyPatternKey } from '@/src/utils/flyPatternCompare';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 /** Use the cheaper model for all AI calls to control cost */
@@ -132,6 +133,10 @@ function buildFlyRecommendationPrompt(context: AIContext): string {
     lines.push(`Currently using: ${context.currentFly2 ? `${context.currentFly} / ${context.currentFly2}` : context.currentFly}`);
   }
 
+  lines.push(
+    'CRITICAL: Recommend a pattern whose NAME is different from any fly already on the rig (compare names only; ignore hook sizes like #16 and ignore colors). The angler needs a distinct "try next" option, not a repeat of what is tied on.',
+  );
+
   if (context.weather) {
     lines.push('', '--- Weather ---');
     lines.push(`Temperature: ${context.weather.temperature_f}°F, ${context.weather.condition}`);
@@ -219,12 +224,178 @@ export async function askAI(context: AIContext, question: string): Promise<strin
   }
 }
 
+function getStintPrimaryPatternsWithCatches(events: TripEvent[]): { pattern: string; catches: number }[] {
+  const stints: { pattern: string; catches: number }[] = [];
+  for (const event of events) {
+    if (event.event_type === 'fly_change') {
+      const data = event.data as FlyChangeData;
+      stints.push({ pattern: data.pattern, catches: 0 });
+    } else if (event.event_type === 'catch' && stints.length > 0) {
+      stints[stints.length - 1].catches++;
+    }
+  }
+  return stints.filter(s => s.catches > 0).sort((a, b) => b.catches - a.catches);
+}
+
+function applyUserFlyCatalogToRecommendation(rec: NextFlyRecommendation, userFlies: Fly[] | null | undefined): NextFlyRecommendation {
+  if (!userFlies || userFlies.length === 0) return rec;
+  let out: NextFlyRecommendation = { ...rec };
+  const match = userFlies.find(
+    (f) =>
+      f.name.toLowerCase() === out.pattern.toLowerCase() &&
+      (f.size ?? null) === out.size &&
+      (f.color ?? null) === out.color
+  );
+  if (match) {
+    out = {
+      ...out,
+      pattern: match.name,
+      size: match.size ?? out.size,
+      color: match.color ?? out.color,
+      fly_id: match.fly_id ?? undefined,
+      fly_color_id: match.fly_color_id ?? undefined,
+      fly_size_id: match.fly_size_id ?? undefined,
+    };
+  } else {
+    const nameMatch = userFlies.find((f) => f.name.toLowerCase() === out.pattern.toLowerCase());
+    if (nameMatch) {
+      out = {
+        ...out,
+        pattern: nameMatch.name,
+        size: nameMatch.size ?? out.size,
+        color: nameMatch.color ?? out.color,
+        fly_id: nameMatch.fly_id ?? undefined,
+        fly_color_id: nameMatch.fly_color_id ?? undefined,
+        fly_size_id: nameMatch.fly_size_id ?? undefined,
+      };
+    }
+  }
+  if (out.pattern2) {
+    const match2 = userFlies.find(
+      (f) =>
+        f.name.toLowerCase() === (out.pattern2 || '').toLowerCase() &&
+        (f.size ?? null) === (out.size2 ?? null) &&
+        (f.color ?? null) === (out.color2 ?? null)
+    );
+    if (match2) {
+      out = {
+        ...out,
+        pattern2: match2.name,
+        size2: match2.size ?? out.size2,
+        color2: match2.color ?? out.color2,
+        fly_id2: match2.fly_id ?? undefined,
+        fly_color_id2: match2.fly_color_id ?? undefined,
+        fly_size_id2: match2.fly_size_id ?? undefined,
+      };
+    } else {
+      const nameMatch2 = userFlies.find((f) => f.name.toLowerCase() === (out.pattern2 || '').toLowerCase());
+      if (nameMatch2) {
+        out = {
+          ...out,
+          pattern2: nameMatch2.name,
+          size2: nameMatch2.size ?? out.size2,
+          color2: nameMatch2.color ?? out.color2,
+          fly_id2: nameMatch2.fly_id ?? undefined,
+          fly_color_id2: nameMatch2.fly_color_id ?? undefined,
+          fly_size_id2: nameMatch2.fly_size_id ?? undefined,
+        };
+      }
+    }
+  }
+  return out;
+}
+
+/** If "try next" repeats the rig (ignoring size/color), swap using trip catch history, fly box, or generic alternates. */
+function resolveTryNextIfConflictsRig(
+  rec: NextFlyRecommendation,
+  currentPrimaryLabel: string | null,
+  currentSecondaryLabel: string | null,
+  userFlies: Fly[] | null | undefined,
+  recentEvents: TripEvent[] | null | undefined,
+): NextFlyRecommendation {
+  if (!nextFlyRecommendationConflictsCurrent(rec, currentPrimaryLabel, currentSecondaryLabel)) {
+    return rec;
+  }
+
+  const exclude = new Set<string>();
+  const p = normalizeFlyPatternKey(currentPrimaryLabel);
+  const s = normalizeFlyPatternKey(currentSecondaryLabel);
+  if (p) exclude.add(p);
+  if (s) exclude.add(s);
+
+  if (recentEvents?.length) {
+    for (const { pattern } of getStintPrimaryPatternsWithCatches(recentEvents)) {
+      const k = normalizeFlyPatternKey(pattern);
+      if (!k || exclude.has(k)) continue;
+      const next: NextFlyRecommendation = {
+        pattern,
+        size: rec.size,
+        color: rec.color,
+        reason: `${pattern} fooled fish earlier on this trip — worth switching to it.`,
+        confidence: Math.min(0.88, rec.confidence + 0.05),
+      };
+      return applyUserFlyCatalogToRecommendation(next, userFlies ?? null);
+    }
+  }
+
+  if (userFlies?.length) {
+    for (const f of userFlies) {
+      const k = normalizeFlyPatternKey(f.name);
+      if (!k || exclude.has(k)) continue;
+      const next: NextFlyRecommendation = {
+        pattern: f.name,
+        size: f.size ?? rec.size,
+        color: f.color ?? rec.color,
+        reason: `Try ${f.name} from your box — a clear change from what you have on.`,
+        confidence: 0.72,
+        fly_id: f.fly_id ?? undefined,
+        fly_color_id: f.fly_color_id ?? undefined,
+        fly_size_id: f.fly_size_id ?? undefined,
+      };
+      return next;
+    }
+  }
+
+  const FALLBACK_ALTS: readonly { pattern: string; size: number; color: string; reason: string }[] = [
+    { pattern: 'RS2', size: 22, color: 'Gray', reason: 'Different silhouette and profile — good when you need a real change.' },
+    { pattern: 'Zebra Midge', size: 20, color: 'Black', reason: 'Small subsurface change-up that often draws strikes.' },
+    { pattern: 'Pheasant Tail Nymph', size: 18, color: 'Natural', reason: 'Classic nymph profile as an alternative to what is on the line.' },
+    { pattern: 'Copper John', size: 16, color: 'Copper', reason: 'Weight and flash — a distinct look from most dries and soft hackles.' },
+  ];
+
+  for (const alt of FALLBACK_ALTS) {
+    if (exclude.has(normalizeFlyPatternKey(alt.pattern))) continue;
+    return applyUserFlyCatalogToRecommendation(
+      {
+        pattern: alt.pattern,
+        size: alt.size,
+        color: alt.color,
+        reason: alt.reason,
+        confidence: 0.68,
+      },
+      userFlies ?? null,
+    );
+  }
+
+  return applyUserFlyCatalogToRecommendation(
+    {
+      pattern: 'Soft Hackle',
+      size: 16,
+      color: 'Partridge',
+      reason: 'Movement on the swing or a soft dead-drift can break a stale pattern.',
+      confidence: 0.65,
+    },
+    userFlies ?? null,
+  );
+}
+
 export async function getSmartFlyRecommendation(context: AIContext): Promise<NextFlyRecommendation> {
   const fallback = getFallbackRecommendation(
     context.fishingType,
     context.currentFly,
     context.weather,
     context.userFlies ?? null,
+    context.currentFly2 ?? null,
   );
 
   if (!OPENAI_API_KEY) {
@@ -275,7 +446,7 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
       rec.fly_color_id2 = fallback.fly_color_id2 ?? undefined;
       rec.fly_size_id2 = fallback.fly_size_id2 ?? undefined;
     }
-    return rec;
+    return resolveTryNextIfConflictsRig(rec, context.currentFly, context.currentFly2 ?? null, context.userFlies, context.recentEvents);
   } catch {
     return fallback;
   }
@@ -286,6 +457,7 @@ export function getFallbackRecommendation(
   currentFly: string | null,
   weather: WeatherData | null,
   userFlies?: Fly[] | null,
+  currentFly2?: string | null,
 ): NextFlyRecommendation {
   const now = new Date();
   const season = getSeason(now);
@@ -307,7 +479,7 @@ export function getFallbackRecommendation(
   const seasonDefault = `${season}_default`;
   let rec = recommendations[key] || recommendations[seasonDefault] || recommendations['winter_default'];
 
-  if (currentFly && rec.pattern.toLowerCase() === currentFly.toLowerCase()) {
+  if (currentFly && flyPatternsMatch(rec.pattern, currentFly)) {
     rec = { pattern: 'RS2', size: 22, color: 'Gray', reason: 'Try this as an alternative to your current fly', confidence: 0.6 };
   }
 
@@ -326,72 +498,9 @@ export function getFallbackRecommendation(
     };
   }
 
-  if (userFlies && userFlies.length > 0) {
-    const match = userFlies.find(
-      (f) =>
-        f.name.toLowerCase() === rec.pattern.toLowerCase() &&
-        (f.size ?? null) === rec.size &&
-        (f.color ?? null) === rec.color
-    );
-    if (match) {
-      rec = {
-        ...rec,
-        pattern: match.name,
-        size: match.size ?? rec.size,
-        color: match.color ?? rec.color,
-        fly_id: match.fly_id ?? undefined,
-        fly_color_id: match.fly_color_id ?? undefined,
-        fly_size_id: match.fly_size_id ?? undefined,
-      };
-    } else {
-      const nameMatch = userFlies.find((f) => f.name.toLowerCase() === rec.pattern.toLowerCase());
-      if (nameMatch) {
-        rec = {
-          ...rec,
-          pattern: nameMatch.name,
-          size: nameMatch.size ?? rec.size,
-          color: nameMatch.color ?? rec.color,
-          fly_id: nameMatch.fly_id ?? undefined,
-          fly_color_id: nameMatch.fly_color_id ?? undefined,
-          fly_size_id: nameMatch.fly_size_id ?? undefined,
-        };
-      }
-    }
-    if (rec.pattern2) {
-      const match2 = userFlies.find(
-        (f) =>
-          f.name.toLowerCase() === (rec.pattern2 || '').toLowerCase() &&
-          (f.size ?? null) === (rec.size2 ?? null) &&
-          (f.color ?? null) === (rec.color2 ?? null)
-      );
-      if (match2) {
-        rec = {
-          ...rec,
-          pattern2: match2.name,
-          size2: match2.size ?? rec.size2,
-          color2: match2.color ?? rec.color2,
-          fly_id2: match2.fly_id ?? undefined,
-          fly_color_id2: match2.fly_color_id ?? undefined,
-          fly_size_id2: match2.fly_size_id ?? undefined,
-        };
-      } else {
-        const nameMatch2 = userFlies.find((f) => f.name.toLowerCase() === (rec.pattern2 || '').toLowerCase());
-        if (nameMatch2) {
-          rec = {
-            ...rec,
-            pattern2: nameMatch2.name,
-            size2: nameMatch2.size ?? rec.size2,
-            color2: nameMatch2.color ?? rec.color2,
-            fly_id2: nameMatch2.fly_id ?? undefined,
-            fly_color_id2: nameMatch2.fly_color_id ?? undefined,
-            fly_size_id2: nameMatch2.fly_size_id ?? undefined,
-          };
-        }
-      }
-    }
-  }
+  rec = applyUserFlyCatalogToRecommendation(rec, userFlies);
 
-  return rec;
+  return resolveTryNextIfConflictsRig(rec, currentFly, currentFly2 ?? null, userFlies, null);
 }
 
 export interface SpotSuggestion {

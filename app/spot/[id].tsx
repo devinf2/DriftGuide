@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator,
   Platform, KeyboardAvoidingView, TextInput,
@@ -15,15 +15,10 @@ import { getStreamFlow } from '@/src/services/waterFlow';
 import type { LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 
-let MapView: any = null;
-let Camera: any = null;
-try {
-  const MapLibre = require('@maplibre/maplibre-react-native');
-  MapView = MapLibre.MapView;
-  Camera = MapLibre.Camera;
-} catch {
-  // Expo Go or no MapLibre
-}
+import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
+import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
+import type { BoundingBox } from '@/src/types/boundingBox';
+import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
 
 type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
 
@@ -100,6 +95,32 @@ export default function SpotFishingTripScreen() {
   const lat = location?.latitude ?? parent?.latitude ?? null;
   const lng = location?.longitude ?? parent?.longitude ?? null;
   const stationId = (location?.metadata as Record<string, string> | null)?.usgs_station_id;
+
+  /** ~40–45 km padding so nearby catalog spots show at spot map zoom without viewport callbacks. */
+  const SPOT_MAP_REGION_PAD = 0.35;
+  const spotMapRegionBbox = useMemo((): BoundingBox | null => {
+    if (lat == null || lng == null) return null;
+    return {
+      ne: { lat: lat + SPOT_MAP_REGION_PAD, lng: lng + SPOT_MAP_REGION_PAD },
+      sw: { lat: lat - SPOT_MAP_REGION_PAD, lng: lng - SPOT_MAP_REGION_PAD },
+    };
+  }, [lat, lng]);
+
+  const spotMapCatalogMarkers = useMemo(() => {
+    if (!spotMapRegionBbox) return [];
+    return catalogLocationMarkersInViewport(locations, spotMapRegionBbox, undefined);
+  }, [locations, spotMapRegionBbox]);
+
+  const spotMapboxMarkers = useMemo(
+    () =>
+      spotMapCatalogMarkers.map((m) => ({
+        id: m.id,
+        coordinate: [m.lon, m.lat] as [number, number],
+        title: m.title,
+        children: <MaterialIcons name="place" size={34} color={m.color} />,
+      })),
+    [spotMapCatalogMarkers],
+  );
 
   useEffect(() => {
     if (activeTab !== 'conditions' || !location) return;
@@ -475,19 +496,16 @@ export default function SpotFishingTripScreen() {
               </View>
             );
           }
-          if (!MapView || !Camera) {
-            return (
-              <View style={styles.mapTabPlaceholder}>
-                <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
-                <Text style={styles.mapTabPlaceholderText}>Map requires a development build.</Text>
-              </View>
-            );
-          }
           return (
             <View style={styles.mapTabContainer}>
-              <MapView style={styles.mapTabMap} mapStyle="https://demotiles.maplibre.org/style.json" compassEnabled>
-                <Camera defaultSettings={{ centerCoordinate: [lng, lat], zoomLevel: 14 }} />
-              </MapView>
+              <TripMapboxMapView
+                containerStyle={styles.mapTabMap}
+                centerCoordinate={[lng, lat]}
+                zoomLevel={USER_LOCATION_ZOOM}
+                markers={spotMapboxMarkers}
+                showUserLocation={false}
+                compassEnabled
+              />
             </View>
           );
         })()

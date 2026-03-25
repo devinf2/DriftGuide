@@ -1,23 +1,28 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable, RefreshControl,
-  ActivityIndicator, Modal, Dimensions,
+  ActivityIndicator, Modal, Dimensions, Image, ScrollView,
+  useWindowDimensions, Platform,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Region } from 'react-native-maps';
 import * as ExpoLocation from 'expo-location';
+import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
 import { startOfWeek, startOfMonth, startOfYear, isAfter } from 'date-fns';
 import { Colors, Spacing, FontSize, BorderRadius, LocationTypeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
-import { fetchTripsFromCloud } from '@/src/services/sync';
-import { Trip } from '@/src/types';
+import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
+import { Trip, type CatchRow } from '@/src/types';
 import type { LocationType } from '@/src/types';
 import type { WaterFlowData } from '@/src/types';
 import { formatTripDate, formatTripDuration, formatFishCount } from '@/src/utils/formatters';
-import { MaterialIcons } from '@expo/vector-icons';
+import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { format } from 'date-fns';
 
 type ViewMode = 'list' | 'map';
+type MapLayer = 'journal' | 'fish';
 type DateRange = 'all' | 'week' | 'month' | 'year';
 
 const DATE_RANGES: { key: DateRange; label: string }[] = [
@@ -26,13 +31,6 @@ const DATE_RANGES: { key: DateRange; label: string }[] = [
   { key: 'month', label: 'This Month' },
   { key: 'year', label: 'This Year' },
 ];
-
-const US_CENTER: Region = {
-  latitude: 39.8,
-  longitude: -98.5,
-  latitudeDelta: 25,
-  longitudeDelta: 25,
-};
 
 const CLARITY_LABELS: Record<string, string> = {
   clear: 'Clear',
@@ -68,60 +66,60 @@ interface LocationGroup {
 export default function JournalScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
-  const mapRef = useRef<MapView>(null);
   const filterButtonRef = useRef<View>(null);
 
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
+  const [allCatches, setAllCatches] = useState<CatchRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [mapLayer, setMapLayer] = useState<MapLayer>('journal');
   const [dateRange, setDateRange] = useState<DateRange>('all');
   const [showFilterPopup, setShowFilterPopup] = useState(false);
   const [filterAnchor, setFilterAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [mapRegion, setMapRegion] = useState<Region>(US_CENTER);
+  const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_MAP_CENTER);
+  const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [mapCameraKey, setMapCameraKey] = useState(0);
+  const [journalMapUserLocation, setJournalMapUserLocation] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<LocationGroup | null>(null);
+  const [selectedFishCatch, setSelectedFishCatch] = useState<CatchRow | null>(null);
 
-  const loadTrips = useCallback(async () => {
+  const loadJournalData = useCallback(async () => {
     if (!user) return;
-    const data = await fetchTripsFromCloud(user.id);
-    setAllTrips(data.filter(t => t.status === 'completed'));
+    const [trips, catches] = await Promise.all([
+      fetchTripsFromCloud(user.id),
+      fetchUserCatchesFromCloud(user.id),
+    ]);
+    setAllTrips(trips.filter(t => t.status === 'completed'));
+    setAllCatches(catches);
     setLoading(false);
   }, [user]);
 
   useEffect(() => {
-    loadTrips();
-  }, [loadTrips]);
+    loadJournalData();
+  }, [loadJournalData]);
 
   // Reload when screen gains focus (e.g. after deleting an entry and going back)
   useFocusEffect(
     useCallback(() => {
-      loadTrips();
-    }, [loadTrips]),
+      loadJournalData();
+    }, [loadJournalData]),
   );
 
   useEffect(() => {
-    (async () => {
+    void (async () => {
       const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await ExpoLocation.getCurrentPositionAsync({
-          accuracy: ExpoLocation.Accuracy.Balanced,
-        });
-        setMapRegion({
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-          latitudeDelta: 4,
-          longitudeDelta: 4,
-        });
-      }
+      if (status === 'granted') setJournalMapUserLocation(true);
     })();
   }, []);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadTrips();
+    await loadJournalData();
     setRefreshing(false);
-  }, [loadTrips]);
+  }, [loadJournalData]);
 
   const filteredTrips = useMemo(() => {
     if (dateRange === 'all') return allTrips;
@@ -169,6 +167,59 @@ export default function JournalScreen() {
     return Array.from(groups.values());
   }, [filteredTrips]);
 
+  const filteredCatches = useMemo(() => {
+    if (dateRange === 'all') return allCatches;
+
+    const now = new Date();
+    let cutoff: Date;
+    switch (dateRange) {
+      case 'week':
+        cutoff = startOfWeek(now, { weekStartsOn: 0 });
+        break;
+      case 'month':
+        cutoff = startOfMonth(now);
+        break;
+      case 'year':
+        cutoff = startOfYear(now);
+        break;
+    }
+
+    return allCatches.filter(c => isAfter(new Date(c.timestamp), cutoff));
+  }, [allCatches, dateRange]);
+
+  const fishMapPins = useMemo(
+    () => filteredCatches.filter(c => c.latitude != null && c.longitude != null),
+    [filteredCatches],
+  );
+
+  const filteredTripIds = useMemo(() => new Set(filteredTrips.map(t => t.id)), [filteredTrips]);
+
+  /** Catches with coords on trips in the current journal filter (for Journal map layer pins). */
+  const journalCatchPins = useMemo(
+    () => fishMapPins.filter(c => filteredTripIds.has(c.trip_id)),
+    [fishMapPins, filteredTripIds],
+  );
+
+  const journalFraming = useMemo(
+    () => journalMapDefaultFraming(filteredTrips, journalCatchPins),
+    [filteredTrips, journalCatchPins],
+  );
+
+  useEffect(() => {
+    if (loading) return;
+    setMapCenter(journalFraming.center);
+    setMapZoom(journalFraming.zoom);
+    setMapCameraKey((k) => k + 1);
+  }, [loading, journalFraming]);
+
+  const tripNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of allTrips) {
+      if (t.location?.name) m.set(t.id, t.location.name);
+    }
+    return m;
+  }, [allTrips]);
+
   const handleMarkerPress = useCallback(
     (group: LocationGroup) => {
       if (group.trips.length === 1) {
@@ -179,6 +230,61 @@ export default function JournalScreen() {
     },
     [router],
   );
+
+  const handleFishMarkerPress = useCallback((c: CatchRow) => {
+    setSelectedFishCatch(c);
+  }, []);
+
+  const mapboxMarkers = useMemo((): MapboxMapMarker[] => {
+    if (mapLayer === 'journal') {
+      const placeMarkers = locationGroups.map((group) => ({
+        id: `journal-${group.locationId}`,
+        coordinate: [group.longitude, group.latitude] as [number, number],
+        title: group.locationName,
+        onPress: () => handleMarkerPress(group),
+        children: (
+          <View style={styles.markerContainer} pointerEvents="box-none">
+            <View style={styles.markerBadge}>
+              <Text style={styles.markerBadgeText}>{group.trips.length}</Text>
+            </View>
+            <View style={styles.markerBubble}>
+              <MaterialIcons name="place" size={20} color={Colors.textInverse} />
+            </View>
+            <Text style={styles.markerLabel} numberOfLines={1}>
+              {group.locationName}
+            </Text>
+          </View>
+        ),
+      }));
+      const catchMarkers = journalCatchPins.map((c) => ({
+        id: `journal-catch-${c.id}`,
+        coordinate: [c.longitude!, c.latitude!] as [number, number],
+        title: c.species?.trim() || 'Catch',
+        onPress: () => handleFishMarkerPress(c),
+        children: (
+          <View style={styles.fishMarkerWrap} pointerEvents="box-none">
+            <View style={styles.fishMarkerBubble}>
+              <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
+            </View>
+          </View>
+        ),
+      }));
+      return [...placeMarkers, ...catchMarkers];
+    }
+    return fishMapPins.map((c) => ({
+      id: `fish-${c.id}`,
+      coordinate: [c.longitude!, c.latitude!] as [number, number],
+      title: c.species?.trim() || 'Catch',
+      onPress: () => handleFishMarkerPress(c),
+      children: (
+        <View style={styles.fishMarkerWrap} pointerEvents="box-none">
+          <View style={styles.fishMarkerBubble}>
+            <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
+          </View>
+        </View>
+      ),
+    }));
+  }, [mapLayer, locationGroups, journalCatchPins, fishMapPins, handleMarkerPress, handleFishMarkerPress]);
 
   const renderTrip = ({ item }: { item: Trip }) => {
     const locationType = item.location?.type as LocationType | undefined;
@@ -245,7 +351,11 @@ export default function JournalScreen() {
           <View style={styles.viewToggle}>
             <Pressable
               style={[styles.toggleButton, viewMode === 'list' && styles.toggleButtonActive]}
-              onPress={() => { setViewMode('list'); setSelectedGroup(null); }}
+              onPress={() => {
+                setViewMode('list');
+                setSelectedGroup(null);
+                setSelectedFishCatch(null);
+              }}
             >
               <MaterialIcons
                 name="view-list"
@@ -288,6 +398,42 @@ export default function JournalScreen() {
             </Pressable>
           </View>
         </View>
+        {viewMode === 'map' && (
+          <View style={styles.mapLayerRow}>
+            <Pressable
+              style={[styles.mapLayerChip, mapLayer === 'journal' && styles.mapLayerChipActive]}
+              onPress={() => {
+                setMapLayer('journal');
+                setSelectedFishCatch(null);
+              }}
+            >
+              <MaterialIcons
+                name="menu-book"
+                size={16}
+                color={mapLayer === 'journal' ? Colors.primary : headerInactive}
+              />
+              <Text style={[styles.mapLayerChipText, mapLayer === 'journal' && styles.mapLayerChipTextActive]}>
+                Journal
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.mapLayerChip, mapLayer === 'fish' && styles.mapLayerChipActive]}
+              onPress={() => {
+                setMapLayer('fish');
+                setSelectedGroup(null);
+              }}
+            >
+              <MaterialCommunityIcons
+                name="fish"
+                size={16}
+                color={mapLayer === 'fish' ? Colors.primary : headerInactive}
+              />
+              <Text style={[styles.mapLayerChipText, mapLayer === 'fish' && styles.mapLayerChipTextActive]}>
+                My fish
+              </Text>
+            </Pressable>
+          </View>
+        )}
       </View>
 
       {/* Filter dropdown */}
@@ -365,42 +511,46 @@ export default function JournalScreen() {
       {/* Map View */}
       {viewMode === 'map' && (
         <View style={styles.mapWrapper}>
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            initialRegion={mapRegion}
-            showsUserLocation
-            showsMyLocationButton
-            mapType="standard"
-            onPress={() => setSelectedGroup(null)}
-          >
-            {locationGroups.map(group => (
-              <Marker
-                key={group.locationId}
-                coordinate={{ latitude: group.latitude, longitude: group.longitude }}
-                pinColor="transparent"
-                onPress={() => handleMarkerPress(group)}
-              >
-                <View style={styles.markerContainer}>
-                  <View style={styles.markerBadge}>
-                    <Text style={styles.markerBadgeText}>{group.trips.length}</Text>
-                  </View>
-                  <View style={styles.markerBubble}>
-                    <MaterialIcons name="place" size={20} color={Colors.textInverse} />
-                  </View>
-                  <Text style={styles.markerLabel} numberOfLines={1}>
-                    {group.locationName}
-                  </Text>
-                </View>
-              </Marker>
-            ))}
-          </MapView>
+          {Platform.OS === 'web' ? (
+            <View style={styles.mapWebPlaceholder}>
+              <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+              <Text style={styles.mapWebPlaceholderText}>
+                Map is available in the iOS and Android app.
+              </Text>
+            </View>
+          ) : (
+            <TripMapboxMapView
+              containerStyle={styles.map}
+              centerCoordinate={mapCenter}
+              zoomLevel={mapZoom}
+              cameraKey={String(mapCameraKey)}
+              markers={mapboxMarkers}
+              showUserLocation={journalMapUserLocation}
+              onZoomLevelChange={setMapZoom}
+            />
+          )}
 
-          {filteredTrips.length === 0 && (
+          {mapLayer === 'journal' &&
+            locationGroups.length === 0 &&
+            journalCatchPins.length === 0 && (
             <View style={styles.mapEmptyOverlay} pointerEvents="none">
               <View style={styles.mapEmptyBubble}>
                 <Text style={styles.mapEmptyText}>
-                  {dateRange === 'all' ? 'No trips with locations yet' : 'No trips in this period'}
+                  {dateRange === 'all'
+                    ? 'No trip locations or catch pins yet'
+                    : 'Nothing on the map in this period'}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {mapLayer === 'fish' && fishMapPins.length === 0 && (
+            <View style={styles.mapEmptyOverlay} pointerEvents="none">
+              <View style={styles.mapEmptyBubble}>
+                <Text style={styles.mapEmptyText}>
+                  {dateRange === 'all'
+                    ? 'No fish with map pins yet'
+                    : 'No fish in this period'}
                 </Text>
               </View>
             </View>
@@ -413,14 +563,9 @@ export default function JournalScreen() {
             animationType="slide"
             onRequestClose={() => setSelectedGroup(null)}
           >
-            <Pressable
-              style={styles.entryModalOverlay}
-              onPress={() => setSelectedGroup(null)}
-            >
-              <View
-                style={[styles.entryModalSheet, { paddingBottom: insets.bottom + Spacing.lg }]}
-                onStartShouldSetResponder={() => true}
-              >
+            <View style={styles.entryModalRoot}>
+              <Pressable style={styles.entryModalDim} onPress={() => setSelectedGroup(null)} />
+              <View style={[styles.entryModalSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
                 {selectedGroup && (
                   <>
                     <View style={styles.selectedPanelHeader}>
@@ -436,6 +581,7 @@ export default function JournalScreen() {
                     </View>
                     <FlatList
                       data={selectedGroup.trips}
+                      keyboardShouldPersistTaps="handled"
                       renderItem={({ item }) => (
                         <Pressable
                           style={styles.selectedTripCard}
@@ -463,7 +609,111 @@ export default function JournalScreen() {
                   </>
                 )}
               </View>
-            </Pressable>
+            </View>
+          </Modal>
+
+          {/* Catch with photo: full-screen viewer (like Photos) */}
+          <Modal
+            visible={selectedFishCatch != null && !!selectedFishCatch.photo_url}
+            animationType="fade"
+            transparent
+            statusBarTranslucent
+            onRequestClose={() => setSelectedFishCatch(null)}
+          >
+            {selectedFishCatch?.photo_url ? (
+              <View style={[styles.fishPhotoModal, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+                <Pressable
+                  style={[styles.fishPhotoClose, { top: insets.top + Spacing.sm }]}
+                  onPress={() => setSelectedFishCatch(null)}
+                >
+                  <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+                </Pressable>
+                <ScrollView
+                  style={styles.fishPhotoScroll}
+                  contentContainerStyle={[styles.fishPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <Image
+                    source={{ uri: selectedFishCatch.photo_url }}
+                    style={[styles.fishPhotoImage, { width: winWidth, height: Math.round(winHeight * 0.55) }]}
+                    resizeMode="contain"
+                  />
+                  <View style={styles.fishPhotoInfo}>
+                    {tripNameById.get(selectedFishCatch.trip_id) ? (
+                      <Text style={styles.fishPhotoInfoRow}>
+                        <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} />{' '}
+                        {tripNameById.get(selectedFishCatch.trip_id)}
+                      </Text>
+                    ) : null}
+                    {(selectedFishCatch.fly_pattern || selectedFishCatch.fly_size || selectedFishCatch.fly_color) ? (
+                      <Text style={styles.fishPhotoInfoRow}>
+                        <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} />{' '}
+                        {[selectedFishCatch.fly_pattern, selectedFishCatch.fly_size ? `#${selectedFishCatch.fly_size}` : null, selectedFishCatch.fly_color].filter(Boolean).join(' ')}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.fishPhotoInfoRow}>
+                      <MaterialCommunityIcons name="calendar" size={16} color={Colors.textInverse} />{' '}
+                      {format(new Date(selectedFishCatch.timestamp), 'MMM d, yyyy')}
+                    </Text>
+                    {selectedFishCatch.species ? (
+                      <Text style={styles.fishPhotoInfoRow}>
+                        <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} />{' '}
+                        {selectedFishCatch.species}
+                      </Text>
+                    ) : null}
+                    {selectedFishCatch.note ? (
+                      <Text style={styles.fishPhotoInfoCaption}>{selectedFishCatch.note}</Text>
+                    ) : null}
+                  </View>
+                </ScrollView>
+              </View>
+            ) : null}
+          </Modal>
+
+          {/* Catch without photo: sheet with open trip */}
+          <Modal
+            visible={selectedFishCatch != null && !selectedFishCatch.photo_url}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setSelectedFishCatch(null)}
+          >
+            <View style={styles.entryModalRoot}>
+              <Pressable style={styles.entryModalDim} onPress={() => setSelectedFishCatch(null)} />
+              {selectedFishCatch && !selectedFishCatch.photo_url ? (
+                <View style={[styles.entryModalSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
+                  <View style={styles.selectedPanelHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.selectedPanelTitle}>
+                        {selectedFishCatch.species || 'Catch'}
+                      </Text>
+                      <Text style={styles.selectedPanelSubtitle}>
+                        {format(new Date(selectedFishCatch.timestamp), 'MMM d, yyyy')}
+                        {tripNameById.get(selectedFishCatch.trip_id)
+                          ? ` · ${tripNameById.get(selectedFishCatch.trip_id)}`
+                          : ''}
+                      </Text>
+                    </View>
+                    <Pressable onPress={() => setSelectedFishCatch(null)} hitSlop={12}>
+                      <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                    </Pressable>
+                  </View>
+                  {selectedFishCatch.note ? (
+                    <Text style={styles.fishNoPhotoNote}>{selectedFishCatch.note}</Text>
+                  ) : null}
+                  <Pressable
+                    style={styles.fishOpenJournalBtn}
+                    onPress={() => {
+                      const id = selectedFishCatch.trip_id;
+                      setSelectedFishCatch(null);
+                      router.push(`/journal/${id}`);
+                    }}
+                  >
+                    <Text style={styles.fishOpenJournalBtnText}>Open journal entry</Text>
+                    <MaterialIcons name="chevron-right" size={20} color={Colors.textInverse} />
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
           </Modal>
         </View>
       )}
@@ -585,6 +835,34 @@ const styles = StyleSheet.create({
   toggleTextActive: {
     color: Colors.primary,
   },
+  mapLayerRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingBottom: Spacing.md,
+  },
+  mapLayerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: Spacing.xs + 2,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  mapLayerChipActive: {
+    backgroundColor: Colors.textInverse,
+    borderColor: Colors.textInverse,
+  },
+  mapLayerChipText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.9)',
+  },
+  mapLayerChipTextActive: {
+    color: Colors.primary,
+  },
 
   // List view
   list: {
@@ -687,6 +965,19 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
+  mapWebPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
+    backgroundColor: Colors.surface,
+  },
+  mapWebPlaceholderText: {
+    marginTop: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
   markerContainer: {
     alignItems: 'center',
     width: 80,
@@ -753,18 +1044,38 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: '600',
   },
+  fishMarkerWrap: {
+    alignItems: 'center',
+  },
+  fishMarkerBubble: {
+    backgroundColor: Colors.accent,
+    borderRadius: BorderRadius.full,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
 
   // Entry selection modal (multiple trips at same place)
-  entryModalOverlay: {
+  entryModalRoot: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
+  },
+  entryModalDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   entryModalSheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
-    maxHeight: '50%',
+    maxHeight: '58%',
+    minHeight: 220,
     paddingHorizontal: Spacing.lg,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
@@ -775,7 +1086,6 @@ const styles = StyleSheet.create({
   selectedPanelHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.sm,
     borderBottomWidth: 1,
@@ -792,8 +1102,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   selectedTripList: {
-    flexGrow: 0,
-    paddingHorizontal: Spacing.lg,
+    maxHeight: 320,
   },
   selectedTripListContent: {
     paddingBottom: Spacing.xl,
@@ -817,5 +1126,62 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+  fishPhotoModal: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+  },
+  fishPhotoClose: {
+    position: 'absolute',
+    right: Spacing.lg,
+    zIndex: 10,
+    padding: Spacing.sm,
+  },
+  fishPhotoScroll: {
+    flex: 1,
+  },
+  fishPhotoScrollContent: {
+    flexGrow: 1,
+  },
+  fishPhotoImage: {
+    marginTop: Spacing.sm,
+  },
+  fishPhotoInfo: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xs,
+  },
+  fishPhotoInfoRow: {
+    fontSize: FontSize.md,
+    color: Colors.textInverse,
+    marginBottom: Spacing.xs,
+  },
+  fishPhotoInfoCaption: {
+    fontSize: FontSize.sm,
+    color: Colors.textTertiary,
+    marginTop: Spacing.xs,
+  },
+  fishNoPhotoNote: {
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.md,
+  },
+  fishOpenJournalBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    paddingVertical: Spacing.md,
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.md,
+  },
+  fishOpenJournalBtnText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textInverse,
   },
 });
