@@ -85,7 +85,7 @@ export default function TripDashboardScreen() {
     activeTrip, events, fishCount, currentFly, currentFly2, nextFlyRecommendation,
     weatherData, waterFlowData, conditionsLoading, recommendationLoading,
     addCatch, removeCatch, changeFly, updateFlyChangeEvent, addNote, addBite, addFishOn, addAIQuery, endTrip,
-    pauseTrip, resumeTrip, isTripPaused,
+    resumeTrip, isTripPaused,
     fetchConditions, refreshSmartRecommendation, replaceActiveTripEvents,
   } = useTripStore();
 
@@ -443,8 +443,10 @@ export default function TripDashboardScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Pause',
-          onPress: async () => {
-            await pauseTrip();
+          onPress: () => {
+            const s = useTripStore.getState();
+            if (!s.activeTrip || s.isTripPaused) return;
+            void s.pauseTrip();
             router.replace('/home');
           },
         },

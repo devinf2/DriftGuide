@@ -27,13 +27,15 @@ export const Colors = {
   shadow: 'rgba(44, 70, 112, 0.08)',
 };
 
-/** Colors for location types (river vs lake etc.) — water-body representative. */
+/** Colors for location types on maps and lists. */
 export const LocationTypeColors: Record<LocationType, string> = {
-  stream: '#60A5FA',   // light blue — small flowing water
-  river: '#3B7DAE',    // medium blue — primaryLight, flowing
-  lake: '#1E3A5F',     // deep blue — still water
-  reservoir: '#0E7490', // teal — man-made impoundment
-  pond: '#047857',      // emerald — small still water, often vegetated
+  stream: '#60A5FA',
+  river: '#3B7DAE',
+  lake: '#1E3A5F',
+  reservoir: '#0E7490',
+  pond: '#047857',
+  access_point: '#92400E', // brown — trail / put-in context
+  parking: '#64748B', // slate — infrastructure
 };
 
 export const Spacing = {

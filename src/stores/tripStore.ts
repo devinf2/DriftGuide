@@ -39,7 +39,15 @@ interface TripState {
   plannedTrips: Trip[];
   plannedTripsLoading: boolean;
 
-  planTrip: (userId: string, locationId: string, fishingType: FishingType, location: Location, plannedDate?: Date, sessionType?: SessionType | null) => Promise<string | null>;
+  planTrip: (
+    userId: string,
+    locationId: string,
+    fishingType: FishingType,
+    location: Location,
+    plannedDate?: Date,
+    sessionType?: SessionType | null,
+    accessPointId?: string | null,
+  ) => Promise<string | null>;
   startPlannedTrip: (tripId: string) => Promise<string | null>;
   deletePlannedTrip: (tripId: string) => Promise<void>;
   deleteTrip: (tripId: string) => Promise<void>;
@@ -110,12 +118,13 @@ export const useTripStore = create<TripState>()(
       plannedTrips: [],
       plannedTripsLoading: false,
 
-      planTrip: async (userId, locationId, fishingType, location, plannedDate, sessionType) => {
+      planTrip: async (userId, locationId, fishingType, location, plannedDate, sessionType, accessPointId) => {
         const tripId = uuidv4();
         const trip: Trip = {
           id: tripId,
           user_id: userId,
           location_id: locationId,
+          access_point_id: accessPointId ?? null,
           location,
           status: 'planned',
           fishing_type: fishingType,
@@ -236,6 +245,7 @@ export const useTripStore = create<TripState>()(
           id: tripId,
           user_id: userId,
           location_id: locationId,
+          access_point_id: null,
           location: location,
           status: 'active',
           fishing_type: fishingType,
@@ -308,16 +318,17 @@ export const useTripStore = create<TripState>()(
         const segmentStart = new Date(segmentIso).getTime();
         const nextElapsed = (fishingElapsedMs ?? 0) + Math.max(0, now - segmentStart);
 
-        const coords = await captureTripBookmarkCoords();
+        const pauseEventId = uuidv4();
+        const pauseTripId = activeTrip.id;
         const pauseEvent: TripEvent = {
-          id: uuidv4(),
-          trip_id: activeTrip.id,
+          id: pauseEventId,
+          trip_id: pauseTripId,
           event_type: 'note',
           timestamp: new Date().toISOString(),
           data: { text: 'Trip paused' },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
-          latitude: coords?.latitude ?? null,
-          longitude: coords?.longitude ?? null,
+          latitude: null,
+          longitude: null,
         };
 
         const nextEvents = [...events, pauseEvent];
@@ -331,22 +342,39 @@ export const useTripStore = create<TripState>()(
         if (get().isOnline) {
           syncTripToCloud(activeTrip, nextEvents).catch(() => {});
         }
+
+        void (async () => {
+          const c = await captureTripBookmarkCoords();
+          if (!c) return;
+          const s = get();
+          const idx = s.events.findIndex(e => e.id === pauseEventId);
+          if (idx === -1 || s.events[idx].trip_id !== pauseTripId) return;
+          const evs = [...s.events];
+          evs[idx] = { ...evs[idx], latitude: c.latitude, longitude: c.longitude };
+          set({ events: evs });
+          get().scheduleInTripSync();
+          const trip = get().activeTrip;
+          if (trip && trip.id === pauseTripId && get().isOnline) {
+            syncTripToCloud(trip, evs).catch(() => {});
+          }
+        })();
       },
 
       resumeTrip: async () => {
         const { activeTrip, events, weatherData, waterFlowData, isTripPaused } = get();
         if (!activeTrip || activeTrip.status !== 'active' || !isTripPaused) return;
 
-        const c = await captureTripBookmarkCoords();
+        const resumeEventId = uuidv4();
+        const resumeTripId = activeTrip.id;
         const resumeEvent: TripEvent = {
-          id: uuidv4(),
-          trip_id: activeTrip.id,
+          id: resumeEventId,
+          trip_id: resumeTripId,
           event_type: 'note',
           timestamp: new Date().toISOString(),
           data: { text: 'Trip resumed' },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
-          latitude: c?.latitude ?? null,
-          longitude: c?.longitude ?? null,
+          latitude: null,
+          longitude: null,
         };
         const nextEvents = [...events, resumeEvent];
         set({
@@ -358,6 +386,22 @@ export const useTripStore = create<TripState>()(
         if (get().isOnline) {
           syncTripToCloud(activeTrip, nextEvents).catch(() => {});
         }
+
+        void (async () => {
+          const c = await captureTripBookmarkCoords();
+          if (!c) return;
+          const s = get();
+          const idx = s.events.findIndex(e => e.id === resumeEventId);
+          if (idx === -1 || s.events[idx].trip_id !== resumeTripId) return;
+          const evs = [...s.events];
+          evs[idx] = { ...evs[idx], latitude: c.latitude, longitude: c.longitude };
+          set({ events: evs });
+          get().scheduleInTripSync();
+          const trip = get().activeTrip;
+          if (trip && trip.id === resumeTripId && get().isOnline) {
+            syncTripToCloud(trip, evs).catch(() => {});
+          }
+        })();
       },
 
       endTrip: async (): Promise<{ synced: boolean }> => {

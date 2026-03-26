@@ -85,9 +85,7 @@ export default function RootLayout() {
               name="trip/new"
               options={{
                 title: 'Plan a Trip',
-                headerBackTitle: 'Back',
-                headerStyle: { backgroundColor: '#2C4670' },
-                headerTintColor: '#FFFFFF',
+                headerShown: false,
               }}
             />
             <Stack.Screen
@@ -103,6 +101,10 @@ export default function RootLayout() {
             <Stack.Screen
               name="trip/add-location"
               options={{ title: 'Add Location', presentation: 'modal' }}
+            />
+            <Stack.Screen
+              name="trip/add-access-point"
+              options={{ title: 'Add access point', presentation: 'modal' }}
             />
             <Stack.Screen
               name="trip/download-waterway"

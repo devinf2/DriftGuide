@@ -98,18 +98,27 @@ export async function addCommunityLocation(
   latitude: number,
   longitude: number,
   userId: string,
+  isPublic: boolean = true,
 ): Promise<Location | null> {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    console.error('addCommunityLocation: invalid coordinates', { latitude, longitude });
+    return null;
+  }
+
   const { data, error } = await supabase
     .from('locations')
     .insert({
-      name,
+      name: name.trim(),
       type,
-      latitude,
-      longitude,
+      latitude: lat,
+      longitude: lng,
       created_by: userId,
       status: 'community',
       usage_count: 0,
       metadata: {},
+      is_public: isPublic,
     })
     .select()
     .single();

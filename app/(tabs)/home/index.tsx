@@ -111,7 +111,6 @@ export default function HomeScreen() {
     isTripPaused,
     fishCount,
     currentFly,
-    resumeTrip,
     endTrip,
     plannedTrips,
     plannedTripsLoading,
@@ -339,10 +338,13 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [loadAlbumPhotos, user?.id, fullHome, fetchPlannedTrips]);
 
-  const handleResumeTrip = useCallback(async () => {
-    await resumeTrip();
-    if (activeTrip?.id) router.push(`/trip/${activeTrip.id}`);
-  }, [resumeTrip, router, activeTrip?.id]);
+  const handleResumeTrip = useCallback(() => {
+    const s = useTripStore.getState();
+    if (!s.activeTrip?.id || !s.isTripPaused) return;
+    const tripId = s.activeTrip.id;
+    void s.resumeTrip();
+    router.push(`/trip/${tripId}`);
+  }, [router]);
 
   const handleEndTripFromHome = useCallback(() => {
     if (!activeTrip) return;

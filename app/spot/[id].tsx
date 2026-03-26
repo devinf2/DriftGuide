@@ -7,12 +7,12 @@ import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useLocationStore } from '@/src/stores/locationStore';
-import { useAuthStore } from '@/src/stores/authStore';
-import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName, formatSkyLabel } from '@/src/services/conditions';
+import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
 import { getSpotFishingSummary, getSpotDetailedReport, getSpotHowToFish, askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
-import type { LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
+import type { AccessPoint, LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
+import { fetchApprovedAccessPointsForLocation } from '@/src/services/accessPointService';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
@@ -25,7 +25,6 @@ type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
 export default function SpotFishingTripScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { user } = useAuthStore();
   const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
 
   const [activeTab, setActiveTab] = useState<SpotTabKey>('overview');
@@ -46,6 +45,7 @@ export default function SpotFishingTripScreen() {
   const aiScrollRef = useRef<ScrollView>(null);
   const [howToFish, setHowToFish] = useState<string | null>(null);
   const [howToFishLoading, setHowToFishLoading] = useState(false);
+  const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
 
   const location = id ? getLocationById(id) : undefined;
   const navigation = useNavigation();
@@ -60,6 +60,14 @@ export default function SpotFishingTripScreen() {
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
   }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    if (!id) {
+      setApprovedAccessPoints([]);
+      return;
+    }
+    fetchApprovedAccessPointsForLocation(id).then(setApprovedAccessPoints);
+  }, [id]);
 
   useEffect(() => {
     if (!location || !id) return;
@@ -111,16 +119,21 @@ export default function SpotFishingTripScreen() {
     return catalogLocationMarkersInViewport(locations, spotMapRegionBbox, undefined);
   }, [locations, spotMapRegionBbox]);
 
-  const spotMapboxMarkers = useMemo(
-    () =>
-      spotMapCatalogMarkers.map((m) => ({
-        id: m.id,
-        coordinate: [m.lon, m.lat] as [number, number],
-        title: m.title,
-        children: <MaterialIcons name="place" size={34} color={m.color} />,
-      })),
-    [spotMapCatalogMarkers],
-  );
+  const spotMapboxMarkers = useMemo(() => {
+    const catalog = spotMapCatalogMarkers.map((m) => ({
+      id: m.id,
+      coordinate: [m.lon, m.lat] as [number, number],
+      title: m.title,
+      children: <MaterialIcons name="place" size={34} color={m.color} />,
+    }));
+    const access = approvedAccessPoints.map((ap) => ({
+      id: `ap-${ap.id}`,
+      coordinate: [ap.longitude, ap.latitude] as [number, number],
+      title: ap.name,
+      children: <MaterialIcons name="directions-walk" size={30} color={Colors.success} />,
+    }));
+    return [...catalog, ...access];
+  }, [spotMapCatalogMarkers, approvedAccessPoints]);
 
   useEffect(() => {
     if (activeTab !== 'conditions' || !location) return;
@@ -312,7 +325,7 @@ export default function SpotFishingTripScreen() {
                 <View style={styles.conditionBlockValueWrap}>
                   <Text style={styles.conditionBlockTemp}>{conditions.temperature.temp_f}°F</Text>
                 </View>
-                <Text style={styles.conditionBlockLabel}>{conditions.sky.label}</Text>
+                <Text style={styles.conditionBlockLabel}>Temp</Text>
               </View>
               <View style={styles.conditionBlock}>
                 <View style={styles.conditionBlockValueWrap}>
@@ -513,7 +526,7 @@ export default function SpotFishingTripScreen() {
 
       <View style={styles.pinnedFooter}>
         <Pressable style={styles.selectButton} onPress={handlePlanTripHere}>
-          <Text style={styles.selectButtonText}>Select</Text>
+          <Text style={styles.selectButtonText}>Select for trip</Text>
         </Pressable>
       </View>
     </View>

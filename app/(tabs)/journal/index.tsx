@@ -18,7 +18,8 @@ import type { LocationType } from '@/src/types';
 import type { WaterFlowData } from '@/src/types';
 import { formatTripDate, formatTripDuration, formatFishCount } from '@/src/utils/formatters';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
-import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { getWeatherIconName } from '@/src/services/conditions';
 import { format } from 'date-fns';
 
 type ViewMode = 'list' | 'map';
@@ -41,16 +42,22 @@ const CLARITY_LABELS: Record<string, string> = {
   unknown: '',
 };
 
-/** Short condition line for list cards: weather (temp + condition) or water (clarity / flow). */
-function getTripInsight(trip: Trip): string | null {
+type TripListInsight =
+  | { kind: 'weather'; tempF: number; condition: string }
+  | { kind: 'water'; text: string }
+  | null;
+
+/** List card tail: weather (temp ° + icon) or water (clarity / flow text). */
+function getTripListInsight(trip: Trip): TripListInsight {
   const w = trip.weather_cache;
-  if (w) return `${Math.round(w.temperature_f)}° ${w.condition}`;
+  if (w) return { kind: 'weather', tempF: w.temperature_f, condition: w.condition };
   const water = trip.water_flow_cache as WaterFlowData | null;
   if (water) {
     if (water.clarity && water.clarity !== 'unknown') {
-      return CLARITY_LABELS[water.clarity] || null;
+      const label = CLARITY_LABELS[water.clarity];
+      if (label) return { kind: 'water', text: label };
     }
-    return `${Math.round(water.flow_cfs)} cfs`;
+    return { kind: 'water', text: `${Math.round(water.flow_cfs)} cfs` };
   }
   return null;
 }
@@ -279,7 +286,15 @@ export default function JournalScreen() {
       children: (
         <View style={styles.fishMarkerWrap} pointerEvents="box-none">
           <View style={styles.fishMarkerBubble}>
-            <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
+            {c.photo_url?.trim() ? (
+              <Image
+                source={{ uri: c.photo_url.trim() }}
+                style={styles.fishMarkerThumb}
+                resizeMode="cover"
+              />
+            ) : (
+              <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
+            )}
           </View>
         </View>
       ),
@@ -291,6 +306,7 @@ export default function JournalScreen() {
     const accent = locationType && LocationTypeColors[locationType]
       ? LocationTypeColors[locationType]
       : Colors.primary;
+    const insight = getTripListInsight(item);
     return (
       <Pressable
         style={styles.tripCard}
@@ -317,14 +333,25 @@ export default function JournalScreen() {
             <Text style={styles.tripStat}>
               {formatTripDuration(item.start_time, item.end_time)}
             </Text>
-            {getTripInsight(item) && (
+            {insight ? (
               <>
                 <Text style={styles.tripDivider}>·</Text>
-                <Text style={styles.tripStat} numberOfLines={1}>
-                  {getTripInsight(item)}
-                </Text>
+                {insight.kind === 'weather' ? (
+                  <View style={styles.tripWeatherMeta}>
+                    <Text style={styles.tripStat}>{`${Math.round(insight.tempF)}°`}</Text>
+                    <Ionicons
+                      name={getWeatherIconName(insight.condition) as keyof typeof Ionicons.glyphMap}
+                      size={17}
+                      color={Colors.textSecondary}
+                    />
+                  </View>
+                ) : (
+                  <Text style={styles.tripStat} numberOfLines={1}>
+                    {insight.text}
+                  </Text>
+                )}
               </>
-            )}
+            ) : null}
           </View>
         </View>
       </Pressable>
@@ -612,105 +639,82 @@ export default function JournalScreen() {
             </View>
           </Modal>
 
-          {/* Catch with photo: full-screen viewer (like Photos) */}
+          {/* Selected catch: image + details above sheet, actions below */}
           <Modal
-            visible={selectedFishCatch != null && !!selectedFishCatch.photo_url}
-            animationType="fade"
-            transparent
-            statusBarTranslucent
-            onRequestClose={() => setSelectedFishCatch(null)}
-          >
-            {selectedFishCatch?.photo_url ? (
-              <View style={[styles.fishPhotoModal, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-                <Pressable
-                  style={[styles.fishPhotoClose, { top: insets.top + Spacing.sm }]}
-                  onPress={() => setSelectedFishCatch(null)}
-                >
-                  <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
-                </Pressable>
-                <ScrollView
-                  style={styles.fishPhotoScroll}
-                  contentContainerStyle={[styles.fishPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
-                  showsVerticalScrollIndicator={false}
-                >
-                  <Image
-                    source={{ uri: selectedFishCatch.photo_url }}
-                    style={[styles.fishPhotoImage, { width: winWidth, height: Math.round(winHeight * 0.55) }]}
-                    resizeMode="contain"
-                  />
-                  <View style={styles.fishPhotoInfo}>
-                    {tripNameById.get(selectedFishCatch.trip_id) ? (
-                      <Text style={styles.fishPhotoInfoRow}>
-                        <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} />{' '}
-                        {tripNameById.get(selectedFishCatch.trip_id)}
-                      </Text>
-                    ) : null}
-                    {(selectedFishCatch.fly_pattern || selectedFishCatch.fly_size || selectedFishCatch.fly_color) ? (
-                      <Text style={styles.fishPhotoInfoRow}>
-                        <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} />{' '}
-                        {[selectedFishCatch.fly_pattern, selectedFishCatch.fly_size ? `#${selectedFishCatch.fly_size}` : null, selectedFishCatch.fly_color].filter(Boolean).join(' ')}
-                      </Text>
-                    ) : null}
-                    <Text style={styles.fishPhotoInfoRow}>
-                      <MaterialCommunityIcons name="calendar" size={16} color={Colors.textInverse} />{' '}
-                      {format(new Date(selectedFishCatch.timestamp), 'MMM d, yyyy')}
-                    </Text>
-                    {selectedFishCatch.species ? (
-                      <Text style={styles.fishPhotoInfoRow}>
-                        <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} />{' '}
-                        {selectedFishCatch.species}
-                      </Text>
-                    ) : null}
-                    {selectedFishCatch.note ? (
-                      <Text style={styles.fishPhotoInfoCaption}>{selectedFishCatch.note}</Text>
-                    ) : null}
-                  </View>
-                </ScrollView>
-              </View>
-            ) : null}
-          </Modal>
-
-          {/* Catch without photo: sheet with open trip */}
-          <Modal
-            visible={selectedFishCatch != null && !selectedFishCatch.photo_url}
+            visible={selectedFishCatch != null}
             transparent
             animationType="slide"
             onRequestClose={() => setSelectedFishCatch(null)}
           >
             <View style={styles.entryModalRoot}>
               <Pressable style={styles.entryModalDim} onPress={() => setSelectedFishCatch(null)} />
-              {selectedFishCatch && !selectedFishCatch.photo_url ? (
-                <View style={[styles.entryModalSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
-                  <View style={styles.selectedPanelHeader}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.selectedPanelTitle}>
-                        {selectedFishCatch.species || 'Catch'}
-                      </Text>
-                      <Text style={styles.selectedPanelSubtitle}>
-                        {format(new Date(selectedFishCatch.timestamp), 'MMM d, yyyy')}
-                        {tripNameById.get(selectedFishCatch.trip_id)
-                          ? ` · ${tripNameById.get(selectedFishCatch.trip_id)}`
-                          : ''}
-                      </Text>
+              {selectedFishCatch != null ? (
+                <View style={styles.fishCatchBottomStack}>
+                  <ScrollView
+                    style={[styles.fishCatchHeroScroll, { maxHeight: Math.round(winHeight * 0.48) }]}
+                    contentContainerStyle={styles.fishCatchHeroScrollContent}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    <View style={styles.fishCatchHeroInner}>
+                      {selectedFishCatch.photo_url?.trim() ? (
+                        <Image
+                          source={{ uri: selectedFishCatch.photo_url.trim() }}
+                          style={[styles.fishCatchHeroImage, { width: winWidth - Spacing.lg * 2 }]}
+                          resizeMode="cover"
+                        />
+                      ) : null}
+                      <View style={styles.fishCatchHeroCard}>
+                        <Text style={styles.fishCatchHeroTitle}>
+                          {selectedFishCatch.species || 'Catch'}
+                        </Text>
+                        <Text style={styles.fishCatchHeroSubtitle}>
+                          {format(new Date(selectedFishCatch.timestamp), 'MMM d, yyyy')}
+                          {tripNameById.get(selectedFishCatch.trip_id)
+                            ? ` · ${tripNameById.get(selectedFishCatch.trip_id)}`
+                            : ''}
+                        </Text>
+                        {(selectedFishCatch.fly_pattern || selectedFishCatch.fly_size || selectedFishCatch.fly_color) ? (
+                          <Text style={styles.fishCatchHeroRow}>
+                            <MaterialCommunityIcons name="hook" size={14} color="rgba(255,255,255,0.92)" />{' '}
+                            {[selectedFishCatch.fly_pattern, selectedFishCatch.fly_size ? `#${selectedFishCatch.fly_size}` : null, selectedFishCatch.fly_color].filter(Boolean).join(' ')}
+                          </Text>
+                        ) : null}
+                        {(selectedFishCatch.size_inches != null || (selectedFishCatch.quantity != null && selectedFishCatch.quantity > 1)) ? (
+                          <Text style={styles.fishCatchHeroRow}>
+                            <MaterialCommunityIcons name="ruler" size={14} color="rgba(255,255,255,0.92)" />{' '}
+                            {[
+                              selectedFishCatch.size_inches != null ? `${selectedFishCatch.size_inches}"` : null,
+                              selectedFishCatch.quantity != null && selectedFishCatch.quantity > 1
+                                ? `×${selectedFishCatch.quantity}`
+                                : null,
+                            ].filter(Boolean).join(' · ')}
+                          </Text>
+                        ) : null}
+                        {selectedFishCatch.note ? (
+                          <Text style={styles.fishCatchHeroNote}>{selectedFishCatch.note}</Text>
+                        ) : null}
+                      </View>
                     </View>
-                    <Pressable onPress={() => setSelectedFishCatch(null)} hitSlop={12}>
-                      <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                  </ScrollView>
+                  <View style={[styles.fishCatchSheetActions, { paddingBottom: insets.bottom + Spacing.lg }]}>
+                    <View style={styles.fishCatchSheetHeader}>
+                      <Pressable onPress={() => setSelectedFishCatch(null)} hitSlop={12} style={styles.fishCatchSheetClose}>
+                        <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                      </Pressable>
+                    </View>
+                    <Pressable
+                      style={styles.fishOpenJournalBtn}
+                      onPress={() => {
+                        const id = selectedFishCatch.trip_id;
+                        setSelectedFishCatch(null);
+                        router.push(`/journal/${id}`);
+                      }}
+                    >
+                      <Text style={styles.fishOpenJournalBtnText}>Open journal entry</Text>
+                      <MaterialIcons name="chevron-right" size={20} color={Colors.textInverse} />
                     </Pressable>
                   </View>
-                  {selectedFishCatch.note ? (
-                    <Text style={styles.fishNoPhotoNote}>{selectedFishCatch.note}</Text>
-                  ) : null}
-                  <Pressable
-                    style={styles.fishOpenJournalBtn}
-                    onPress={() => {
-                      const id = selectedFishCatch.trip_id;
-                      setSelectedFishCatch(null);
-                      router.push(`/journal/${id}`);
-                    }}
-                  >
-                    <Text style={styles.fishOpenJournalBtnText}>Open journal entry</Text>
-                    <MaterialIcons name="chevron-right" size={20} color={Colors.textInverse} />
-                  </Pressable>
                 </View>
               ) : null}
             </View>
@@ -878,6 +882,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     minHeight: 88,
     marginBottom: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
     shadowColor: Colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
@@ -925,6 +931,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: Spacing.sm,
     gap: Spacing.sm,
+  },
+  tripWeatherMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
   },
   tripMetaPill: {
     flexDirection: 'row',
@@ -1054,11 +1066,17 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 4,
+  },
+  fishMarkerThumb: {
+    width: 34,
+    height: 34,
+    borderRadius: BorderRadius.full,
   },
 
   // Entry selection modal (multiple trips at same place)
@@ -1127,53 +1145,78 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
   },
-  fishPhotoModal: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
+  fishCatchBottomStack: {
+    width: '100%',
   },
-  fishPhotoClose: {
-    position: 'absolute',
-    right: Spacing.lg,
-    zIndex: 10,
-    padding: Spacing.sm,
+  fishCatchHeroScroll: {
+    flexGrow: 0,
   },
-  fishPhotoScroll: {
-    flex: 1,
+  fishCatchHeroScrollContent: {
+    paddingBottom: Spacing.sm,
+    flexGrow: 0,
   },
-  fishPhotoScrollContent: {
-    flexGrow: 1,
+  fishCatchHeroInner: {
+    paddingHorizontal: Spacing.lg,
   },
-  fishPhotoImage: {
-    marginTop: Spacing.sm,
+  fishCatchHeroImage: {
+    height: 200,
+    borderRadius: BorderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginBottom: Spacing.md,
+    alignSelf: 'center',
   },
-  fishPhotoInfo: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xl,
-    gap: Spacing.xs,
+  fishCatchHeroCard: {
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.lg,
   },
-  fishPhotoInfoRow: {
-    fontSize: FontSize.md,
+  fishCatchHeroTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: '700',
     color: Colors.textInverse,
-    marginBottom: Spacing.xs,
   },
-  fishPhotoInfoCaption: {
+  fishCatchHeroSubtitle: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: 'rgba(255,255,255,0.88)',
     marginTop: Spacing.xs,
   },
-  fishNoPhotoNote: {
+  fishCatchHeroRow: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: 'rgba(255,255,255,0.92)',
+    marginTop: Spacing.sm,
+  },
+  fishCatchHeroNote: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.78)',
+    marginTop: Spacing.md,
+    lineHeight: 20,
+  },
+  fishCatchSheetActions: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderTopRightRadius: BorderRadius.lg,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  fishCatchSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.sm,
+  },
+  fishCatchSheetClose: {
+    marginRight: -Spacing.xs,
   },
   fishOpenJournalBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.xs,
-    marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     paddingVertical: Spacing.md,
     backgroundColor: Colors.primary,

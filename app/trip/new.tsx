@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Platform, Modal, KeyboardAvoidingView, Alert } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +22,9 @@ import { haversineDistance } from '@/src/services/locationService';
 import { fetchFlies } from '@/src/services/flyService';
 import GuideChat from '@/src/components/GuideChat';
 import type { AIContext } from '@/src/services/ai';
+import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
+import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
+import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 
 /** Max drive distance (km) for suggested spots — ~2 hours at 60 mph ≈ 120 mi ≈ 193 km. */
 const SUGGESTED_SPOTS_MAX_DRIVE_KM = 193;
@@ -64,10 +69,12 @@ function SkyIcon({ conditions, compact }: { conditions: LocationConditions; comp
   return (
     <View style={styles.conditionItem}>
       <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
-        <Ionicons name={iconName} size={14} color={color} />
-        <Text style={[styles.conditionValue, { color }]} numberOfLines={1}>
-          {conditions.sky.label}
-        </Text>
+        <Ionicons name={iconName} size={compact ? 18 : 14} color={color} />
+        {!compact ? (
+          <Text style={[styles.conditionValue, { color }]} numberOfLines={1}>
+            {conditions.sky.label}
+          </Text>
+        ) : null}
       </View>
       <Text style={styles.conditionLabel}>Sky</Text>
     </View>
@@ -124,6 +131,7 @@ function getNextFifteenMinutes(): Date {
 
 export default function NewTripScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ locationId?: string }>();
   const { user } = useAuthStore();
   const { planTrip } = useTripStore();
@@ -149,6 +157,13 @@ export default function NewTripScreen() {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [sessionType, setSessionType] = useState<SessionType | null>('wade');
   const [showGuideModal, setShowGuideModal] = useState(false);
+  const [mapSuggestions, setMapSuggestions] = useState<MapboxGeocodeFeature[]>([]);
+  const [mapSuggestionsLoading, setMapSuggestionsLoading] = useState(false);
+  const userProximityRef = useRef<[number, number] | null>(null);
+  const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const effectiveLocations = isConnected ? locations : offlineLocations;
+  const getEffectiveLocationById = (id: string) => effectiveLocations.find((l) => l.id === id);
 
   const getGuideContext = useCallback(async (): Promise<AIContext> => {
     let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
@@ -175,7 +190,51 @@ export default function NewTripScreen() {
 
   useEffect(() => {
     if (isConnected && locations.length === 0) fetchLocations();
+  }, [isConnected, locations.length, fetchLocations]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    (async () => {
+      try {
+        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const loc = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.Balanced,
+        });
+        userProximityRef.current = [loc.coords.longitude, loc.coords.latitude];
+      } catch {
+        userProximityRef.current = null;
+      }
+    })();
   }, [isConnected]);
+
+  useEffect(() => {
+    if (!isConnected || !MAPBOX_ACCESS_TOKEN) {
+      setMapSuggestions([]);
+      setMapSuggestionsLoading(false);
+      return;
+    }
+    const q = searchQuery.trim();
+    if (!showLocationSearch || q.length < 2) {
+      setMapSuggestions([]);
+      setMapSuggestionsLoading(false);
+      return;
+    }
+    clearTimeout(mapSearchDebounceRef.current);
+    mapSearchDebounceRef.current = setTimeout(async () => {
+      setMapSuggestionsLoading(true);
+      try {
+        const proximity = userProximityRef.current ?? undefined;
+        const { features } = await forwardGeocode(q, { proximity, limit: 5 });
+        setMapSuggestions(features);
+      } catch {
+        setMapSuggestions([]);
+      } finally {
+        setMapSuggestionsLoading(false);
+      }
+    }, 380);
+    return () => clearTimeout(mapSearchDebounceRef.current);
+  }, [searchQuery, showLocationSearch, isConnected]);
 
   useEffect(() => {
     if (!isConnected) {
@@ -195,9 +254,6 @@ export default function NewTripScreen() {
     }
     setLastAddedLocationId(null);
   }, [lastAddedLocationId, effectiveLocations, isConnected, getLocationById, setLastAddedLocationId]);
-
-  const effectiveLocations = isConnected ? locations : offlineLocations;
-  const getEffectiveLocationById = (id: string) => effectiveLocations.find((l) => l.id === id);
 
   // Pre-select location when opened with locationId param (e.g. deep link)
   useEffect(() => {
@@ -280,8 +336,22 @@ export default function NewTripScreen() {
   }, [topLevelLocations.length]);
 
   const filteredLocations = searchQuery.trim()
-    ? (isConnected ? searchLocations(searchQuery) : effectiveLocations.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase())))
+    ? isConnected
+      ? searchLocations(searchQuery)
+      : filterLocationsByQuery(effectiveLocations, searchQuery)
     : [];
+
+  const getParentLocationName = useCallback(
+    (loc: Location) => {
+      if (!loc.parent_location_id) return null;
+      return (
+        getLocationById(loc.parent_location_id)?.name ??
+        effectiveLocations.find((l) => l.id === loc.parent_location_id)?.name ??
+        null
+      );
+    },
+    [getLocationById, effectiveLocations],
+  );
 
   const findLocationForSuggestion = useCallback((suggestion: SpotSuggestion): Location | undefined => {
     return effectiveLocations.find(l =>
@@ -321,7 +391,15 @@ export default function NewTripScreen() {
     }
     setSaving(true);
     addRecentLocation(selectedLocation.id);
-    const tripId = await planTrip(user.id, selectedLocation.id, 'fly', selectedLocation, plannedDate, sessionType);
+    const tripId = await planTrip(
+      user.id,
+      selectedLocation.id,
+      'fly',
+      selectedLocation,
+      plannedDate,
+      sessionType,
+      null,
+    );
     setSaving(false);
     if (tripId) {
       router.back();
@@ -343,6 +421,28 @@ export default function NewTripScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
+      <StatusBar style="light" />
+      <View style={[styles.planTripHeaderBar, { paddingTop: insets.top }]}>
+        <View style={[styles.planTripHeaderSide, styles.planTripHeaderSideStart]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            onPress={() => router.back()}
+            style={({ pressed }) => ({
+              paddingVertical: Spacing.sm,
+              paddingHorizontal: Spacing.sm,
+              opacity: pressed ? 0.65 : 1,
+            })}
+            hitSlop={12}
+          >
+            <Text style={styles.planTripHeaderBackText}>Back</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.planTripHeaderTitle} numberOfLines={1}>
+          Plan a Trip
+        </Text>
+        <View style={styles.planTripHeaderSide} />
+      </View>
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
@@ -350,7 +450,7 @@ export default function NewTripScreen() {
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       >
-      {/* Session type */}
+      {/* Session type — hidden for now; default remains 'wade' for planTrip.
       <Text style={styles.sectionLabel}>How will you fish?</Text>
       <View style={styles.sessionTypeRow}>
         {(['wade', 'float', 'shore'] as const).map((type) => (
@@ -365,6 +465,7 @@ export default function NewTripScreen() {
           </Pressable>
         ))}
       </View>
+      */}
 
       {/* Date & Time Selection */}
       <View style={styles.dateTimeRow}>
@@ -374,7 +475,9 @@ export default function NewTripScreen() {
             style={styles.dateTimeButton}
             onPress={() => setShowDatePicker(v => !v)}
           >
-            <Text style={styles.dateTimeValue}>{format(plannedDate, 'EEE, MMM d, yyyy')}</Text>
+            <Text style={styles.dateTimeValue} numberOfLines={1}>
+              {format(plannedDate, 'EEE, MMM d')}
+            </Text>
           </Pressable>
         </View>
         <View style={styles.dateTimeColumn}>
@@ -430,6 +533,20 @@ export default function NewTripScreen() {
         </Pressable>
       </Modal>
 
+      <View style={styles.sectionLabelRow}>
+        <Text style={styles.sectionLabel}>Where are you fishing?</Text>
+        {isConnected ? (
+          <Pressable
+            style={({ pressed }) => [styles.useMapButton, pressed && styles.useMapButtonPressed]}
+            onPress={() => router.push('/trip/add-location')}
+            hitSlop={8}
+          >
+            <Ionicons name="map-outline" size={16} color={Colors.primary} />
+            <Text style={styles.useMapButtonText}>Use map</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
       {selectedLocation ? (
         <Pressable
           style={styles.selectedLocation}
@@ -440,7 +557,14 @@ export default function NewTripScreen() {
         >
           <View style={styles.selectedLocationContent}>
             <View style={styles.selectedLocationHeader}>
-              <Text style={styles.selectedLocationName}>{selectedLocation.name}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.selectedLocationName}>{selectedLocation.name}</Text>
+                {getParentLocationName(selectedLocation) ? (
+                  <Text style={styles.sectionSubtitle}>
+                    Section of {getParentLocationName(selectedLocation)}
+                  </Text>
+                ) : null}
+              </View>
               <Text style={styles.changeText}>Change</Text>
             </View>
             {(() => {
@@ -483,7 +607,7 @@ export default function NewTripScreen() {
         <View>
           <TextInput
             style={styles.searchInput}
-            placeholder="Search locations..."
+            placeholder="Search locations…"
             placeholderTextColor={Colors.textTertiary}
             value={searchQuery}
             onChangeText={(text) => {
@@ -512,31 +636,96 @@ export default function NewTripScreen() {
               >
                 {filteredLocations.map((loc) => {
                   const conditions = getConditionsForLocation(loc);
+                  const parentName = getParentLocationName(loc);
                   return (
                     <Pressable
                       key={loc.id}
-                      style={styles.locationItem}
+                      style={({ pressed }) => [
+                        styles.locationListItem,
+                        pressed && styles.locationListItemPressed,
+                      ]}
                       onPress={() => {
-                        setShowLocationSearch(false);
-                        setSearchQuery('');
-                        router.push(`/spot/${loc.id}`);
+                        if (isConnected) {
+                          router.push(`/spot/${loc.id}`);
+                        } else {
+                          setSelectedLocation(loc);
+                          setShowLocationSearch(false);
+                          setSearchQuery('');
+                        }
                       }}
                     >
-                      <View style={styles.locationMain}>
-                        <Text style={styles.locationName}>{loc.name}</Text>
+                      <View style={styles.locationListItemBody}>
+                        <View style={styles.locationMain}>
+                          <Text style={styles.locationName}>{loc.name}</Text>
+                          {parentName ? (
+                            <Text style={styles.sectionSubtitle}>Section of {parentName}</Text>
+                          ) : null}
+                        </View>
+                        {conditions ? <ConditionsRow conditions={conditions} /> : null}
                       </View>
-                      {conditions && <ConditionsRow conditions={conditions} />}
+                      {isConnected ? (
+                        <Ionicons
+                          name="chevron-forward"
+                          size={22}
+                          color={Colors.textTertiary}
+                          style={styles.locationListItemChevron}
+                        />
+                      ) : null}
                     </Pressable>
                   );
                 })}
-                {filteredLocations.length === 0 && !conditionsLoading && (
+                {(mapSuggestionsLoading || mapSuggestions.length > 0) && (
+                  <View style={styles.mapSuggestionsBlock}>
+                    <Text style={styles.mapSuggestionsHeader}>Map suggestions</Text>
+                    {mapSuggestionsLoading ? (
+                      <View style={styles.mapSuggestionsLoadingRow}>
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                        <Text style={styles.conditionsLoadingText}>Searching near you…</Text>
+                      </View>
+                    ) : (
+                      mapSuggestions.map((f) => (
+                        <Pressable
+                          key={f.id}
+                          style={styles.mapSuggestionRow}
+                          onPress={() => {
+                            const [lng, lat] = f.center;
+                            router.push({
+                              pathname: '/trip/add-location',
+                              params: {
+                                presetName: encodeURIComponent(f.place_name),
+                                lat: String(lat),
+                                lng: String(lng),
+                              },
+                            });
+                          }}
+                        >
+                          <Ionicons name="map-outline" size={20} color={Colors.primary} />
+                          <Text style={styles.mapSuggestionText} numberOfLines={3}>
+                            {f.place_name}
+                          </Text>
+                        </Pressable>
+                      ))
+                    )}
+                  </View>
+                )}
+                {filteredLocations.length === 0 &&
+                  !conditionsLoading &&
+                  !mapSuggestionsLoading &&
+                  mapSuggestions.length === 0 && (
                   <View style={styles.noResultsContainer}>
                     <Text style={styles.noResults}>No locations found</Text>
                     <Pressable
                       style={styles.addLocationButton}
-                      onPress={() => router.push('/trip/add-location')}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/trip/add-location',
+                          params: {
+                            presetName: encodeURIComponent(searchQuery.trim()),
+                          },
+                        })
+                      }
                     >
-                      <Text style={styles.addLocationButtonText}>+ Add New Location</Text>
+                      <Text style={styles.addLocationButtonText}>+ Add location</Text>
                     </Pressable>
                   </View>
                 )}
@@ -703,12 +892,123 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.primary,
   },
+  planTripHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2C4670',
+    paddingBottom: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  planTripHeaderSide: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  planTripHeaderSideStart: {
+    alignItems: 'flex-start',
+  },
+  planTripHeaderTitle: {
+    flexShrink: 1,
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  planTripHeaderBackText: {
+    fontSize: FontSize.md,
+    color: '#FFFFFF',
+    fontWeight: '400',
+  },
+  sectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
   sectionLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
     color: Colors.textSecondary,
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.md,
+    flexShrink: 1,
+  },
+  useMapButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+  },
+  useMapButtonPressed: {
+    opacity: 0.65,
+  },
+  useMapButtonText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  sectionSubtitle: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: 2,
+  },
+  mapSuggestionsBlock: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+    paddingTop: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  mapSuggestionsHeader: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  mapSuggestionsLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
+  mapSuggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  mapSuggestionText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.text,
+    fontWeight: '500',
+  },
+  locationListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+    paddingLeft: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingRight: Spacing.sm,
+  },
+  locationListItemPressed: {
+    backgroundColor: Colors.borderLight + '40',
+  },
+  locationListItemBody: {
+    flex: 1,
+    paddingVertical: Spacing.xs,
+    paddingRight: Spacing.sm,
+  },
+  locationListItemChevron: {
+    marginRight: Spacing.xs,
   },
   sessionTypeRow: {
     flexDirection: 'row',
@@ -833,9 +1133,9 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.borderLight,
   },
   locationMain: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 2,
   },
   locationName: {
     fontSize: FontSize.md,

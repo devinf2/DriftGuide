@@ -1,7 +1,14 @@
 export type FishingType = 'fly' | 'bait' | 'spin';
 export type TripStatus = 'active' | 'completed' | 'planned';
 export type EventType = 'fly_change' | 'catch' | 'note' | 'location_move' | 'ai_query' | 'ai_response' | 'bite' | 'got_off' | 'fish_on';
-export type LocationType = 'river' | 'lake' | 'reservoir' | 'stream' | 'pond';
+export type LocationType =
+  | 'river'
+  | 'lake'
+  | 'reservoir'
+  | 'stream'
+  | 'pond'
+  | 'access_point'
+  | 'parking';
 export type LocationStatus = 'verified' | 'community' | 'pending';
 export type FlyType = 'fly' | 'bait' | 'lure';
 
@@ -28,6 +35,20 @@ export interface Profile {
   created_at: string;
 }
 
+export type AccessPointStatus = 'pending' | 'approved';
+
+/** Trailhead / ramp / parking — tied to a location; user submissions start pending. */
+export interface AccessPoint {
+  id: string;
+  location_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  status: AccessPointStatus;
+  created_by: string | null;
+  created_at: string;
+}
+
 export interface Location {
   id: string;
   name: string;
@@ -39,6 +60,8 @@ export interface Location {
   created_by?: string | null;
   status?: LocationStatus;
   usage_count?: number;
+  /** When false, only the creator should see this location (RLS). Default true. */
+  is_public?: boolean | null;
 }
 
 export interface NearbyLocationResult {
@@ -56,6 +79,8 @@ export interface Trip {
   id: string;
   user_id: string;
   location_id: string | null;
+  /** Optional starting access (trailhead, ramp, etc.). */
+  access_point_id?: string | null;
   location?: Location;
   status: TripStatus;
   fishing_type: FishingType;
@@ -166,6 +191,7 @@ export interface CatchRow {
   trip_id: string;
   event_id: string;
   location_id: string | null;
+  access_point_id?: string | null;
   latitude: number | null;
   longitude: number | null;
   timestamp: string;

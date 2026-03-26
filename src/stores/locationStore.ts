@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Location } from '@/src/types';
 import { supabase } from '@/src/services/supabase';
+import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 
 interface LocationState {
   locations: Location[];
@@ -50,10 +51,7 @@ export const useLocationStore = create<LocationState>()(
 
       searchLocations: (query) => {
         const { locations } = get();
-        const lower = query.toLowerCase();
-        return locations.filter(loc =>
-          loc.name.toLowerCase().includes(lower)
-        );
+        return filterLocationsByQuery(locations, query);
       },
 
       getLocationById: (id) => {
