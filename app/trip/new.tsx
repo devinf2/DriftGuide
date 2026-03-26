@@ -429,12 +429,17 @@ export default function NewTripScreen() {
             accessibilityLabel="Go back"
             onPress={() => router.back()}
             style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              marginLeft: 8,
               paddingVertical: Spacing.sm,
-              paddingHorizontal: Spacing.sm,
+              paddingRight: Spacing.sm,
               opacity: pressed ? 0.65 : 1,
             })}
             hitSlop={12}
           >
+            <Ionicons name="chevron-back" size={22} color="#FFFFFF" style={styles.planTripHeaderBackIcon} />
             <Text style={styles.planTripHeaderBackText}>Back</Text>
           </Pressable>
         </View>
@@ -913,6 +918,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
     textAlign: 'center',
+  },
+  planTripHeaderBackIcon: {
+    marginLeft: -4,
   },
   planTripHeaderBackText: {
     fontSize: FontSize.md,
