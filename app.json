@@ -46,8 +46,13 @@
       "typedRoutes": true
     },
     "extra": {
-      "privacyPolicyUrl": "https://yoursite.com/privacy",
-      "supportUrl": "https://yoursite.com/support"
-    }
+      "privacyPolicyUrl": "https://driftguide-web.vercel.app/privacy",
+      "supportUrl": "https://driftguide-web.vercel.app/support",
+      "router": {},
+      "eas": {
+        "projectId": "9a3383b1-f6c2-4153-bd28-0e4b1c5bb0de"
+      }
+    },
+    "owner": "dfree22"
   }
 }
