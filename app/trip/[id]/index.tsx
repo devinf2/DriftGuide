@@ -38,6 +38,7 @@ import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES 
 import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
+import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
 import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
@@ -88,6 +89,10 @@ export default function TripDashboardScreen() {
     resumeTrip, isTripPaused,
     fetchConditions, refreshSmartRecommendation, replaceActiveTripEvents,
   } = useTripStore();
+
+  const locations = useLocationStore((s) => s.locations);
+  const fetchLocations = useLocationStore((s) => s.fetchLocations);
+  const userProxRefForAI = useRef<[number, number] | null>(null);
 
   const [activeTab, setActiveTab] = useState<TabKey>('fish');
   const [elapsed, setElapsed] = useState('0m');
@@ -173,6 +178,25 @@ export default function TripDashboardScreen() {
       getFliesFromCache(activeTrip.user_id).then(setUserFlies);
     }
   }, [activeTrip?.user_id, isConnected]);
+
+  useEffect(() => {
+    if (locations.length === 0) void fetchLocations();
+  }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      try {
+        const loc = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.Balanced,
+        });
+        userProxRefForAI.current = [loc.coords.longitude, loc.coords.latitude];
+      } catch {
+        userProxRefForAI.current = null;
+      }
+    })();
+  }, []);
 
   const loadTripPhotos = useCallback(async () => {
     if (!activeTrip?.id || !activeTrip?.user_id) return;
@@ -517,22 +541,28 @@ export default function TripDashboardScreen() {
     const now = new Date();
     const primaryStr = currentFly ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}${currentFly.color ? ` (${currentFly.color})` : ''}` : null;
     const dropperStr = currentFly2 ? `${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}${currentFly2.color ? ` (${currentFly2.color})` : ''}` : null;
-    const response = await askAI(
-      {
-        location: activeTrip?.location || null,
-        fishingType: activeTrip?.fishing_type || 'fly',
-        weather: weatherData,
-        waterFlow: waterFlowData,
-        currentFly: primaryStr,
-        currentFly2: dropperStr,
-        fishCount,
-        recentEvents: events,
-        timeOfDay: getTimeOfDay(now),
-        season: getSeason(now),
-        userFlies: userFlies.length > 0 ? userFlies : undefined,
-      },
+    const base = {
+      location: activeTrip?.location || null,
+      fishingType: activeTrip?.fishing_type || 'fly',
+      weather: weatherData,
+      waterFlow: waterFlowData,
+      currentFly: primaryStr,
+      currentFly2: dropperStr,
+      fishCount,
+      recentEvents: events,
+      timeOfDay: getTimeOfDay(now),
+      season: getSeason(now),
+      userFlies: userFlies.length > 0 ? userFlies : undefined,
+    };
+    const context = await enrichContextWithLocationCatchData(base, {
       question,
-    );
+      locations,
+      userId: activeTrip?.user_id ?? null,
+      userLat: userProxRefForAI.current?.[1] ?? null,
+      userLng: userProxRefForAI.current?.[0] ?? null,
+      referenceDate: now,
+    });
+    const response = await askAI(context, question);
 
     const aiMsg = { id: (Date.now() + 1).toString(), role: 'ai' as const, text: response };
     setAiMessages(prev => [...prev, aiMsg]);
@@ -541,7 +571,21 @@ export default function TripDashboardScreen() {
     addAIQuery(question, response);
 
     setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
-  }, [aiInput, aiLoading, isTripPaused, activeTrip, weatherData, waterFlowData, currentFly, currentFly2, fishCount, events, userFlies]);
+  }, [
+    aiInput,
+    aiLoading,
+    isTripPaused,
+    activeTrip,
+    weatherData,
+    waterFlowData,
+    currentFly,
+    currentFly2,
+    fishCount,
+    events,
+    userFlies,
+    locations,
+    addAIQuery,
+  ]);
 
   if (!activeTrip) {
     return (

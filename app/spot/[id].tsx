@@ -6,6 +6,7 @@ import {
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
 import { getSpotFishingSummary, getSpotDetailedReport, getSpotHowToFish, askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
@@ -19,13 +20,17 @@ import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import type { BoundingBox } from '@/src/types/boundingBox';
 import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
+import * as ExpoLocation from 'expo-location';
+import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 
 type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
 
 export default function SpotFishingTripScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useAuthStore();
   const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
+  const userProxRef = useRef<[number, number] | null>(null);
 
   const [activeTab, setActiveTab] = useState<SpotTabKey>('overview');
   const [conditions, setConditions] = useState<LocationConditions | null>(null);
@@ -60,6 +65,21 @@ export default function SpotFishingTripScreen() {
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
   }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      try {
+        const loc = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.Balanced,
+        });
+        userProxRef.current = [loc.coords.longitude, loc.coords.latitude];
+      } catch {
+        userProxRef.current = null;
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!id) {
@@ -182,7 +202,8 @@ export default function SpotFishingTripScreen() {
     setAiMessages(prev => [...prev, { id: String(Date.now()), role: 'user', text: q }]);
     setAiLoading(true);
     try {
-      const context = {
+      const now = new Date();
+      const base = {
         location: location as Location,
         fishingType: 'fly' as const,
         weather: weatherData ?? null,
@@ -190,9 +211,17 @@ export default function SpotFishingTripScreen() {
         currentFly: null,
         fishCount: 0,
         recentEvents: [],
-        timeOfDay: getTimeOfDay(new Date()),
-        season: getSeason(new Date()),
+        timeOfDay: getTimeOfDay(now),
+        season: getSeason(now),
       };
+      const context = await enrichContextWithLocationCatchData(base, {
+        question: q,
+        locations,
+        userId: user?.id ?? null,
+        userLat: userProxRef.current?.[1] ?? null,
+        userLng: userProxRef.current?.[0] ?? null,
+        referenceDate: now,
+      });
       const answer = await askAI(context, q);
       setAiMessages(prev => [...prev, { id: String(Date.now() + 1), role: 'ai', text: answer }]);
     } catch {
@@ -200,7 +229,7 @@ export default function SpotFishingTripScreen() {
     } finally {
       setAiLoading(false);
     }
-  }, [aiInput, location, conditions, weatherData, waterFlowData]);
+  }, [aiInput, location, conditions, weatherData, waterFlowData, locations, user?.id]);
 
   const handlePlanTripHere = () => {
     if (id) {

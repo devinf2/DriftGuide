@@ -1,6 +1,7 @@
 import { Colors, LocationTypeColors } from '@/src/constants/theme';
 import type { Location } from '@/src/types';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
+import { isLocationActive } from '@/src/utils/locationVisibility';
 
 export type CatalogMapMarker = {
   id: string;
@@ -28,6 +29,7 @@ export function catalogLocationMarkersInViewport(
   if (!dataViewport) return [];
   const markers: CatalogMapMarker[] = [];
   for (const loc of locations) {
+    if (!isLocationActive(loc)) continue;
     if (excludeLocationId && loc.id === excludeLocationId) continue;
     const la = loc.latitude;
     const ln = loc.longitude;

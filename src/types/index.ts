@@ -62,6 +62,9 @@ export interface Location {
   usage_count?: number;
   /** When false, only the creator should see this location (RLS). Default true. */
   is_public?: boolean | null;
+  /** Soft delete — null means active. Omitted on normal reads (RLS hides deleted rows). */
+  deleted_at?: string | null;
+  deleted_by?: string | null;
 }
 
 export interface NearbyLocationResult {

@@ -12,8 +12,8 @@ export interface Message {
 }
 
 export interface GuideChatProps {
-  /** Called before each message to get current AI context (e.g. trip planning vs live trip). */
-  getContext: () => Promise<AIContext>;
+  /** Called before each AI reply. `question` is the message just sent (used to match catalog waters + catch logs). */
+  getContext: (opts: { question: string }) => Promise<AIContext>;
   /** For modal: show header with close button. */
   variant?: 'full' | 'modal';
   /** Modal only: close callback. */
@@ -68,7 +68,7 @@ export default function GuideChat({
     setLoading(true);
 
     try {
-      const context = await getContext();
+      const context = await getContext({ question });
       const response = await askAI(context, question);
 
       const aiMsg: Message = {

@@ -7,6 +7,7 @@ import { useLocationStore } from '@/src/stores/locationStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { downloadWaterway } from '@/src/services/waterwayCache';
 import type { Location } from '@/src/types';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function DownloadWaterwayScreen() {
@@ -25,7 +26,7 @@ export default function DownloadWaterwayScreen() {
     }
   }, [isConnected, fetchLocations]);
 
-  const topLevelLocations = locations.filter((l) => !l.parent_location_id);
+  const topLevelLocations = activeLocationsOnly(locations).filter((l) => !l.parent_location_id);
 
   const handleDownload = async (loc: Location) => {
     if (!isConnected) {

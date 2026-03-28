@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -8,6 +9,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Modal,
@@ -15,6 +17,7 @@ import {
   Switch,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
@@ -22,10 +25,11 @@ import { Colors, Spacing, FontSize, BorderRadius, LocationTypeColors } from '@/s
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
-import { Location, LocationType } from '@/src/types';
-import { addCommunityLocation } from '@/src/services/locationService';
+import { Location, LocationType, NearbyLocationResult } from '@/src/types';
+import { addCommunityLocation, searchNearbyRootParentCandidates } from '@/src/services/locationService';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import { MapZoomControls } from '@/src/components/map/MapZoomControls';
 import { zoomMapRegion } from '@/src/components/map/mapZoom';
 
@@ -47,7 +51,8 @@ const LOCATION_TYPE_OPTIONS: { value: LocationType; label: string }[] = [
   { value: 'parking', label: 'Parking' },
 ];
 
-function typeLabel(t: LocationType): string {
+function typeLabel(t: LocationType | null): string {
+  if (t == null) return 'Select type';
   return LOCATION_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
 }
 
@@ -76,7 +81,14 @@ function catalogMarkerIcon(type: LocationType): keyof typeof Ionicons.glyphMap {
   return 'location';
 }
 
+function formatProximityKm(km: number): string {
+  if (!Number.isFinite(km) || km < 0) return '';
+  if (km < 1) return `${Math.round(km * 1000)} m away`;
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km away`;
+}
+
 export default function AddLocationScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
   const presetLat = parseCoordParam(params.lat);
@@ -102,10 +114,13 @@ export default function AddLocationScreen() {
   const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [mapSuggestions, setMapSuggestions] = useState<MapboxGeocodeFeature[]>([]);
   const [mapSuggestionsLoading, setMapSuggestionsLoading] = useState(false);
-  const [locationType, setLocationType] = useState<LocationType>('stream');
+  const [locationType, setLocationType] = useState<LocationType | null>(null);
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [isPublic, setIsPublic] = useState(true);
-  const [saving, setSaving] = useState(false);
+  /** Full-screen picker: opens immediately on Add tap, then loads candidates (works above MapView on iOS/Android). */
+  const [parentPickerPhase, setParentPickerPhase] = useState<'idle' | 'loading' | 'choose'>('idle');
+  const [parentPickerCandidates, setParentPickerCandidates] = useState<NearbyLocationResult[]>([]);
+  const [parentLinkSaving, setParentLinkSaving] = useState(false);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchText(text);
@@ -114,9 +129,11 @@ export default function AddLocationScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    if (locations.length === 0) fetchLocations();
-  }, [locations.length, fetchLocations]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchLocations();
+    }, [fetchLocations]),
+  );
 
   useEffect(() => {
     const raw = params.presetName;
@@ -228,7 +245,9 @@ export default function AddLocationScreen() {
   }, [searchText, searchInputFocused]);
 
   const savedLocationMatches =
-    searchText.trim().length >= 2 ? filterLocationsByQuery(locations, searchText) : [];
+    searchText.trim().length >= 2
+      ? filterLocationsByQuery(activeLocationsOnly(locations), searchText)
+      : [];
 
   const showSearchSuggestions =
     searchInputFocused &&
@@ -237,7 +256,7 @@ export default function AddLocationScreen() {
 
   const mapCatalogLocations = useMemo(
     () =>
-      locations.filter(
+      activeLocationsOnly(locations).filter(
         (l) =>
           l.latitude != null &&
           l.longitude != null &&
@@ -310,8 +329,66 @@ export default function AddLocationScreen() {
     </Pressable>
   );
 
-  const handleSave = useCallback(async () => {
-    if (!name.trim() || !user) return;
+  const commitNewLocation = useCallback(
+    async (parentLocationId: string | null) => {
+      if (!user || locationType == null) return;
+      setParentLinkSaving(true);
+      try {
+        const newLoc = await addCommunityLocation(
+          name.trim(),
+          locationType,
+          pin.latitude,
+          pin.longitude,
+          user.id,
+          isPublic,
+          parentLocationId,
+        );
+        if (newLoc) {
+          await fetchLocations();
+          setLastAddedLocationId(newLoc.id);
+          setParentPickerPhase('idle');
+          setParentPickerCandidates([]);
+          router.replace(`/spot/${newLoc.id}`);
+        } else {
+          Alert.alert(
+            'Could not add location',
+            'Check your connection. If you still see this, apply the latest Supabase migrations for this app (your database may be missing columns such as locations.created_by).',
+          );
+        }
+      } catch {
+        Alert.alert('Could not add location', 'Something went wrong. Try again when you have a stable connection.');
+      } finally {
+        setParentPickerPhase('idle');
+        setParentPickerCandidates([]);
+        setParentLinkSaving(false);
+      }
+    },
+    [
+      user,
+      locationType,
+      name,
+      pin.latitude,
+      pin.longitude,
+      isPublic,
+      fetchLocations,
+      setLastAddedLocationId,
+      router,
+    ],
+  );
+
+  const handleAddLocationPress = useCallback(() => {
+    if (!name.trim()) {
+      Alert.alert('Name needed', 'Enter a name for this location.');
+      return;
+    }
+    if (!user) {
+      Alert.alert('Sign in required', 'Sign in to add a location.');
+      return;
+    }
+    if (locationType == null) {
+      Alert.alert('Location type', 'Choose a type for this location before adding it.');
+      return;
+    }
     if (!Number.isFinite(pin.latitude) || !Number.isFinite(pin.longitude)) {
       Alert.alert(
         'Pin location needed',
@@ -320,48 +397,39 @@ export default function AddLocationScreen() {
       return;
     }
 
-    setSaving(true);
-    try {
-      const newLoc = await addCommunityLocation(
-        name.trim(),
-        locationType,
-        pin.latitude,
-        pin.longitude,
-        user.id,
-        isPublic,
-      );
+    Keyboard.dismiss();
+    setParentPickerPhase('loading');
+    setParentPickerCandidates([]);
 
-      if (newLoc) {
-        await fetchLocations();
-        setLastAddedLocationId(newLoc.id);
-        router.replace(`/spot/${newLoc.id}`);
-      } else {
-        Alert.alert(
-          'Could not add location',
-          'Check your connection. If you still see this, apply the latest Supabase migrations for this app (your database may be missing columns such as locations.created_by).',
-        );
-      }
-    } catch {
-      Alert.alert('Could not add location', 'Something went wrong. Try again when you have a stable connection.');
-    } finally {
-      setSaving(false);
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          const candidates = await searchNearbyRootParentCandidates(pin.latitude, pin.longitude);
+          setParentPickerCandidates(candidates);
+          setParentPickerPhase('choose');
+        } catch {
+          setParentPickerPhase('idle');
+          setParentPickerCandidates([]);
+          Alert.alert('Could not continue', 'Something went wrong loading suggestions. Try again.');
+        }
+      })();
+    });
+  }, [name, locationType, pin.latitude, pin.longitude, user]);
+
+  const closeParentPickerWithoutSaving = useCallback(() => {
+    if (!parentLinkSaving) {
+      setParentPickerPhase('idle');
+      setParentPickerCandidates([]);
     }
-  }, [
-    name,
-    locationType,
-    pin.latitude,
-    pin.longitude,
-    user,
-    isPublic,
-    fetchLocations,
-    setLastAddedLocationId,
-    router,
-  ]);
+  }, [parentLinkSaving]);
 
   const coordsOk = Number.isFinite(pin.latitude) && Number.isFinite(pin.longitude);
-  const canSave = name.trim().length > 0 && coordsOk;
+  const canSave = name.trim().length > 0 && coordsOk && locationType != null;
+  const parentPickerOpen = parentPickerPhase !== 'idle' || parentLinkSaving;
+  const addLocationBlocked = !canSave || parentPickerOpen;
 
   return (
+    <>
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -419,7 +487,10 @@ export default function AddLocationScreen() {
           ) : null}
         </View>
 
-        <View style={styles.mapContainer}>
+        <View
+          style={styles.mapContainer}
+          pointerEvents={parentPickerOpen ? 'none' : 'auto'}
+        >
           <MapView
             ref={mapRef}
             style={styles.map}
@@ -488,7 +559,13 @@ export default function AddLocationScreen() {
               <View style={styles.typeCol}>
                 <Text style={styles.fieldLabelCompact}>Type</Text>
                 <Pressable style={styles.dropdownCompact} onPress={() => setTypePickerOpen(true)}>
-                  <Text style={styles.dropdownTextCompact} numberOfLines={1}>
+                  <Text
+                    style={[
+                      styles.dropdownTextCompact,
+                      locationType == null && styles.dropdownPlaceholderCompact,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {typeLabel(locationType)}
                   </Text>
                   <Text style={styles.dropdownChevronCompact}>▾</Text>
@@ -513,11 +590,11 @@ export default function AddLocationScreen() {
             </View>
 
             <Pressable
-              style={[styles.saveButton, (!canSave || saving) && styles.saveButtonDisabled]}
-              onPress={handleSave}
-              disabled={!canSave || saving}
+              style={[styles.saveButton, addLocationBlocked && styles.saveButtonDisabled]}
+              onPress={handleAddLocationPress}
+              disabled={addLocationBlocked}
             >
-              {saving ? (
+              {parentPickerPhase === 'loading' ? (
                 <ActivityIndicator color={Colors.textInverse} />
               ) : (
                 <Text style={styles.saveButtonText}>Add location</Text>
@@ -526,43 +603,110 @@ export default function AddLocationScreen() {
           </ScrollView>
         </View>
       </View>
-
-      <Modal
-        visible={typePickerOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setTypePickerOpen(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setTypePickerOpen(false)}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Location type</Text>
-            {LOCATION_TYPE_OPTIONS.map((opt) => (
-              <TouchableOpacity
-                key={opt.value}
-                style={[styles.modalOption, locationType === opt.value && styles.modalOptionActive]}
-                onPress={() => {
-                  setLocationType(opt.value);
-                  setTypePickerOpen(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.modalOptionText,
-                    locationType === opt.value && styles.modalOptionTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </KeyboardAvoidingView>
+
+    <Modal
+      visible={typePickerOpen}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setTypePickerOpen(false)}
+    >
+      <TouchableOpacity
+        style={styles.modalBackdrop}
+        activeOpacity={1}
+        onPress={() => setTypePickerOpen(false)}
+      >
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Location type</Text>
+          {LOCATION_TYPE_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.value}
+              style={[styles.modalOption, locationType === opt.value && styles.modalOptionActive]}
+              onPress={() => {
+                setLocationType(opt.value);
+                setTypePickerOpen(false);
+              }}
+            >
+              <Text
+                style={[
+                  styles.modalOptionText,
+                  locationType != null && locationType === opt.value && styles.modalOptionTextActive,
+                ]}
+              >
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </TouchableOpacity>
+    </Modal>
+
+    <Modal
+      visible={parentPickerOpen}
+      transparent={false}
+      animationType="fade"
+      statusBarTranslucent
+      presentationStyle="fullScreen"
+      onRequestClose={closeParentPickerWithoutSaving}
+    >
+      <View style={[styles.parentPickerFullScreen, { paddingTop: insets.top + Spacing.md, paddingBottom: insets.bottom + Spacing.md }]}>
+        <Text style={styles.parentPickerTitle}>Part of an existing place?</Text>
+        {parentPickerPhase === 'loading' && !parentLinkSaving ? (
+          <View style={styles.parentLinkSavingWrap}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+            <Text style={styles.parentLinkModalSubtitle}>
+              Checking your pin against main locations in DriftGuide…
+            </Text>
+          </View>
+        ) : null}
+        {parentPickerPhase === 'choose' && !parentLinkSaving ? (
+          <ScrollView
+            style={styles.parentPickerScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.parentLinkModalSubtitle}>
+              Nothing is saved yet. If this spot belongs inside a larger waterbody we already have, choose it.
+              Otherwise save it as its own place.
+            </Text>
+            {parentPickerCandidates.length > 0 ? (
+              parentPickerCandidates.map((c) => (
+                <Pressable
+                  key={c.id}
+                  style={styles.parentLinkOption}
+                  onPress={() => commitNewLocation(c.id)}
+                >
+                  <View style={styles.parentLinkOptionText}>
+                    <Text style={styles.parentLinkOptionName} numberOfLines={2}>
+                      Part of {c.name}
+                    </Text>
+                    <Text style={styles.parentLinkOptionMeta}>{formatProximityKm(c.distance_km)}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
+                </Pressable>
+              ))
+            ) : (
+              <Text style={styles.parentPickerEmptyNote}>
+                No other main locations matched for linking. You can still save this as a new standalone place.
+              </Text>
+            )}
+            <Pressable style={styles.parentLinkDecline} onPress={() => commitNewLocation(null)}>
+              <Text style={styles.parentLinkDeclineText}>No — save as its own place</Text>
+            </Pressable>
+            <Pressable style={styles.parentLinkCancel} onPress={closeParentPickerWithoutSaving}>
+              <Text style={styles.parentLinkCancelText}>Cancel</Text>
+            </Pressable>
+          </ScrollView>
+        ) : null}
+        {parentLinkSaving ? (
+          <View style={styles.parentPickerSavingOverlay}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+            <Text style={styles.parentLinkModalSubtitle}>Saving your location…</Text>
+          </View>
+        ) : null}
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -756,6 +900,10 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 2,
   },
+  dropdownPlaceholderCompact: {
+    color: Colors.textTertiary,
+    fontWeight: '500',
+  },
   dropdownChevronCompact: {
     fontSize: 11,
     color: Colors.textSecondary,
@@ -824,5 +972,109 @@ const styles = StyleSheet.create({
     color: Colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
+  },
+  parentLinkModalCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    maxHeight: '88%',
+  },
+  parentLinkModalSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: Spacing.md,
+  },
+  parentLinkOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: Spacing.sm,
+  },
+  parentLinkOptionText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  parentLinkOptionName: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  parentLinkOptionMeta: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: 2,
+  },
+  parentLinkDecline: {
+    marginTop: Spacing.sm,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    borderRadius: BorderRadius.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  parentLinkDeclineText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  parentLinkContinue: {
+    marginTop: Spacing.md,
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+  },
+  parentLinkContinueText: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.textInverse,
+  },
+  parentLinkCancel: {
+    marginTop: Spacing.md,
+    paddingVertical: Spacing.sm,
+    alignItems: 'center',
+  },
+  parentLinkCancelText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.textTertiary,
+  },
+  parentLinkSavingWrap: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xl,
+    gap: Spacing.md,
+  },
+  parentPickerFullScreen: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.lg,
+  },
+  parentPickerTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+    marginBottom: Spacing.md,
+  },
+  parentPickerScroll: {
+    flex: 1,
+  },
+  parentPickerEmptyNote: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: Spacing.md,
+  },
+  parentPickerSavingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: Colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: Spacing.md,
   },
 });

@@ -71,6 +71,7 @@ async function clientSideNearbySearch(
   const { data } = await supabase
     .from('locations')
     .select('*')
+    .is('deleted_at', null)
     .not('latitude', 'is', null)
     .not('longitude', 'is', null);
 
@@ -92,6 +93,129 @@ async function clientSideNearbySearch(
     .slice(0, 10);
 }
 
+/** First pass: only ask about reasonably nearby main locations. */
+const PARENT_LINK_PROXIMAL_RADIUS_KM = 250;
+/** Second pass: if none nearby, still offer the closest main locations anywhere (user picks “No” if irrelevant). */
+const PARENT_LINK_GLOBAL_RADIUS_KM = 20015;
+
+async function fetchRootParentCandidatesForRadius(
+  lat: number,
+  lng: number,
+  excludeLocationId: string | null,
+  radiusKm: number,
+): Promise<NearbyLocationResult[]> {
+  try {
+    const { data, error } = await supabase.rpc('search_nearby_root_locations', {
+      search_lat: lat,
+      search_lng: lng,
+      exclude_location_id: excludeLocationId,
+      radius_km: radiusKm,
+    });
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      return data as NearbyLocationResult[];
+    }
+    if (error) {
+      console.warn('search_nearby_root_locations RPC failed, using client search:', error.message);
+    }
+  } catch (e) {
+    console.warn('search_nearby_root_locations RPC threw:', e);
+  }
+
+  return clientSideRootParentSearch(lat, lng, excludeLocationId, radiusKm);
+}
+
+/**
+ * Top-level locations (no parent) nearest to a point. Pass `excludeLocationId` to omit one row (e.g. just created).
+ * Tries RPC, then client Haversine. If nothing is within `proximalRadiusKm`, falls back to global nearest roots.
+ */
+export async function searchNearbyRootParentCandidates(
+  lat: number,
+  lng: number,
+  excludeLocationId?: string | null,
+  proximalRadiusKm: number = PARENT_LINK_PROXIMAL_RADIUS_KM,
+): Promise<NearbyLocationResult[]> {
+  const exclude = excludeLocationId ?? null;
+  let rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, proximalRadiusKm);
+  if (rows.length === 0) {
+    rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, PARENT_LINK_GLOBAL_RADIUS_KM);
+  }
+  return rows.slice(0, 3);
+}
+
+async function clientSideRootParentSearch(
+  lat: number,
+  lng: number,
+  excludeLocationId: string | null,
+  radiusKm: number,
+): Promise<NearbyLocationResult[]> {
+  let q = supabase
+    .from('locations')
+    .select('*')
+    .is('deleted_at', null)
+    .is('parent_location_id', null)
+    .not('latitude', 'is', null)
+    .not('longitude', 'is', null);
+
+  if (excludeLocationId) {
+    q = q.neq('id', excludeLocationId);
+  }
+
+  const { data } = await q;
+
+  if (!data) return [];
+
+  return (data as Location[])
+    .map(loc => ({
+      id: loc.id,
+      name: loc.name,
+      type: loc.type,
+      latitude: loc.latitude!,
+      longitude: loc.longitude!,
+      status: loc.status || 'verified',
+      distance_km: haversineDistance(lat, lng, loc.latitude!, loc.longitude!),
+      name_similarity: 0,
+    }))
+    .filter(loc => loc.distance_km <= radiusKm)
+    .sort((a, b) => a.distance_km - b.distance_km)
+    .slice(0, 3);
+}
+
+/** Soft-delete a location the current user created (sets deleted_at / deleted_by). */
+export async function softDeleteCommunityLocation(locationId: string): Promise<boolean> {
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (userErr || !uid) return false;
+
+  const { error } = await supabase
+    .from('locations')
+    .update({ deleted_at: new Date().toISOString(), deleted_by: uid })
+    .eq('id', locationId)
+    .eq('created_by', uid)
+    .is('deleted_at', null);
+
+  if (error) {
+    console.error('softDeleteCommunityLocation:', error);
+    return false;
+  }
+  return true;
+}
+
+/** Set parent for a location row (RLS: typically only rows the user created). */
+export async function setLocationParent(childId: string, parentId: string | null): Promise<boolean> {
+  const { error } = await supabase
+    .from('locations')
+    .update({ parent_location_id: parentId })
+    .eq('id', childId)
+    .is('deleted_at', null);
+
+  if (error) {
+    console.error('setLocationParent:', error);
+    return false;
+  }
+  return true;
+}
+
 export async function addCommunityLocation(
   name: string,
   type: LocationType,
@@ -99,6 +223,7 @@ export async function addCommunityLocation(
   longitude: number,
   userId: string,
   isPublic: boolean = true,
+  parentLocationId?: string | null,
 ): Promise<Location | null> {
   const lat = Number(latitude);
   const lng = Number(longitude);
@@ -119,6 +244,7 @@ export async function addCommunityLocation(
       usage_count: 0,
       metadata: {},
       is_public: isPublic,
+      parent_location_id: parentLocationId ?? null,
     })
     .select()
     .single();

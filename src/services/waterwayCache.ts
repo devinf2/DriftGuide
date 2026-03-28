@@ -3,6 +3,7 @@ import { Location, WeatherData, WaterFlowData, CommunityCatchRow, ConditionsSnap
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { supabase } from '@/src/services/supabase';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 
 const DOWNLOADED_WATERWAYS_KEY = 'downloaded_waterways';
 
@@ -215,7 +216,7 @@ export async function getLocationsForOfflineStart(): Promise<Location[]> {
       }
     }
   }
-  return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return activeLocationsOnly(out).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
 /** Community catches and conditions for a downloaded waterway (for offline AI recommendations). */

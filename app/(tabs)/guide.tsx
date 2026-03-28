@@ -1,38 +1,73 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ExpoLocation from 'expo-location';
 import GuideChat from '@/src/components/GuideChat';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationStore } from '@/src/stores/locationStore';
 import { getSeason, getTimeOfDay } from '@/src/services/ai';
 import { fetchFlies } from '@/src/services/flyService';
+import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import type { AIContext } from '@/src/services/ai';
 
 export default function GuideScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
+  const { locations, fetchLocations } = useLocationStore();
+  const userProxRef = useRef<[number, number] | null>(null);
 
-  const getContext = useCallback(async (): Promise<AIContext> => {
-    const now = new Date();
-    let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
-    if (user?.id) {
+  useEffect(() => {
+    if (locations.length === 0) fetchLocations();
+  }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
       try {
-        userFlies = await fetchFlies(user.id);
+        const loc = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.Balanced,
+        });
+        userProxRef.current = [loc.coords.longitude, loc.coords.latitude];
       } catch {
-        // non-blocking
+        userProxRef.current = null;
       }
-    }
-    return {
-      location: null,
-      fishingType: 'fly',
-      weather: null,
-      waterFlow: null,
-      currentFly: null,
-      fishCount: 0,
-      recentEvents: [],
-      timeOfDay: getTimeOfDay(now),
-      season: getSeason(now),
-      userFlies: userFlies.length > 0 ? userFlies : null,
-    };
-  }, [user?.id]);
+    })();
+  }, []);
+
+  const getContext = useCallback(
+    async ({ question }: { question: string }): Promise<AIContext> => {
+      const now = new Date();
+      let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
+      if (user?.id) {
+        try {
+          userFlies = await fetchFlies(user.id);
+        } catch {
+          // non-blocking
+        }
+      }
+      const base: AIContext = {
+        location: null,
+        fishingType: 'fly',
+        weather: null,
+        waterFlow: null,
+        currentFly: null,
+        fishCount: 0,
+        recentEvents: [],
+        timeOfDay: getTimeOfDay(now),
+        season: getSeason(now),
+        userFlies: userFlies.length > 0 ? userFlies : null,
+      };
+      return enrichContextWithLocationCatchData(base, {
+        question,
+        locations,
+        userId: user?.id ?? null,
+        userLat: userProxRef.current?.[1] ?? null,
+        userLng: userProxRef.current?.[0] ?? null,
+        referenceDate: now,
+      });
+    },
+    [user?.id, locations],
+  );
 
   return (
     <GuideChat

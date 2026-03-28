@@ -18,7 +18,9 @@ import * as ExpoLocation from 'expo-location';
 import { fetchAllLocationConditions } from '@/src/services/conditions';
 import { getWeatherIconName } from '@/src/services/conditions';
 import { getTopFishingSpots, getSeason, getTimeOfDay, type SpotSuggestion } from '@/src/services/ai';
+import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { haversineDistance } from '@/src/services/locationService';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import { fetchFlies } from '@/src/services/flyService';
 import GuideChat from '@/src/components/GuideChat';
 import type { AIContext } from '@/src/services/ai';
@@ -165,28 +167,39 @@ export default function NewTripScreen() {
   const effectiveLocations = isConnected ? locations : offlineLocations;
   const getEffectiveLocationById = (id: string) => effectiveLocations.find((l) => l.id === id);
 
-  const getGuideContext = useCallback(async (): Promise<AIContext> => {
-    let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
-    if (user?.id) {
-      try {
-        userFlies = await fetchFlies(user.id);
-      } catch {
-        // non-blocking
+  const getGuideContext = useCallback(
+    async ({ question }: { question: string }): Promise<AIContext> => {
+      let userFlies: Awaited<ReturnType<typeof fetchFlies>> = [];
+      if (user?.id) {
+        try {
+          userFlies = await fetchFlies(user.id);
+        } catch {
+          // non-blocking
+        }
       }
-    }
-    return {
-      location: selectedLocation ?? null,
-      fishingType: 'fly',
-      weather: null,
-      waterFlow: null,
-      currentFly: null,
-      fishCount: 0,
-      recentEvents: [],
-      timeOfDay: getTimeOfDay(plannedDate),
-      season: getSeason(plannedDate),
-      userFlies: userFlies.length > 0 ? userFlies : null,
-    };
-  }, [user?.id, selectedLocation, plannedDate]);
+      const base: AIContext = {
+        location: selectedLocation ?? null,
+        fishingType: 'fly',
+        weather: null,
+        waterFlow: null,
+        currentFly: null,
+        fishCount: 0,
+        recentEvents: [],
+        timeOfDay: getTimeOfDay(plannedDate),
+        season: getSeason(plannedDate),
+        userFlies: userFlies.length > 0 ? userFlies : null,
+      };
+      return enrichContextWithLocationCatchData(base, {
+        question,
+        locations: effectiveLocations,
+        userId: user?.id ?? null,
+        userLat: userProximityRef.current?.[1] ?? null,
+        userLng: userProximityRef.current?.[0] ?? null,
+        referenceDate: plannedDate,
+      });
+    },
+    [user?.id, selectedLocation, plannedDate, effectiveLocations],
+  );
 
   useEffect(() => {
     if (isConnected && locations.length === 0) fetchLocations();
@@ -283,7 +296,9 @@ export default function NewTripScreen() {
     }, [pendingPlanTripLocationId, setPendingPlanTripLocationId, getLocationById, effectiveLocations])
   );
 
-  const topLevelLocations = isConnected ? locations.filter(l => !l.parent_location_id) : offlineLocations;
+  const topLevelLocations = activeLocationsOnly(isConnected ? locations : offlineLocations).filter(
+    (l) => !l.parent_location_id,
+  );
 
   // Use this location's conditions, or its parent's when it's a child (we only fetch for top-level)
   const getConditionsForLocation = useCallback((loc: Location) => {

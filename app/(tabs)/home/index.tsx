@@ -22,6 +22,7 @@ import {
 import { fetchAllLocationConditions, getDriftGuideScore } from '@/src/services/conditions';
 import { fetchPhotos } from '@/src/services/photoService';
 import { haversineDistance } from '@/src/services/locationService';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import { getLocationSuccessSummary } from '@/src/services/locationSuccess';
 import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 
@@ -180,7 +181,7 @@ export default function HomeScreen() {
       fetchLocations();
       return;
     }
-    const topLevel = locations.filter((l) => !l.parent_location_id);
+    const topLevel = activeLocationsOnly(locations).filter((l) => !l.parent_location_id);
     if (topLevel.length === 0) {
       setHotSpotList([]);
       setHotSpotLoading(false);

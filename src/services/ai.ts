@@ -20,6 +20,11 @@ export interface AIContext {
   season: string;
   /** User's fly box — prefer recommending from these when appropriate */
   userFlies?: Fly[] | null;
+  /**
+   * DriftGuide DB context: matched catalog waters + community & user catch aggregates.
+   * Injected by enrichContextWithLocationCatchData before askAI when the user sends a chat message.
+   */
+  guideLocationCatchSummary?: string | null;
 }
 
 function getSeason(date: Date): string {
@@ -113,6 +118,14 @@ function buildPrompt(context: AIContext, question: string): string {
   if (context.recentEvents.length > 0) {
     lines.push('', '--- Trip History ---');
     lines.push(buildTripSummary(context.recentEvents));
+  }
+
+  if (context.guideLocationCatchSummary?.trim()) {
+    lines.push(
+      '',
+      '--- DriftGuide database (catalog waters + catch logs; use for comparisons and trends) ---',
+      context.guideLocationCatchSummary.trim(),
+    );
   }
 
   lines.push('', `Angler's question: ${question}`, '', 'Provide practical advice in 2-4 sentences.');
@@ -209,7 +222,11 @@ export async function askAI(context: AIContext, question: string): Promise<strin
       body: JSON.stringify({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'You are an expert fishing guide. Give concise, practical advice. Use the full trip context and conditions provided to tailor your response.' },
+          {
+            role: 'system',
+            content:
+              'You are an expert fishing guide. Give concise, practical advice. Use the full trip context and conditions provided. When a "DriftGuide database" section lists catch counts by location, treat those as real aggregated logs from this app—cite them when comparing waters or times; if counts are zero or low, say data is limited.',
+          },
           { role: 'user', content: buildPrompt(context, question) },
         ],
         max_tokens: 300,
