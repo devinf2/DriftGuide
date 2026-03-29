@@ -18,10 +18,10 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
-import { Colors, Spacing, FontSize, BorderRadius, LocationTypeColors } from '@/src/constants/theme';
+import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -30,15 +30,9 @@ import { addCommunityLocation, searchNearbyRootParentCandidates } from '@/src/se
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
-import { MapZoomControls } from '@/src/components/map/MapZoomControls';
-import { zoomMapRegion } from '@/src/components/map/mapZoom';
-
-const UTAH_CENTER: Region = {
-  latitude: 40.7608,
-  longitude: -111.8910,
-  latitudeDelta: 0.25,
-  longitudeDelta: 0.25,
-};
+import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
+import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
+import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 
 /** All values must match Postgres `location_type` enum (see migrations). */
 const LOCATION_TYPE_OPTIONS: { value: LocationType; label: string }[] = [
@@ -70,17 +64,6 @@ function parseCoordParam(s: string | undefined): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function isWaterwayType(t: LocationType): boolean {
-  return t === 'river' || t === 'stream' || t === 'lake' || t === 'reservoir' || t === 'pond';
-}
-
-function catalogMarkerIcon(type: LocationType): keyof typeof Ionicons.glyphMap {
-  if (isWaterwayType(type)) return 'water';
-  if (type === 'parking') return 'car-outline';
-  if (type === 'access_point') return 'walk-outline';
-  return 'location';
-}
-
 function formatProximityKm(km: number): string {
   if (!Number.isFinite(km) || km < 0) return '';
   if (km < 1) return `${Math.round(km * 1000)} m away`;
@@ -97,18 +80,18 @@ export default function AddLocationScreen() {
   const { user } = useAuthStore();
   const { fetchLocations, setLastAddedLocationId, locations } = useLocationStore();
 
-  const mapRef = useRef<MapView>(null);
-  const mapRegionRef = useRef<Region>(UTAH_CENTER);
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const userProximityRef = useRef<[number, number] | null>(null);
   /** When true, search bar changes no longer overwrite the Name field. */
   const nameUserEditedRef = useRef(false);
 
   const [pin, setPin] = useState<{ latitude: number; longitude: number }>({
-    latitude: UTAH_CENTER.latitude,
-    longitude: UTAH_CENTER.longitude,
+    latitude: DEFAULT_MAP_CENTER[1],
+    longitude: DEFAULT_MAP_CENTER[0],
   });
-  const [initialRegion, setInitialRegion] = useState<Region>(UTAH_CENTER);
+  const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_MAP_CENTER);
+  const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [cameraNonce, setCameraNonce] = useState(0);
   const [searchText, setSearchText] = useState('');
   const [name, setName] = useState('');
   const [searchInputFocused, setSearchInputFocused] = useState(false);
@@ -150,10 +133,6 @@ export default function AddLocationScreen() {
     setName(firstPartOfSearch(decoded));
   }, [params.presetName]);
 
-  useEffect(() => {
-    mapRegionRef.current = initialRegion;
-  }, [initialRegion]);
-
   /** Bias Mapbox search near the user (does not move the map when preset coords are provided). */
   useEffect(() => {
     (async () => {
@@ -170,22 +149,14 @@ export default function AddLocationScreen() {
     })();
   }, []);
 
-  /** Initial map center: preset from plan-trip map suggestion, else user GPS, else Utah default. */
+  /** Initial map: preset from plan-trip suggestion, else user GPS, else regional default (Mapbox). */
   useEffect(() => {
     if (hasPresetMapCoords) {
-      const region: Region = {
-        latitude: presetLat,
-        longitude: presetLng,
-        latitudeDelta: 0.12,
-        longitudeDelta: 0.12,
-      };
-      setInitialRegion(region);
+      setMapCenter([presetLng, presetLat]);
+      setMapZoom(USER_LOCATION_ZOOM);
       setPin({ latitude: presetLat, longitude: presetLng });
-      mapRegionRef.current = region;
-      const id = setTimeout(() => {
-        mapRef.current?.animateToRegion(region, 600);
-      }, 100);
-      return () => clearTimeout(id);
+      setCameraNonce((n) => n + 1);
+      return;
     }
 
     let cancelled = false;
@@ -197,18 +168,13 @@ export default function AddLocationScreen() {
           accuracy: ExpoLocation.Accuracy.Balanced,
         });
         if (cancelled) return;
-        const region: Region = {
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-          latitudeDelta: 0.12,
-          longitudeDelta: 0.12,
-        };
-        setInitialRegion(region);
-        setPin({ latitude: region.latitude, longitude: region.longitude });
-        mapRegionRef.current = region;
-        mapRef.current?.animateToRegion(region, 600);
+        const { latitude, longitude } = loc.coords;
+        setMapCenter([longitude, latitude]);
+        setMapZoom(USER_LOCATION_ZOOM);
+        setPin({ latitude, longitude });
+        setCameraNonce((n) => n + 1);
       } catch {
-        /* keep Utah default from initial state */
+        /* keep DEFAULT_MAP_CENTER */
       }
     })();
     return () => {
@@ -254,32 +220,9 @@ export default function AddLocationScreen() {
     searchText.trim().length >= 2 &&
     (mapSuggestionsLoading || mapSuggestions.length > 0 || savedLocationMatches.length > 0);
 
-  const mapCatalogLocations = useMemo(
-    () =>
-      activeLocationsOnly(locations).filter(
-        (l) =>
-          l.latitude != null &&
-          l.longitude != null &&
-          Number.isFinite(l.latitude) &&
-          Number.isFinite(l.longitude),
-      ),
-    [locations],
-  );
-
-  const handleRegionChangeComplete = useCallback((region: Region) => {
-    mapRegionRef.current = region;
-    setPin({ latitude: region.latitude, longitude: region.longitude });
-    setInitialRegion(region);
-  }, []);
-
-  const handleMapZoomIn = useCallback(() => {
-    const next = zoomMapRegion(mapRegionRef.current, true);
-    mapRef.current?.animateToRegion(next, 180);
-  }, []);
-
-  const handleMapZoomOut = useCallback(() => {
-    const next = zoomMapRegion(mapRegionRef.current, false);
-    mapRef.current?.animateToRegion(next, 180);
+  const handleMapIdle = useCallback((state: MapCameraStatePayload) => {
+    const [lng, lat] = state.properties.center;
+    setPin({ latitude: lat, longitude: lng });
   }, []);
 
   const handleSelectExisting = useCallback(
@@ -296,15 +239,9 @@ export default function AddLocationScreen() {
     setSearchText(f.place_name);
     setName(firstPartOfSearch(f.place_name));
     setPin({ latitude: lat, longitude: lng });
-    const region: Region = {
-      latitude: lat,
-      longitude: lng,
-      latitudeDelta: 0.12,
-      longitudeDelta: 0.12,
-    };
-    setInitialRegion(region);
-    mapRegionRef.current = region;
-    mapRef.current?.animateToRegion(region, 500);
+    setMapCenter([lng, lat]);
+    setMapZoom(USER_LOCATION_ZOOM);
+    setCameraNonce((n) => n + 1);
     setSearchInputFocused(false);
   }, []);
 
@@ -327,6 +264,14 @@ export default function AddLocationScreen() {
         ) : null}
       </View>
     </Pressable>
+  );
+
+  const catalogMarkers = useMemo(
+    () =>
+      buildCatalogMapboxMarkers(locations, (loc) => {
+        handleSelectExisting(loc.id);
+      }),
+    [locations, handleSelectExisting],
   );
 
   const commitNewLocation = useCallback(
@@ -491,47 +436,19 @@ export default function AddLocationScreen() {
           style={styles.mapContainer}
           pointerEvents={parentPickerOpen ? 'none' : 'auto'}
         >
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            initialRegion={initialRegion}
-            onRegionChangeComplete={handleRegionChangeComplete}
-            showsUserLocation
-            showsMyLocationButton
-            mapType="standard"
-          >
-            {mapCatalogLocations.map((loc) => {
-              const accent = LocationTypeColors[loc.type] ?? Colors.primary;
-              return (
-                <Marker
-                  key={loc.id}
-                  coordinate={{ latitude: loc.latitude!, longitude: loc.longitude! }}
-                  onPress={() => handleSelectExisting(loc.id)}
-                  tracksViewChanges={false}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                >
-                  <View style={[styles.catalogMarkerBubble, { borderColor: accent }]}>
-                    <Ionicons
-                      name={catalogMarkerIcon(loc.type)}
-                      size={20}
-                      color={accent}
-                    />
-                  </View>
-                </Marker>
-              );
-            })}
-          </MapView>
+          <TripMapboxMapView
+            containerStyle={styles.map}
+            centerCoordinate={mapCenter}
+            zoomLevel={mapZoom}
+            cameraKey={`add-loc-${cameraNonce}`}
+            markers={catalogMarkers}
+            showUserLocation
+            onMapIdle={handleMapIdle}
+            onZoomLevelChange={setMapZoom}
+          />
           <View style={styles.centerPinWrap} pointerEvents="none">
             <Ionicons name="location-sharp" size={44} color={Colors.primary} style={styles.centerPinIcon} />
           </View>
-          <View style={styles.mapHint} pointerEvents="none">
-            <View style={styles.mapHintBubble}>
-              <Text style={styles.mapHintText}>
-                Tap a saved pin to open that location, or pan the map to place a new one
-              </Text>
-            </View>
-          </View>
-          <MapZoomControls onZoomIn={handleMapZoomIn} onZoomOut={handleMapZoomOut} />
         </View>
 
         <View style={styles.formPanel}>
@@ -799,16 +716,6 @@ const styles = StyleSheet.create({
   map: {
     ...StyleSheet.absoluteFillObject,
   },
-  catalogMarkerBubble: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.full,
-    padding: 6,
-    borderWidth: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-  },
   centerPinWrap: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
@@ -816,23 +723,6 @@ const styles = StyleSheet.create({
   },
   centerPinIcon: {
     marginBottom: 26,
-  },
-  mapHint: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    paddingTop: Spacing.md,
-  },
-  mapHintBubble: {
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderRadius: BorderRadius.full,
-  },
-  mapHintText: {
-    color: '#FFFFFF',
-    fontSize: FontSize.sm,
-    fontWeight: '600',
   },
   formPanel: {
     backgroundColor: Colors.surface,

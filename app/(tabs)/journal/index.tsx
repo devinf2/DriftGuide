@@ -18,6 +18,7 @@ import type { LocationType } from '@/src/types';
 import type { WaterFlowData } from '@/src/types';
 import { formatTripDate, formatTripDuration, formatFishCount } from '@/src/utils/formatters';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
+import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { getWeatherIconName } from '@/src/services/conditions';
 import { format } from 'date-fns';
@@ -244,9 +245,26 @@ export default function JournalScreen() {
 
   const mapboxMarkers = useMemo((): MapboxMapMarker[] => {
     if (mapLayer === 'journal') {
-      const placeMarkers = locationGroups.map((group) => ({
+      const sortedPlaceGroups = [...locationGroups].sort((a, b) => {
+        if (Math.abs(a.latitude - b.latitude) > COORD_STACK_EPS) return a.latitude - b.latitude;
+        if (Math.abs(a.longitude - b.longitude) > COORD_STACK_EPS) return a.longitude - b.longitude;
+        const aChild = a.trips[0]?.location?.parent_location_id ? 1 : 0;
+        const bChild = b.trips[0]?.location?.parent_location_id ? 1 : 0;
+        return aChild - bChild;
+      });
+      const placeDisplayCoords = displayLngLatForOverlappingItems(
+        sortedPlaceGroups.map((g) => ({
+          id: g.locationId,
+          lat: g.latitude,
+          lng: g.longitude,
+        })),
+      );
+      const placeMarkers = sortedPlaceGroups.map((group) => {
+        const coord =
+          placeDisplayCoords.get(group.locationId) ?? ([group.longitude, group.latitude] as [number, number]);
+        return {
         id: `journal-${group.locationId}`,
-        coordinate: [group.longitude, group.latitude] as [number, number],
+        coordinate: coord,
         title: group.locationName,
         onPress: () => handleMarkerPress(group),
         children: (
@@ -262,7 +280,8 @@ export default function JournalScreen() {
             </Text>
           </View>
         ),
-      }));
+      };
+      });
       const catchMarkers = journalCatchPins.map((c) => ({
         id: `journal-catch-${c.id}`,
         coordinate: [c.longitude!, c.latitude!] as [number, number],

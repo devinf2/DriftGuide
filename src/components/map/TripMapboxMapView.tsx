@@ -15,6 +15,7 @@ import {
     useRef,
     useState,
     type ComponentType,
+    type ReactElement,
     type ReactNode,
 } from 'react';
 import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
@@ -31,6 +32,11 @@ export type MapboxMapMarker = {
    * When set (including `null`), renders a catch pin — circular photo or fish icon — instead of `children`.
    */
   catchPhotoUrl?: string | null;
+  /**
+   * View annotation instead of bitmap `PointAnnotation` — use for vector icons (e.g. Ionicons).
+   * Journal catch pins stay on `PointAnnotation` for performance unless you set this.
+   */
+  useMarkerView?: boolean;
 };
 
 export type TripMapboxMapRef = {
@@ -47,6 +53,58 @@ function roundZoom(z: number): number {
 
 function clampZoom(z: number): number {
   return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
+}
+
+/**
+ * Stacked pins at the same map coordinate (e.g. parent waterbody + child access point) can all
+ * receive a single tap from native; only the first JS handler should run. Scoped per-coordinate
+ * so tapping another pin immediately still works.
+ */
+const MARKER_PRESS_LOCK_MS = 450;
+const MARKER_COORD_LOCK_EPS = 1e-5;
+
+let lastMarkerPress: { lng: number; lat: number; t: number } | null = null;
+
+function runMarkerPressOnce(coordinate: [number, number], handler: () => void) {
+  const t = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const [lng, lat] = coordinate;
+  if (
+    lastMarkerPress &&
+    t < lastMarkerPress.t + MARKER_PRESS_LOCK_MS &&
+    Math.abs(lat - lastMarkerPress.lat) < MARKER_COORD_LOCK_EPS &&
+    Math.abs(lng - lastMarkerPress.lng) < MARKER_COORD_LOCK_EPS
+  ) {
+    return;
+  }
+  lastMarkerPress = { lng, lat, t };
+  handler();
+}
+
+function TripMapboxMarkerViewItem({
+  m,
+  MarkerView,
+}: {
+  m: MapboxMapMarker;
+  MarkerView: ComponentType<Record<string, unknown>>;
+}) {
+  return (
+    <MarkerView
+      coordinate={m.coordinate}
+      anchor={{ x: 0.5, y: 0.5 }}
+      allowOverlap
+      allowOverlapWithPuck
+    >
+      <Pressable
+        onPress={m.onPress ? () => runMarkerPressOnce(m.coordinate, () => m.onPress?.()) : undefined}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel={m.title ?? 'Location'}
+        style={styles.markerViewPressable}
+      >
+        {m.children ?? <MaterialIcons name="place" size={16} color={Colors.primaryLight} />}
+      </Pressable>
+    </MarkerView>
+  );
 }
 
 function TripMapboxMarkerItem({
@@ -74,7 +132,7 @@ function TripMapboxMarkerItem({
       id={m.id}
       coordinate={m.coordinate}
       title={m.title}
-      onSelected={m.onPress ? () => m.onPress?.() : undefined}
+      onSelected={m.onPress ? () => runMarkerPressOnce(m.coordinate, () => m.onPress?.()) : undefined}
     >
       <View collapsable={false} pointerEvents="box-none">
         {inner}
@@ -86,17 +144,28 @@ function TripMapboxMarkerItem({
 /** Width of one zoom step button (must match `styles.zoomButton`). */
 const ZOOM_BUTTON_WIDTH = 44;
 
+/** Bottom-right FAB (e.g. add location) — matches zoom control width for layout math. */
+const TRAILING_FAB_SIZE = 44;
+
+const ZOOM_CLUSTER_GAP = Spacing.sm;
+
 /**
- * Place Mapbox attribution (i) just to the left of the +/- stack (bottom-right), same baseline.
- * iOS default already had (i) bottom-right; Android default is bottom-left — we move it for consistency.
+ * Mapbox attribution (i): to the left of zoom stack, or to the left of a trailing FAB on the bottom row.
  */
-function mapAttributionBesideZoomControls(
+function resolveAttributionPosition(
   showZoomControls: boolean,
+  hasTrailingFab: boolean,
 ): { bottom: number; right: number } | undefined {
-  if (!showZoomControls) return undefined;
+  if (!showZoomControls && !hasTrailingFab) return undefined;
+  if (hasTrailingFab) {
+    return {
+      bottom: Spacing.lg,
+      right: Spacing.md + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP,
+    };
+  }
   return {
     bottom: Spacing.lg,
-    right: Spacing.md + ZOOM_BUTTON_WIDTH + Spacing.sm,
+    right: Spacing.md + ZOOM_BUTTON_WIDTH + ZOOM_CLUSTER_GAP,
   };
 }
 
@@ -127,6 +196,11 @@ type TripMapboxMapViewProps = {
   /** Step for +/- controls (one Mapbox zoom level ≈ 2× scale). */
   zoomStep?: number;
   showZoomControls?: boolean;
+  /**
+   * Renders above the bottom safe inset: zoom sits above this control; Mapbox (i) sits to its left.
+   * Use for e.g. add-location FAB on the Map tab.
+   */
+  trailingFab?: ReactElement | null;
 };
 
 /**
@@ -149,6 +223,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       onZoomLevelChange,
       zoomStep = 1,
       showZoomControls = true,
+      trailingFab = null,
     },
     ref,
   ) {
@@ -171,6 +246,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         MapView?: React.ComponentType<Record<string, unknown>>;
         Camera?: React.ComponentType<Record<string, unknown>>;
         PointAnnotation?: React.ComponentType<Record<string, unknown>>;
+        MarkerView?: React.ComponentType<Record<string, unknown>>;
         UserLocation?: React.ComponentType<Record<string, unknown>>;
       };
       return ns;
@@ -256,7 +332,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       );
     }
 
-    const { MapView, Camera, PointAnnotation, UserLocation } = mod;
+    const { MapView, Camera, PointAnnotation, MarkerView, UserLocation } = mod;
     if (!MapView || !Camera || !PointAnnotation || !UserLocation) {
       return (
         <View style={[styles.placeholder, containerStyle]}>
@@ -271,6 +347,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       zoomLevel,
     };
 
+    const hasTrailingFab = trailingFab != null;
+    const zoomClusterBottom =
+      showZoomControls && hasTrailingFab
+        ? Spacing.lg + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
+        : Spacing.lg;
+
     return (
       <View style={[styles.fill, containerStyle]}>
         <MapView
@@ -281,7 +363,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           scaleBarEnabled={false}
           logoEnabled
           attributionEnabled
-          attributionPosition={mapAttributionBesideZoomControls(showZoomControls)}
+          attributionPosition={resolveAttributionPosition(showZoomControls, hasTrailingFab)}
           onCameraChanged={
             onCameraChanged
               ? (state: unknown) => handleCameraChanged(state as MapCameraStatePayload)
@@ -296,13 +378,20 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             minZoomLevel={MAP_MIN_ZOOM}
             maxZoomLevel={MAP_MAX_ZOOM}
           />
-          {markers.map((m) => (
-            <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} />
-          ))}
+          {markers.map((m) =>
+            m.useMarkerView && MarkerView ? (
+              <TripMapboxMarkerViewItem key={m.id} m={m} MarkerView={MarkerView} />
+            ) : (
+              <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} />
+            ),
+          )}
           {showUserLocation ? <UserLocation visible /> : null}
         </MapView>
         {showZoomControls ? (
-          <View style={styles.zoomCluster} pointerEvents="box-none">
+          <View
+            style={[styles.zoomCluster, { bottom: zoomClusterBottom }]}
+            pointerEvents="box-none"
+          >
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Zoom in"
@@ -324,6 +413,11 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             </Pressable>
           </View>
         ) : null}
+        {trailingFab ? (
+          <View style={styles.trailingFabAnchor} pointerEvents="box-none">
+            {trailingFab}
+          </View>
+        ) : null}
       </View>
     );
   },
@@ -332,9 +426,17 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   map: { flex: 1 },
+  markerViewPressable: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trailingFabAnchor: {
+    position: 'absolute',
+    right: Spacing.md,
+    bottom: Spacing.lg,
+  },
   zoomCluster: {
     position: 'absolute',
-    bottom: Spacing.lg,
     right: Spacing.md,
     borderRadius: 10,
     overflow: 'hidden',

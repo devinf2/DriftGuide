@@ -1,9 +1,11 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator,
-  Platform, KeyboardAvoidingView, TextInput,
+  Platform, KeyboardAvoidingView, TextInput, Modal, Alert, TouchableOpacity,
 } from 'react-native';
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -22,14 +24,68 @@ import type { BoundingBox } from '@/src/types/boundingBox';
 import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
 import * as ExpoLocation from 'expo-location';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
+import {
+  fetchLocationCreatorManageState,
+  setLocationPublic,
+  softDeleteCommunityLocation,
+  type LocationCreatorManageState,
+} from '@/src/services/locationService';
+
+const USED_SPOT_MESSAGE =
+  'This spot is on at least one trip. You can’t change the pin, visibility, or delete it while trips reference it.';
 
 type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
+
+/** In-screen header avoids iOS 26+ UIBarButtonItem “glass” behind native `headerRight`. */
+function SpotModalHeader({
+  title,
+  topInset,
+  showMenu,
+  onBack,
+  onOpenMenu,
+}: {
+  title: string;
+  topInset: number;
+  showMenu: boolean;
+  onBack: () => void;
+  onOpenMenu: () => void;
+}) {
+  return (
+    <View style={[styles.spotModalHeader, { paddingTop: topInset }]}>
+      <View style={styles.spotModalHeaderSide}>
+        <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Go back">
+          <Ionicons name="chevron-back" size={28} color="#FFFFFF" />
+        </Pressable>
+      </View>
+      <Text style={styles.spotModalHeaderTitle} numberOfLines={1}>
+        {title}
+      </Text>
+      <View style={[styles.spotModalHeaderSide, styles.spotModalHeaderSideEnd]}>
+        {showMenu ? (
+          <Pressable
+            onPress={onOpenMenu}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Location options"
+          >
+            <MaterialIcons name="more-vert" size={24} color="#FFFFFF" />
+          </Pressable>
+        ) : (
+          <View style={styles.spotModalHeaderIconSlot} />
+        )}
+      </View>
+    </View>
+  );
+}
 
 export default function SpotFishingTripScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
+  const [creatorMenu, setCreatorMenu] = useState<LocationCreatorManageState | null>(null);
+  const [manageMenuOpen, setManageMenuOpen] = useState(false);
   const userProxRef = useRef<[number, number] | null>(null);
 
   const [activeTab, setActiveTab] = useState<SpotTabKey>('overview');
@@ -53,14 +109,30 @@ export default function SpotFishingTripScreen() {
   const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
 
   const location = id ? getLocationById(id) : undefined;
-  const navigation = useNavigation();
 
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      title: location?.name ?? 'Fishing Trip',
-      headerTitleStyle: { fontSize: FontSize.xl, fontWeight: '700' },
-    });
-  }, [navigation, location?.name]);
+  const handleHeaderBack = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  }, [router]);
+
+  const refreshCreatorMenu = useCallback(async () => {
+    if (!id || !user?.id) {
+      setCreatorMenu({ isCreator: false, hasActiveTripUsage: false, canManageUnusedOnly: false });
+      return;
+    }
+    const s = await fetchLocationCreatorManageState(id);
+    setCreatorMenu(s ?? { isCreator: false, hasActiveTripUsage: false, canManageUnusedOnly: false });
+  }, [id, user?.id]);
+
+  useEffect(() => {
+    void refreshCreatorMenu();
+  }, [refreshCreatorMenu]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshCreatorMenu();
+    }, [refreshCreatorMenu]),
+  );
 
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
@@ -248,33 +320,139 @@ export default function SpotFishingTripScreen() {
     }).catch(() => setDetailedReportLoading(false));
   };
 
+  const runCreatorActionIfAllowed = useCallback(
+    (fn: () => void) => {
+      if (!creatorMenu?.canManageUnusedOnly) {
+        Alert.alert('Not available', USED_SPOT_MESSAGE);
+        return;
+      }
+      setManageMenuOpen(false);
+      fn();
+    },
+    [creatorMenu?.canManageUnusedOnly],
+  );
+
+  const handleEditPin = useCallback(() => {
+    if (!id) return;
+    runCreatorActionIfAllowed(() => router.push(`/spot/edit-pin?id=${encodeURIComponent(id)}`));
+  }, [id, router, runCreatorActionIfAllowed]);
+
+  const handleTogglePrivate = useCallback(() => {
+    if (!id || !location) return;
+    const goingPrivate = location.is_public !== false;
+    const title = goingPrivate ? 'Make private?' : 'Make public?';
+    const message = goingPrivate
+      ? 'Only you will see this spot in DriftGuide lists and search.'
+      : 'Anyone can discover this spot in DriftGuide.';
+    runCreatorActionIfAllowed(() => {
+      Alert.alert(title, message, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: goingPrivate ? 'Make private' : 'Make public',
+          onPress: async () => {
+            const ok = await setLocationPublic(id, !goingPrivate);
+            if (ok) {
+              await fetchLocations();
+              void refreshCreatorMenu();
+            } else {
+              Alert.alert('Could not update', USED_SPOT_MESSAGE);
+            }
+          },
+        },
+      ]);
+    });
+  }, [id, location, runCreatorActionIfAllowed, fetchLocations, refreshCreatorMenu]);
+
+  const handleDeleteLocation = useCallback(() => {
+    if (!id) return;
+    runCreatorActionIfAllowed(() => {
+      Alert.alert(
+        'Delete this spot?',
+        'It will be removed from DriftGuide. This can’t be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              const ok = await softDeleteCommunityLocation(id);
+              if (ok) {
+                await fetchLocations();
+                router.back();
+              } else {
+                Alert.alert('Could not delete', USED_SPOT_MESSAGE);
+              }
+            },
+          },
+        ],
+      );
+    });
+  }, [id, runCreatorActionIfAllowed, fetchLocations, router]);
+
+  const spotHeaderTitle = location?.name ?? 'Fishing Trip';
+  const showSpotCreatorMenu = creatorMenu?.isCreator === true;
+
   if (!id) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Missing spot</Text>
+      <View style={styles.container}>
+        <SpotModalHeader
+          title="Fishing Trip"
+          topInset={insets.top}
+          showMenu={false}
+          onBack={handleHeaderBack}
+          onOpenMenu={() => setManageMenuOpen(true)}
+        />
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>Missing spot</Text>
+        </View>
       </View>
     );
   }
 
   if (!location && locations.length > 0) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Spot not found</Text>
+      <View style={styles.container}>
+        <SpotModalHeader
+          title="Fishing Trip"
+          topInset={insets.top}
+          showMenu={showSpotCreatorMenu}
+          onBack={handleHeaderBack}
+          onOpenMenu={() => setManageMenuOpen(true)}
+        />
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>Spot not found</Text>
+        </View>
       </View>
     );
   }
 
   if (isLoading && !conditions) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingLabel}>Loading conditions…</Text>
+      <View style={styles.container}>
+        <SpotModalHeader
+          title={spotHeaderTitle}
+          topInset={insets.top}
+          showMenu={showSpotCreatorMenu}
+          onBack={handleHeaderBack}
+          onOpenMenu={() => setManageMenuOpen(true)}
+        />
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.loadingLabel}>Loading conditions…</Text>
+        </View>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      <SpotModalHeader
+        title={spotHeaderTitle}
+        topInset={insets.top}
+        showMenu={showSpotCreatorMenu}
+        onBack={handleHeaderBack}
+        onOpenMenu={() => setManageMenuOpen(true)}
+      />
       <View style={styles.tabBar}>
         {([
           { key: 'overview' as SpotTabKey, label: 'Overview' },
@@ -558,11 +736,95 @@ export default function SpotFishingTripScreen() {
           <Text style={styles.selectButtonText}>Select for trip</Text>
         </Pressable>
       </View>
+
+      <Modal
+        visible={manageMenuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setManageMenuOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.manageMenuBackdrop}
+          activeOpacity={1}
+          onPress={() => setManageMenuOpen(false)}
+        >
+          <View style={styles.manageMenuCard} onStartShouldSetResponder={() => true}>
+            <Text style={styles.manageMenuTitle}>Your spot</Text>
+            {creatorMenu && !creatorMenu.canManageUnusedOnly ? (
+              <Text style={styles.manageMenuHint}>{USED_SPOT_MESSAGE}</Text>
+            ) : null}
+            <Pressable
+              style={[
+                styles.manageMenuRow,
+                creatorMenu && !creatorMenu.canManageUnusedOnly && styles.manageMenuRowDisabled,
+              ]}
+              onPress={handleEditPin}
+            >
+              <MaterialIcons name="edit-location-alt" size={22} color={Colors.primary} />
+              <Text style={styles.manageMenuRowText}>Edit pin location</Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.manageMenuRow,
+                creatorMenu && !creatorMenu.canManageUnusedOnly && styles.manageMenuRowDisabled,
+              ]}
+              onPress={handleTogglePrivate}
+            >
+              <MaterialIcons
+                name={location?.is_public !== false ? 'visibility-off' : 'visibility'}
+                size={22}
+                color={Colors.primary}
+              />
+              <Text style={styles.manageMenuRowText}>
+                {location?.is_public !== false ? 'Make private' : 'Make public'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.manageMenuRow,
+                creatorMenu && !creatorMenu.canManageUnusedOnly && styles.manageMenuRowDisabled,
+              ]}
+              onPress={handleDeleteLocation}
+            >
+              <MaterialIcons name="delete-outline" size={22} color={Colors.error} />
+              <Text style={[styles.manageMenuRowText, styles.manageMenuRowDestructive]}>Delete spot</Text>
+            </Pressable>
+            <Pressable style={styles.manageMenuCancel} onPress={() => setManageMenuOpen(false)}>
+              <Text style={styles.manageMenuCancelText}>Close</Text>
+            </Pressable>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  spotModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2C4670',
+    paddingBottom: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  spotModalHeaderSide: {
+    width: 44,
+    justifyContent: 'center',
+  },
+  spotModalHeaderSideEnd: {
+    alignItems: 'flex-end',
+  },
+  spotModalHeaderTitle: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: FontSize.xl,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  spotModalHeaderIconSlot: {
+    width: 24,
+    height: 24,
+  },
   container: {
     flex: 1,
     backgroundColor: Colors.background,
@@ -1060,5 +1322,75 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.textSecondary,
     textAlign: 'center',
+  },
+  manageMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: 56,
+    paddingRight: Spacing.sm,
+  },
+  manageMenuCard: {
+    minWidth: 260,
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  manageMenuTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.sm,
+  },
+  manageMenuHint: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    lineHeight: 18,
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
+  },
+  manageMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.sm,
+  },
+  manageMenuRowDisabled: {
+    opacity: 0.45,
+  },
+  manageMenuRowText: {
+    fontSize: FontSize.md,
+    color: Colors.text,
+    fontWeight: '600',
+    flex: 1,
+  },
+  manageMenuRowDestructive: {
+    color: Colors.error,
+  },
+  manageMenuCancel: {
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    marginTop: Spacing.xs,
+  },
+  manageMenuCancelText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textTertiary,
   },
 });

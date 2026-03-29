@@ -191,13 +191,6 @@ export default function AddAccessPointScreen() {
             />
           )}
         </MapView>
-        {!pin && (
-          <View style={styles.mapHint} pointerEvents="none">
-            <View style={styles.mapHintBubble}>
-              <Text style={styles.mapHintText}>Tap map for approximate access</Text>
-            </View>
-          </View>
-        )}
         <MapZoomControls onZoomIn={handleMapZoomIn} onZoomOut={handleMapZoomOut} />
       </View>
 
@@ -245,18 +238,6 @@ const styles = StyleSheet.create({
   },
   mapContainer: { flex: 1 },
   map: { flex: 1 },
-  mapHint: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mapHintBubble: {
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderRadius: BorderRadius.full,
-  },
-  mapHintText: { color: '#FFFFFF', fontSize: FontSize.sm, fontWeight: '600' },
   footer: {
     padding: Spacing.md,
     borderTopWidth: 1,

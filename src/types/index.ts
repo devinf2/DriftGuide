@@ -103,6 +103,8 @@ export interface Trip {
   rating?: number | null;
   user_reported_clarity?: WaterClarity | null;
   created_at: string;
+  /** Soft delete — excluded from location usage checks when set. */
+  deleted_at?: string | null;
 }
 
 export interface TripEvent {

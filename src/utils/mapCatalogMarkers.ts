@@ -2,6 +2,7 @@ import { Colors, LocationTypeColors } from '@/src/constants/theme';
 import type { Location } from '@/src/types';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { isLocationActive } from '@/src/utils/locationVisibility';
+import { displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
 
 export type CatalogMapMarker = {
   id: string;
@@ -27,7 +28,8 @@ export function catalogLocationMarkersInViewport(
   excludeLocationId: string | null | undefined,
 ): CatalogMapMarker[] {
   if (!dataViewport) return [];
-  const markers: CatalogMapMarker[] = [];
+  type Row = { loc: Location; lat: number; lon: number };
+  const rows: Row[] = [];
   for (const loc of locations) {
     if (!isLocationActive(loc)) continue;
     if (excludeLocationId && loc.id === excludeLocationId) continue;
@@ -35,13 +37,20 @@ export function catalogLocationMarkersInViewport(
     const ln = loc.longitude;
     if (la == null || ln == null) continue;
     if (!isPointInBoundingBox(la, ln, dataViewport)) continue;
-    markers.push({
-      id: `catalog-loc-${loc.id}`,
-      lon: ln,
-      lat: la,
-      title: loc.name,
-      color: LocationTypeColors[loc.type] ?? Colors.textTertiary,
-    });
+    rows.push({ loc, lat: la, lon: ln });
   }
-  return markers;
+  const displayCoords = displayLngLatForOverlappingItems(
+    rows.map((r) => ({ id: r.loc.id, lat: r.lat, lng: r.lon })),
+  );
+  return rows.map((r) => {
+    const coord = displayCoords.get(r.loc.id) ?? [r.lon, r.lat];
+    const [lon, lat] = coord;
+    return {
+      id: `catalog-loc-${r.loc.id}`,
+      lon,
+      lat,
+      title: r.loc.name,
+      color: LocationTypeColors[r.loc.type] ?? Colors.textTertiary,
+    };
+  });
 }

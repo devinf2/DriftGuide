@@ -91,7 +91,14 @@ export default function RootLayout() {
             <Stack.Screen
               name="spot/[id]"
               options={{
-                title: 'Fishing Trip',
+                presentation: 'modal',
+                headerShown: false,
+              }}
+            />
+            <Stack.Screen
+              name="spot/edit-pin"
+              options={{
+                title: 'Edit pin',
                 presentation: 'modal',
                 headerBackTitle: 'Back',
                 headerStyle: { backgroundColor: '#2C4670' },

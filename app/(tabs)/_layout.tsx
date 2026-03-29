@@ -40,6 +40,15 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="map"
+        options={{
+          title: 'Map',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="map" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="journal"
         options={{
           title: 'Journal',

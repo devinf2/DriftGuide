@@ -201,6 +201,92 @@ export async function softDeleteCommunityLocation(locationId: string): Promise<b
   return true;
 }
 
+export type LocationCreatorManageState = {
+  isCreator: boolean;
+  hasActiveTripUsage: boolean;
+  canManageUnusedOnly: boolean;
+};
+
+/** Creator-only RPC: whether spot management (delete / visibility / pin) is allowed (blocked if any active trip uses it). */
+export async function fetchLocationCreatorManageState(
+  locationId: string,
+): Promise<LocationCreatorManageState | null> {
+  const { data, error } = await supabase.rpc('location_creator_manage_state', {
+    p_location_id: locationId,
+  });
+  if (error) {
+    console.error('fetchLocationCreatorManageState:', error);
+    return null;
+  }
+  let row: Record<string, unknown>;
+  if (typeof data === 'string') {
+    try {
+      row = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  } else if (data && typeof data === 'object') {
+    row = data as Record<string, unknown>;
+  } else {
+    return null;
+  }
+  if (row.error === 'not_found') return null;
+  if (row.isCreator !== true) {
+    return { isCreator: false, hasActiveTripUsage: false, canManageUnusedOnly: false };
+  }
+  return {
+    isCreator: true,
+    hasActiveTripUsage: Boolean(row.hasActiveTripUsage),
+    canManageUnusedOnly: Boolean(row.canManageUnusedOnly),
+  };
+}
+
+export async function updateLocationPin(
+  locationId: string,
+  latitude: number,
+  longitude: number,
+): Promise<boolean> {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (userErr || !uid) return false;
+
+  const { error } = await supabase
+    .from('locations')
+    .update({ latitude: lat, longitude: lng })
+    .eq('id', locationId)
+    .eq('created_by', uid)
+    .is('deleted_at', null);
+
+  if (error) {
+    console.error('updateLocationPin:', error);
+    return false;
+  }
+  return true;
+}
+
+export async function setLocationPublic(locationId: string, isPublic: boolean): Promise<boolean> {
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  const uid = userData?.user?.id;
+  if (userErr || !uid) return false;
+
+  const { error } = await supabase
+    .from('locations')
+    .update({ is_public: isPublic })
+    .eq('id', locationId)
+    .eq('created_by', uid)
+    .is('deleted_at', null);
+
+  if (error) {
+    console.error('setLocationPublic:', error);
+    return false;
+  }
+  return true;
+}
+
 /** Set parent for a location row (RLS: typically only rows the user created). */
 export async function setLocationParent(childId: string, parentId: string | null): Promise<boolean> {
   const { error } = await supabase
