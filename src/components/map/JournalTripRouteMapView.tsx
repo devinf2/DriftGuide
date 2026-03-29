@@ -11,7 +11,9 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
-import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from '@/src/constants/mapbox';
+import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
+import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
+import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { dedupeConsecutiveLngLat, matchWalkingRoute } from '@/src/services/mapboxWalkingMatch';
@@ -178,6 +180,7 @@ function JournalCatchPointAnnotation({
 }
 
 export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchWaypointPress }: Props) {
+  const basemapId = useMapBasemapStore((s) => s.basemapId);
   const rawMod = useMemo(() => loadMapbox(), []);
   /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
   const pointAnnotationLayerBelowId = useMemo(() => getAnnotationsLayerID('PointAnnotations'), []);
@@ -341,7 +344,7 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
     <View style={[styles.fill, containerStyle]}>
       <MapView
         style={styles.map}
-        styleURL={MAPBOX_STYLE_URL}
+        styleURL={mapboxStyleURLForBasemap(basemapId)}
         compassEnabled
         scaleBarEnabled={false}
         logoEnabled
@@ -410,6 +413,8 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
           ),
         )}
       </MapView>
+
+      <MapBasemapSwitcher />
 
       <View style={styles.zoomCluster} pointerEvents="box-none">
         <Pressable

@@ -1,5 +1,5 @@
 import { Colors, LocationTypeColors } from '@/src/constants/theme';
-import type { Location } from '@/src/types';
+import type { Location, LocationType } from '@/src/types';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { isLocationActive } from '@/src/utils/locationVisibility';
 import { displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
@@ -10,6 +10,8 @@ export type CatalogMapMarker = {
   lat: number;
   title: string;
   color: string;
+  /** Present for `catalog-loc-*` pins from {@link catalogLocationMarkersInViewport}. */
+  locationType?: LocationType;
   /** Set on trip start/end pins only; catalog pins omit. */
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
@@ -51,6 +53,7 @@ export function catalogLocationMarkersInViewport(
       lat,
       title: r.loc.name,
       color: LocationTypeColors[r.loc.type] ?? Colors.textTertiary,
+      locationType: r.loc.type,
     };
   });
 }

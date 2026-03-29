@@ -13,9 +13,13 @@ import { startOfWeek, startOfMonth, startOfYear, isAfter } from 'date-fns';
 import { Colors, Spacing, FontSize, BorderRadius, LocationTypeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
-import { Trip, type CatchRow } from '@/src/types';
-import type { LocationType } from '@/src/types';
-import type { WaterFlowData } from '@/src/types';
+import {
+  Trip,
+  type CatchRow,
+  type LocationType,
+  type WaterFlowData,
+} from '@/src/types';
+import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import { formatTripDate, formatTripDuration, formatFishCount } from '@/src/utils/formatters';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
 import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
@@ -273,7 +277,11 @@ export default function JournalScreen() {
               <Text style={styles.markerBadgeText}>{group.trips.length}</Text>
             </View>
             <View style={styles.markerBubble}>
-              <MaterialIcons name="place" size={20} color={Colors.textInverse} />
+              <CatalogLocationMapIcon
+                type={group.trips[0]?.location?.type as LocationType | undefined}
+                color={Colors.textInverse}
+                size={20}
+              />
             </View>
             <Text style={styles.markerLabel} numberOfLines={1}>
               {group.locationName}

@@ -1,17 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Pressable, TextInput,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import MapView, { Marker, MapPressEvent, Region } from 'react-native-maps';
 import * as ExpoLocation from 'expo-location';
+import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
+import { DEFAULT_MAP_CENTER } from '@/src/constants/mapDefaults';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { createAccessPoint } from '@/src/services/accessPointService';
-import { MapZoomControls } from '@/src/components/map/MapZoomControls';
-import { zoomMapRegion } from '@/src/components/map/mapZoom';
 
 export default function AddAccessPointScreen() {
   const router = useRouter();
@@ -20,24 +19,24 @@ export default function AddAccessPointScreen() {
   const { user } = useAuthStore();
   const { getLocationById, fetchLocations, locations } = useLocationStore();
 
-  const mapRef = useRef<MapView>(null);
   const [pin, setPin] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
-  const defaultRegion: Region = {
-    latitude: 40.7608,
-    longitude: -111.8910,
-    latitudeDelta: 0.25,
-    longitudeDelta: 0.25,
-  };
-  const mapRegionRef = useRef<Region>(defaultRegion);
-  const [initialRegion, setInitialRegion] = useState<Region>(defaultRegion);
 
   const parentLocation = locationId ? getLocationById(locationId) : undefined;
 
-  useEffect(() => {
-    mapRegionRef.current = initialRegion;
-  }, [initialRegion]);
+  const mapFallbackCenter: [number, number] = useMemo(() => {
+    if (
+      parentLocation?.latitude != null &&
+      parentLocation?.longitude != null &&
+      Number.isFinite(parentLocation.latitude) &&
+      Number.isFinite(parentLocation.longitude)
+    ) {
+      return [parentLocation.longitude, parentLocation.latitude];
+    }
+    return DEFAULT_MAP_CENTER;
+  }, [parentLocation?.latitude, parentLocation?.longitude]);
 
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
@@ -46,15 +45,8 @@ export default function AddAccessPointScreen() {
   useEffect(() => {
     const loc = parentLocation;
     if (loc?.latitude != null && loc.longitude != null) {
-      const region: Region = {
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        latitudeDelta: 0.08,
-        longitudeDelta: 0.08,
-      };
-      setInitialRegion(region);
       setPin({ latitude: loc.latitude, longitude: loc.longitude });
-      mapRef.current?.animateToRegion(region, 400);
+      setFocusNonce((n) => n + 1);
     }
   }, [parentLocation?.id, parentLocation?.latitude, parentLocation?.longitude]);
 
@@ -66,37 +58,14 @@ export default function AddAccessPointScreen() {
         const pos = await ExpoLocation.getCurrentPositionAsync({
           accuracy: ExpoLocation.Accuracy.Balanced,
         });
-        const region: Region = {
+        setPin({
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
-          latitudeDelta: 0.25,
-          longitudeDelta: 0.25,
-        };
-        setInitialRegion(region);
-        mapRef.current?.animateToRegion(region, 600);
+        });
+        setFocusNonce((n) => n + 1);
       }
     })();
   }, [parentLocation]);
-
-  const handleMapPress = useCallback((e: MapPressEvent) => {
-    const { latitude, longitude } = e.nativeEvent.coordinate;
-    setPin({ latitude, longitude });
-  }, []);
-
-  const handleRegionChangeComplete = useCallback((region: Region) => {
-    mapRegionRef.current = region;
-    setInitialRegion(region);
-  }, []);
-
-  const handleMapZoomIn = useCallback(() => {
-    const next = zoomMapRegion(mapRegionRef.current, true);
-    mapRef.current?.animateToRegion(next, 180);
-  }, []);
-
-  const handleMapZoomOut = useCallback(() => {
-    const next = zoomMapRegion(mapRegionRef.current, false);
-    mapRef.current?.animateToRegion(next, 180);
-  }, []);
 
   const handleSave = useCallback(async () => {
     if (!pin || !name.trim() || !user || !locationId) return;
@@ -172,26 +141,18 @@ export default function AddAccessPointScreen() {
       </View>
 
       <View style={styles.mapContainer}>
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          initialRegion={initialRegion}
-          onRegionChangeComplete={handleRegionChangeComplete}
-          onPress={handleMapPress}
-          showsUserLocation
-          showsMyLocationButton
-          mapType="standard"
-        >
-          {pin && (
-            <Marker
-              coordinate={pin}
-              draggable
-              onDragEnd={(e) => setPin(e.nativeEvent.coordinate)}
-              pinColor={Colors.primary}
-            />
-          )}
-        </MapView>
-        <MapZoomControls onZoomIn={handleMapZoomIn} onZoomOut={handleMapZoomOut} />
+        <CatchPinPickerMap
+          latitude={pin?.latitude ?? null}
+          longitude={pin?.longitude ?? null}
+          onCoordinateChange={(lat, lng) => setPin({ latitude: lat, longitude: lng })}
+          interactionMode="pan_center"
+          focusRequestKey={focusNonce}
+          mapFallbackCenter={mapFallbackCenter}
+          showZoomControls
+          containerStyle={styles.map}
+          hintPosition="below"
+          hintText="Pan and zoom to place the access point. The pin marks the map center."
+        />
       </View>
 
       <View style={styles.footer}>
@@ -236,8 +197,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  mapContainer: { flex: 1 },
-  map: { flex: 1 },
+  mapContainer: { flex: 1, minHeight: 0 },
+  map: { flex: 1, minHeight: 0 },
   footer: {
     padding: Spacing.md,
     borderTopWidth: 1,

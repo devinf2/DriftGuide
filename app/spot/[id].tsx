@@ -15,13 +15,13 @@ import { getSpotFishingSummary, getSpotDetailedReport, getSpotHowToFish, askAI, 
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import type { AccessPoint, LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
-import { fetchApprovedAccessPointsForLocation } from '@/src/services/accessPointService';
+import { fetchApprovedAccessPointsForLocations } from '@/src/services/accessPointService';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 
+import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
-import type { BoundingBox } from '@/src/types/boundingBox';
-import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
+import { locationsForSpotMapContext, spotMapRelatedLocationIds } from '@/src/utils/locationSpotMapFilter';
 import * as ExpoLocation from 'expo-location';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import {
@@ -32,7 +32,7 @@ import {
 } from '@/src/services/locationService';
 
 const USED_SPOT_MESSAGE =
-  'This spot is on at least one trip. You can’t change the pin, visibility, or delete it while trips reference it.';
+  'Another angler has this spot on a trip. You can’t change the pin, visibility, or delete it until their trips no longer use it.';
 
 type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
 
@@ -154,12 +154,13 @@ export default function SpotFishingTripScreen() {
   }, []);
 
   useEffect(() => {
-    if (!id) {
+    if (!location) {
       setApprovedAccessPoints([]);
       return;
     }
-    fetchApprovedAccessPointsForLocation(id).then(setApprovedAccessPoints);
-  }, [id]);
+    const ids = [...spotMapRelatedLocationIds(location, locations)];
+    void fetchApprovedAccessPointsForLocations(ids).then(setApprovedAccessPoints);
+  }, [location, locations]);
 
   useEffect(() => {
     if (!location || !id) return;
@@ -196,36 +197,28 @@ export default function SpotFishingTripScreen() {
   const lng = location?.longitude ?? parent?.longitude ?? null;
   const stationId = (location?.metadata as Record<string, string> | null)?.usgs_station_id;
 
-  /** ~40–45 km padding so nearby catalog spots show at spot map zoom without viewport callbacks. */
-  const SPOT_MAP_REGION_PAD = 0.35;
-  const spotMapRegionBbox = useMemo((): BoundingBox | null => {
-    if (lat == null || lng == null) return null;
-    return {
-      ne: { lat: lat + SPOT_MAP_REGION_PAD, lng: lng + SPOT_MAP_REGION_PAD },
-      sw: { lat: lat - SPOT_MAP_REGION_PAD, lng: lng - SPOT_MAP_REGION_PAD },
-    };
-  }, [lat, lng]);
-
-  const spotMapCatalogMarkers = useMemo(() => {
-    if (!spotMapRegionBbox) return [];
-    return catalogLocationMarkersInViewport(locations, spotMapRegionBbox, undefined);
-  }, [locations, spotMapRegionBbox]);
+  const spotMapLocations = useMemo(() => {
+    if (!location) return [];
+    return locationsForSpotMapContext(location, locations);
+  }, [location, locations]);
 
   const spotMapboxMarkers = useMemo(() => {
-    const catalog = spotMapCatalogMarkers.map((m) => ({
-      id: m.id,
-      coordinate: [m.lon, m.lat] as [number, number],
-      title: m.title,
-      children: <MaterialIcons name="place" size={34} color={m.color} />,
-    }));
+    const catalog = buildCatalogMapboxMarkers(spotMapLocations, (loc) => {
+      if (loc.id !== id) router.push(`/spot/${loc.id}`);
+    });
     const access = approvedAccessPoints.map((ap) => ({
       id: `ap-${ap.id}`,
       coordinate: [ap.longitude, ap.latitude] as [number, number],
       title: ap.name,
-      children: <MaterialIcons name="directions-walk" size={30} color={Colors.success} />,
+      useMarkerView: true,
+      children: (
+        <View style={styles.accessPointMapBubble}>
+          <MaterialIcons name="directions-walk" size={18} color={Colors.success} />
+        </View>
+      ),
     }));
     return [...catalog, ...access];
-  }, [spotMapCatalogMarkers, approvedAccessPoints]);
+  }, [spotMapLocations, approvedAccessPoints, id, router]);
 
   useEffect(() => {
     if (activeTab !== 'conditions' || !location) return;
@@ -1303,6 +1296,21 @@ const styles = StyleSheet.create({
   mapTabContainer: {
     flex: 1,
     minHeight: 280,
+  },
+  accessPointMapBubble: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.surface,
+    borderWidth: 1.5,
+    borderColor: Colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 1.5,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
   },
   mapTabMap: {
     flex: 1,

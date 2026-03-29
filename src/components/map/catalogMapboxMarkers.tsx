@@ -1,13 +1,14 @@
-import { View, StyleSheet } from 'react-native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import type { Location, LocationType } from '@/src/types';
+import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import type { MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
 import { Colors, LocationTypeColors } from '@/src/constants/theme';
+import type { Location, LocationType } from '@/src/types';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import {
   COORD_STACK_EPS,
   displayLngLatForOverlappingItems,
 } from '@/src/utils/mapPinDisplayOffset';
+import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, View } from 'react-native';
 
 function isWaterwayType(t: LocationType): boolean {
   return t === 'river' || t === 'stream' || t === 'lake' || t === 'reservoir' || t === 'pond';
@@ -18,7 +19,6 @@ const ICON = 12;
 
 function catalogMarkerIcon(type: LocationType): keyof typeof Ionicons.glyphMap {
   if (isWaterwayType(type)) return 'water';
-  if (type === 'access_point') return 'walk-outline';
   return 'location';
 }
 
@@ -39,8 +39,8 @@ function compareLocationsForPinStack(a: Location, b: Location): number {
 }
 
 function CatalogPinIcon({ type, color }: { type: LocationType; color: string }) {
-  if (type === 'parking') {
-    return <MaterialIcons name="local-parking" size={ICON} color={color} />;
+  if (type === 'parking' || type === 'access_point') {
+    return <CatalogLocationMapIcon type={type} color={color} size={ICON} />;
   }
   return <Ionicons name={catalogMarkerIcon(type)} size={ICON} color={color} />;
 }

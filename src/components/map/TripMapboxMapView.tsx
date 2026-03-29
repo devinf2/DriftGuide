@@ -1,4 +1,6 @@
-import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from '@/src/constants/mapbox';
+import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
+import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
+import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import type { BoundingBox } from '@/src/types/boundingBox';
@@ -180,6 +182,8 @@ function loadMapbox(): Record<string, unknown> | null {
 
 type TripMapboxMapViewProps = {
   mapStyle?: string;
+  /** When true (default), shows Terrain / Satellite / Hybrid and uses the persisted basemap unless `mapStyle` is set. */
+  showBasemapSwitcher?: boolean;
   containerStyle?: StyleProp<ViewStyle>;
   /** Initial / controlled framing: center [lng, lat] + zoom (no bounds). */
   centerCoordinate: [number, number];
@@ -211,6 +215,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
   function TripMapboxMapView(
     {
       mapStyle,
+      showBasemapSwitcher = true,
       containerStyle,
       centerCoordinate,
       zoomLevel,
@@ -227,6 +232,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     },
     ref,
   ) {
+    const basemapId = useMapBasemapStore((s) => s.basemapId);
     const rawMod = useMemo(() => loadMapbox(), []);
     const tokenApplied = useRef(false);
     const mapViewRef = useRef<{
@@ -353,12 +359,15 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         ? Spacing.lg + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
         : Spacing.lg;
 
+    const resolvedStyleURL = mapStyle ?? mapboxStyleURLForBasemap(basemapId);
+    const showBasemap = showBasemapSwitcher && mapStyle == null;
+
     return (
       <View style={[styles.fill, containerStyle]}>
         <MapView
           ref={mapViewRef}
           style={styles.map}
-          styleURL={mapStyle ?? MAPBOX_STYLE_URL}
+          styleURL={resolvedStyleURL}
           compassEnabled={compassEnabled}
           scaleBarEnabled={false}
           logoEnabled
@@ -387,6 +396,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           )}
           {showUserLocation ? <UserLocation visible /> : null}
         </MapView>
+        {showBasemap ? <MapBasemapSwitcher /> : null}
         {showZoomControls ? (
           <View
             style={[styles.zoomCluster, { bottom: zoomClusterBottom }]}

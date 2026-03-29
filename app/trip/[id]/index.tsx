@@ -14,6 +14,7 @@ import {
     TextInput,
     View,
 } from 'react-native';
+import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
 import { CatchDetailsModal, type CatchDetailsSubmitAdd } from '@/src/components/catch/CatchDetailsModal';
 import { ChangeFlyPickerModal, splitFlyChangeData } from '@/src/components/fly/ChangeFlyPickerModal';
@@ -56,6 +57,7 @@ import {
   Structure,
   Trip,
   TripEvent,
+  type LocationType,
 } from '@/src/types';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import {
@@ -1456,6 +1458,7 @@ type TripMapMarker = {
   lat: number;
   title: string;
   color: string;
+  locationType?: LocationType;
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
   catchEventId?: string;
@@ -1650,7 +1653,7 @@ function TripMapTab({
                 icon={m.endpointIcon ?? 'place'}
               />
             ) : (
-              <MaterialIcons name="place" size={34} color={m.color} />
+              <CatalogLocationMapIcon type={m.locationType} color={m.color} size={34} />
             ),
         };
       }),

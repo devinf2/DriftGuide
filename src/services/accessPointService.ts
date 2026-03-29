@@ -27,6 +27,22 @@ export async function fetchApprovedAccessPointsForLocation(locationId: string): 
   return data.map((r) => rowToAccessPoint(r as Record<string, unknown>));
 }
 
+/** Approved access points for several locations (e.g. spot + parents + children on the detail map). */
+export async function fetchApprovedAccessPointsForLocations(locationIds: string[]): Promise<AccessPoint[]> {
+  const unique = [...new Set(locationIds.filter(Boolean))];
+  if (unique.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('access_points')
+    .select('*')
+    .in('location_id', unique)
+    .eq('status', 'approved')
+    .order('name');
+
+  if (error || !data) return [];
+  return data.map((r) => rowToAccessPoint(r as Record<string, unknown>));
+}
+
 /** Picker: approved + caller's pending for this location. */
 export async function fetchAccessPointsForPicker(locationId: string): Promise<AccessPoint[]> {
   const { data, error } = await supabase

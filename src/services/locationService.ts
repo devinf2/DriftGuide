@@ -203,11 +203,16 @@ export async function softDeleteCommunityLocation(locationId: string): Promise<b
 
 export type LocationCreatorManageState = {
   isCreator: boolean;
+  /** True if any non-deleted trip references this location (any owner). */
   hasActiveTripUsage: boolean;
+  /**
+   * True when the current user is the creator and may edit pin, visibility, or soft-delete.
+   * Allowed with zero trips, or only trips owned by the creator; blocked if another user’s trip uses it.
+   */
   canManageUnusedOnly: boolean;
 };
 
-/** Creator-only RPC: whether spot management (delete / visibility / pin) is allowed (blocked if any active trip uses it). */
+/** Creator-only RPC: spot management allowed unless another user’s trip references this location. */
 export async function fetchLocationCreatorManageState(
   locationId: string,
 ): Promise<LocationCreatorManageState | null> {

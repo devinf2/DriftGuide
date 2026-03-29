@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from '@/src/constants/mapbox';
+import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
+import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
+import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import type { Feature, Point } from 'geojson';
@@ -68,6 +70,9 @@ export type CatchPinPickerMapProps = {
   /** Mapbox-style +/- zoom (uses camera ref); good for pan-center pin picking. */
   showZoomControls?: boolean;
   zoomStep?: number;
+  /** Fixed style; when set, hides the basemap switcher. */
+  mapStyle?: string;
+  showBasemapSwitcher?: boolean;
 };
 
 /**
@@ -91,7 +96,10 @@ export function CatchPinPickerMap({
   mapFallbackCenter,
   showZoomControls = false,
   zoomStep = 1,
+  mapStyle: mapStyleProp,
+  showBasemapSwitcher = true,
 }: CatchPinPickerMapProps) {
+  const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
   const cameraRef = useRef<{ zoomTo?: (z: number, duration?: number) => void } | null>(null);
   const rawMod = useMemo(() => loadMapbox(), []);
@@ -205,11 +213,14 @@ export function CatchPinPickerMap({
     }
   };
 
+  const resolvedStyleURL = mapStyleProp ?? mapboxStyleURLForBasemap(basemapId);
+  const showBasemap = showBasemapSwitcher && mapStyleProp == null;
+
   const mapBody = (
     <View style={height === undefined ? styles.mapBodyFlex : styles.mapBodyFixed}>
       <MapView
         style={StyleSheet.absoluteFill}
-        styleURL={MAPBOX_STYLE_URL}
+        styleURL={resolvedStyleURL}
         compassEnabled={false}
         scaleBarEnabled={false}
         logoEnabled
@@ -247,6 +258,7 @@ export function CatchPinPickerMap({
           </View>
         </View>
       ) : null}
+      {showBasemap ? <MapBasemapSwitcher compact /> : null}
       {showZoomControls ? (
         <View style={styles.zoomCluster} pointerEvents="box-none">
           <Pressable
