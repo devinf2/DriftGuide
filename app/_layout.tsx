@@ -115,7 +115,11 @@ export default function RootLayout() {
             />
             <Stack.Screen
               name="trip/download-waterway"
-              options={{ title: 'Download for offline', headerBackTitle: 'Back' }}
+              options={{ title: 'Download for offline', headerBackTitle: 'Back', headerLargeTitle: false }}
+            />
+            <Stack.Screen
+              name="trip/offline-region-picker"
+              options={{ title: 'Choose region', headerBackTitle: 'Back' }}
             />
             <Stack.Screen
               name="trip/[id]"

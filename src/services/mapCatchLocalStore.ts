@@ -17,6 +17,8 @@ export type CachedCatchPin = {
 export type CachedCatchesPayload = {
   updatedAt: string;
   items: CachedCatchPin[];
+  /** Full `catches` rows when prefetched / offline download (detail offline). */
+  fullById?: Record<string, CatchRow>;
 };
 
 export type PendingCatchPayload = {
@@ -62,6 +64,7 @@ export async function mergeCachedPins(pins: CachedCatchPin[]): Promise<void> {
   const payload: CachedCatchesPayload = {
     updatedAt: new Date().toISOString(),
     items: Array.from(byId.values()),
+    fullById: { ...(existing?.fullById ?? {}) },
   };
   await AsyncStorage.setItem(CACHED_CATCHES_KEY, JSON.stringify(payload));
 }
@@ -72,6 +75,9 @@ export async function getCachedCatchesPayload(): Promise<CachedCatchesPayload | 
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedCatchesPayload;
     if (!parsed?.items || !Array.isArray(parsed.items)) return null;
+    if (!parsed.fullById || typeof parsed.fullById !== 'object') {
+      parsed.fullById = {};
+    }
     return parsed;
   } catch {
     return null;
@@ -94,11 +100,21 @@ export async function mergeCachedCatchesFromRows(rows: CatchRow[]): Promise<void
   for (const x of incoming) {
     byId.set(x.id, x);
   }
+  const fullById: Record<string, CatchRow> = { ...(existing?.fullById ?? {}) };
+  for (const row of rows) {
+    fullById[row.id] = row;
+  }
   const payload: CachedCatchesPayload = {
     updatedAt: new Date().toISOString(),
     items: Array.from(byId.values()),
+    fullById,
   };
   await AsyncStorage.setItem(CACHED_CATCHES_KEY, JSON.stringify(payload));
+}
+
+export async function getCachedCatchRowById(id: string): Promise<CatchRow | null> {
+  const p = await getCachedCatchesPayload();
+  return p?.fullById?.[id] ?? null;
 }
 
 async function readPending(): Promise<PendingCatchPayload[]> {

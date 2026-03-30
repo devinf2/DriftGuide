@@ -19,6 +19,15 @@ import {
 import { mapboxCreatePackBoundsFromBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
 
+/** Prefix for app-created offline tile packs (list/delete in Profile). */
+export const DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX = 'driftguide-map-';
+
+export type DriftguideOfflineMapPack = {
+  name: string;
+  /** Serialized bounds from native OfflinePack when available. */
+  bounds: string | null;
+};
+
 type OfflineManagerLike = {
   createPack: (
     options: {
@@ -31,6 +40,9 @@ type OfflineManagerLike = {
     onProgress: (pack: unknown, status: { percentage?: number }) => void,
     onError?: (pack: unknown, err: { message?: string }) => void,
   ) => Promise<void>;
+  getPacks?: () => Promise<unknown[]>;
+  deletePack?: (name: string) => Promise<void>;
+  getPack?: (name: string) => Promise<unknown>;
 };
 
 function loadOfflineManager(): OfflineManagerLike | null {
@@ -45,6 +57,71 @@ function loadOfflineManager(): OfflineManagerLike | null {
   } catch {
     return null;
   }
+}
+
+function packNameFromNative(pack: unknown): string {
+  if (pack && typeof pack === 'object' && 'name' in pack) {
+    const n = (pack as { name: unknown }).name;
+    if (typeof n === 'string') return n;
+  }
+  return '';
+}
+
+function packBoundsFromNative(pack: unknown): string | null {
+  if (pack && typeof pack === 'object' && 'bounds' in pack) {
+    const b = (pack as { bounds: unknown }).bounds;
+    if (typeof b === 'string') return b;
+  }
+  return null;
+}
+
+/**
+ * Remove an existing pack with the same name so createPack replaces region tiles.
+ */
+export async function deletePackIfExists(name: string): Promise<void> {
+  const om = loadOfflineManager();
+  if (!om?.getPack || !om.deletePack) return;
+  try {
+    const existing = await om.getPack(name);
+    if (existing) await om.deletePack(name);
+  } catch {
+    // ignore — pack may not exist
+  }
+}
+
+/** Mapbox tile packs created by DriftGuide offline flow (`driftguide-map-*`). */
+export async function listDriftguideOfflinePacks(): Promise<DriftguideOfflineMapPack[]> {
+  const om = loadOfflineManager();
+  if (!om?.getPacks) return [];
+  try {
+    const packs = await om.getPacks();
+    const out: DriftguideOfflineMapPack[] = [];
+    for (const p of packs) {
+      const name = packNameFromNative(p);
+      if (name.startsWith(DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX)) {
+        out.push({ name, bounds: packBoundsFromNative(p) });
+      }
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  } catch (e) {
+    console.warn('[mapboxOfflineRegion] getPacks', e);
+    return [];
+  }
+}
+
+export async function deleteDriftguideOfflinePack(name: string): Promise<void> {
+  if (!name.startsWith(DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX)) {
+    throw new Error('Invalid offline pack name');
+  }
+  const om = loadOfflineManager();
+  if (!om?.deletePack) {
+    throw new Error('Mapbox offline is not available (native build required).');
+  }
+  await om.deletePack(name);
+}
+
+export function isMapboxOfflineAvailable(): boolean {
+  return loadOfflineManager() != null;
 }
 
 export type OfflineDownloadProgress = {
@@ -80,6 +157,10 @@ export async function downloadOfflineMapRegion(
     minZoom = SAMPLE_OFFLINE_MIN_ZOOM,
     maxZoom = SAMPLE_OFFLINE_MAX_ZOOM,
   } = options;
+
+  if (name.startsWith(DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX)) {
+    await deletePackIfExists(name);
+  }
 
   await om.createPack(
     {

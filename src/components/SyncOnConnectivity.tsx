@@ -44,7 +44,7 @@ export function SyncOnConnectivity() {
         if (activeTrip && events) {
           await syncTripToCloud(activeTrip, events);
         }
-        await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS);
+        await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, userId);
       } finally {
         inProgressRef.current = false;
       }
@@ -73,7 +73,10 @@ export function SyncOnConnectivity() {
             const { activeTrip: at, events: ev } = useTripStore.getState();
             if (at && ev) return syncTripToCloud(at, ev);
           })
-          .then(() => refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS))
+          .then(() => {
+            const uid = useAuthStore.getState().user?.id;
+            return refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, uid);
+          })
           .finally(() => {
             inProgressRef.current = false;
           });

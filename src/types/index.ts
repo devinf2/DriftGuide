@@ -238,6 +238,13 @@ export interface CommunityCatchRow {
   presentation_method: string | null;
   conditions_snapshot_id: string | null;
   note: string | null;
+  /** Denormalized from trips at sync time (no free-text trip notes). */
+  trip_fishing_type?: string | null;
+  trip_session_type?: string | null;
+  trip_planned_date?: string | null;
+  trip_start_time?: string | null;
+  trip_end_time?: string | null;
+  trip_status?: string | null;
 }
 
 /** Global fly catalog: pattern only (no user, size, color). */

@@ -7,6 +7,11 @@ import type {
   CatchData,
   FlyChangeData,
   CatchRow,
+  CommunityCatchRow,
+  TripStatus,
+  FishingType,
+  SessionType,
+  WaterClarity,
 } from '@/src/types';
 import { totalFishFromEvents } from '@/src/utils/journalTimeline';
 
@@ -251,6 +256,67 @@ export async function fetchCatchesInBounds(
     return (data as CatchRow[]) || [];
   } catch (e) {
     console.warn('[fetchCatchesInBounds]', e);
+    return [];
+  }
+}
+
+/** Minimal trip row for offline bundles (RLS: caller only receives own trips). */
+export interface OfflineTripSummary {
+  id: string;
+  status: TripStatus;
+  fishing_type: FishingType;
+  planned_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  session_type: SessionType | null;
+  rating: number | null;
+  user_reported_clarity: WaterClarity | null;
+  notes: string | null;
+}
+
+export async function fetchTripSummariesByIds(tripIds: string[]): Promise<Record<string, OfflineTripSummary>> {
+  const unique = [...new Set(tripIds.filter(Boolean))];
+  if (unique.length === 0) return {};
+  try {
+    const { data, error } = await supabase
+      .from('trips')
+      .select(
+        'id, status, fishing_type, planned_date, start_time, end_time, session_type, rating, user_reported_clarity, notes',
+      )
+      .in('id', unique);
+    if (error) throw error;
+    const map: Record<string, OfflineTripSummary> = {};
+    for (const row of data ?? []) {
+      const t = row as OfflineTripSummary;
+      map[t.id] = t;
+    }
+    return map;
+  } catch (e) {
+    console.warn('[fetchTripSummariesByIds]', e);
+    return {};
+  }
+}
+
+/** Community catches with coordinates inside the bbox (offline / map prefetch). */
+export async function fetchCommunityCatchesInBounds(
+  bbox: BoundingBox,
+): Promise<CommunityCatchRow[]> {
+  try {
+    const { data, error } = await supabase
+      .from('community_catches')
+      .select('*')
+      .not('latitude', 'is', null)
+      .not('longitude', 'is', null)
+      .gte('latitude', bbox.sw.lat)
+      .lte('latitude', bbox.ne.lat)
+      .gte('longitude', bbox.sw.lng)
+      .lte('longitude', bbox.ne.lng)
+      .order('timestamp', { ascending: false });
+
+    if (error) throw error;
+    return (data as CommunityCatchRow[]) || [];
+  } catch (e) {
+    console.warn('[fetchCommunityCatchesInBounds]', e);
     return [];
   }
 }

@@ -1,9 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Location, WeatherData, WaterFlowData, CommunityCatchRow, ConditionsSnapshotRow } from '@/src/types';
+import {
+  Location,
+  WeatherData,
+  WaterFlowData,
+  CommunityCatchRow,
+  ConditionsSnapshotRow,
+  CatchRow,
+} from '@/src/types';
+import type { BoundingBox } from '@/src/types/boundingBox';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { supabase } from '@/src/services/supabase';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
+import {
+  fetchCatchesInBounds,
+  fetchCommunityCatchesInBounds,
+  fetchTripSummariesByIds,
+  type OfflineTripSummary,
+} from '@/src/services/sync';
+import { mergeCachedCatchesFromRows } from '@/src/services/mapCatchLocalStore';
+import { deleteDriftguideOfflinePack } from '@/src/services/mapboxOfflineRegion';
 
 const DOWNLOADED_WATERWAYS_KEY = 'downloaded_waterways';
 
@@ -14,22 +30,37 @@ export interface WaterwayConditionsEntry {
 }
 
 export interface DownloadedWaterway {
-  /** Primary location id (parent or single location) */
+  /** Primary location id, or synthetic `offline-custom-*` for map-only regions */
   locationId: string;
   locationIds: string[];
   locations: Location[];
   conditions: Record<string, WaterwayConditionsEntry>;
-  /** Anonymized community catches for this waterway (for offline AI recommendations) */
+  /** Community catches inside {@link downloadBbox} when set; else legacy location-id scope */
   communityCatches: CommunityCatchRow[];
-  /** Conditions at catch time for each community catch (keyed by conditions_snapshot_id) */
   conditionsSnapshots: ConditionsSnapshotRow[];
+  /** User catches inside download bbox (full rows). */
+  personalCatches?: CatchRow[];
+  /** Own trip rows for {@link personalCatches} (keyed by trip id). */
+  tripSummariesById?: Record<string, OfflineTripSummary>;
+  downloadBbox?: BoundingBox;
+  /** Paired Mapbox offline tile pack (`driftguide-map-*`). */
+  mapPackName?: string | null;
   downloadedAt: string;
   lastRefreshedAt: string;
 }
 
-/** Fetch anonymized community catches for location ids and their conditions_snapshot rows. */
+async function fetchConditionsSnapshotsByIds(
+  snapshotIds: string[],
+): Promise<ConditionsSnapshotRow[]> {
+  if (snapshotIds.length === 0) return [];
+  const { data, error } = await supabase.from('conditions_snapshots').select('*').in('id', snapshotIds);
+  if (error || !data) return [];
+  return data as ConditionsSnapshotRow[];
+}
+
+/** Fetch community catches by location ids (legacy entries without bbox). */
 async function fetchCommunityCatchesForLocations(
-  locationIds: string[]
+  locationIds: string[],
 ): Promise<{ communityCatches: CommunityCatchRow[]; conditionsSnapshots: ConditionsSnapshotRow[] }> {
   if (locationIds.length === 0) {
     return { communityCatches: [], conditionsSnapshots: [] };
@@ -44,19 +75,22 @@ async function fetchCommunityCatchesForLocations(
     return { communityCatches: catches ?? [], conditionsSnapshots: [] };
   }
 
-  const snapshotIds = [...new Set((catches as CommunityCatchRow[]).map((c) => c.conditions_snapshot_id).filter(Boolean))] as string[];
+  const snapshotIds = [
+    ...new Set(
+      (catches as CommunityCatchRow[])
+        .map((c) => c.conditions_snapshot_id)
+        .filter(Boolean),
+    ),
+  ] as string[];
   if (snapshotIds.length === 0) {
     return { communityCatches: catches as CommunityCatchRow[], conditionsSnapshots: [] };
   }
 
-  const { data: snapshots, error: snapError } = await supabase
-    .from('conditions_snapshots')
-    .select('*')
-    .in('id', snapshotIds);
+  const snapshots = await fetchConditionsSnapshotsByIds(snapshotIds);
 
   return {
     communityCatches: catches as CommunityCatchRow[],
-    conditionsSnapshots: (snapError ? [] : (snapshots as ConditionsSnapshotRow[])) ?? [],
+    conditionsSnapshots: snapshots,
   };
 }
 
@@ -68,6 +102,8 @@ async function getStored(): Promise<Record<string, DownloadedWaterway>> {
     for (const w of Object.values(parsed)) {
       if (!Array.isArray(w.communityCatches)) w.communityCatches = [];
       if (!Array.isArray(w.conditionsSnapshots)) w.conditionsSnapshots = [];
+      if (!Array.isArray(w.personalCatches)) w.personalCatches = [];
+      if (!w.tripSummariesById || typeof w.tripSummariesById !== 'object') w.tripSummariesById = {};
     }
     return parsed;
   } catch {
@@ -96,19 +132,28 @@ async function fetchConditionsForLocation(loc: Location): Promise<WaterwayCondit
   };
 }
 
-export async function getDownloadedWaterways(): Promise<DownloadedWaterway[]> {
-  const data = await getStored();
-  return Object.values(data);
-}
+export type DownloadOfflineRegionBundleParams = {
+  userId: string;
+  bbox: BoundingBox;
+  /** Locations to pull weather/flow for (shortcut tree or roots-in-bbox expansion). */
+  locationsForConditions: Location[];
+  /** AsyncStorage key (real primary id or `offline-custom-*`). */
+  storageKey: string;
+  mapPackName: string | null;
+};
 
-export async function downloadWaterway(
-  primaryLocationId: string,
-  locations: Location[],
+/**
+ * Persist conditions for the given locations, user + community catches inside `bbox`,
+ * and merge user catches into the global pin/full cache.
+ */
+export async function downloadOfflineRegionBundle(
+  params: DownloadOfflineRegionBundleParams,
 ): Promise<void> {
+  const { userId, bbox, locationsForConditions, storageKey, mapPackName } = params;
   const now = new Date().toISOString();
   const conditions: Record<string, WaterwayConditionsEntry> = {};
 
-  for (const loc of locations) {
+  for (const loc of locationsForConditions) {
     try {
       conditions[loc.id] = await fetchConditionsForLocation(loc);
     } catch (e) {
@@ -117,23 +162,46 @@ export async function downloadWaterway(
     }
   }
 
-  const locationIds = locations.map((l) => l.id);
-  const { communityCatches, conditionsSnapshots } = await fetchCommunityCatchesForLocations(locationIds);
+  const [personalRows, communityCatches] = await Promise.all([
+    fetchCatchesInBounds(userId, bbox),
+    fetchCommunityCatchesInBounds(bbox),
+  ]);
+
+  const tripIds = personalRows.map((r) => r.trip_id);
+  const tripSummariesById = await fetchTripSummariesByIds(tripIds);
+
+  await mergeCachedCatchesFromRows(personalRows);
+
+  const snapshotIds = [
+    ...new Set(
+      communityCatches.map((c) => c.conditions_snapshot_id).filter(Boolean),
+    ),
+  ] as string[];
+  const conditionsSnapshots = await fetchConditionsSnapshotsByIds(snapshotIds);
 
   const entry: DownloadedWaterway = {
-    locationId: primaryLocationId,
-    locationIds,
-    locations,
+    locationId: storageKey,
+    locationIds: locationsForConditions.map((l) => l.id),
+    locations: locationsForConditions,
     conditions,
     communityCatches,
     conditionsSnapshots,
+    personalCatches: personalRows,
+    tripSummariesById,
+    downloadBbox: bbox,
+    mapPackName: mapPackName ?? undefined,
     downloadedAt: now,
     lastRefreshedAt: now,
   };
 
   const data = await getStored();
-  data[primaryLocationId] = entry;
+  data[storageKey] = entry;
   await setStored(data);
+}
+
+export async function getDownloadedWaterways(): Promise<DownloadedWaterway[]> {
+  const data = await getStored();
+  return Object.values(data);
 }
 
 export async function getCachedConditions(
@@ -145,7 +213,8 @@ export async function getCachedConditions(
     if (!w.locationIds.includes(locationId) && w.locationId !== locationId) {
       if (parentLocationId && w.locationId !== parentLocationId) continue;
     }
-    const entry = w.conditions[locationId] ?? (parentLocationId ? w.conditions[parentLocationId] : null);
+    const entry =
+      w.conditions[locationId] ?? (parentLocationId ? w.conditions[parentLocationId] : null);
     if (entry) return entry;
     const anyLoc = w.locations.find((l) => l.id === locationId || l.id === parentLocationId);
     if (anyLoc && w.conditions[anyLoc.id]) return w.conditions[anyLoc.id];
@@ -153,7 +222,10 @@ export async function getCachedConditions(
   return null;
 }
 
-export async function refreshWaterway(primaryLocationId: string): Promise<void> {
+export async function refreshWaterway(
+  primaryLocationId: string,
+  userId?: string | null,
+): Promise<void> {
   const data = await getStored();
   const w = data[primaryLocationId];
   if (!w) return;
@@ -170,26 +242,54 @@ export async function refreshWaterway(primaryLocationId: string): Promise<void> 
     }
   }
 
-  const { communityCatches, conditionsSnapshots } = await fetchCommunityCatchesForLocations(w.locationIds);
+  let communityCatches = w.communityCatches;
+  let conditionsSnapshots = w.conditionsSnapshots;
+  let personalCatches = w.personalCatches ?? [];
+
+  if (w.downloadBbox) {
+    communityCatches = await fetchCommunityCatchesInBounds(w.downloadBbox);
+    const snapIds = [
+      ...new Set(communityCatches.map((c) => c.conditions_snapshot_id).filter(Boolean)),
+    ] as string[];
+    conditionsSnapshots = await fetchConditionsSnapshotsByIds(snapIds);
+    if (userId) {
+      personalCatches = await fetchCatchesInBounds(userId, w.downloadBbox);
+      await mergeCachedCatchesFromRows(personalCatches);
+    }
+  } else {
+    const legacy = await fetchCommunityCatchesForLocations(w.locationIds);
+    communityCatches = legacy.communityCatches;
+    conditionsSnapshots = legacy.conditionsSnapshots;
+  }
+
+  let tripSummariesById = w.tripSummariesById ?? {};
+  if (userId && personalCatches.length > 0) {
+    tripSummariesById = await fetchTripSummariesByIds(personalCatches.map((r) => r.trip_id));
+  }
 
   data[primaryLocationId] = {
     ...w,
     conditions,
     communityCatches,
     conditionsSnapshots,
+    personalCatches,
+    tripSummariesById,
     lastRefreshedAt: now,
   };
   await setStored(data);
 }
 
-export async function refreshAllIfStale(maxAgeMs: number): Promise<void> {
+export async function refreshAllIfStale(
+  maxAgeMs: number,
+  userId?: string | null,
+): Promise<void> {
   const data = await getStored();
   const now = Date.now();
   for (const w of Object.values(data)) {
     const refreshed = new Date(w.lastRefreshedAt).getTime();
     if (now - refreshed >= maxAgeMs) {
       try {
-        await refreshWaterway(w.locationId);
+        await refreshWaterway(w.locationId, userId);
       } catch (e) {
         console.warn('Failed to refresh waterway', w.locationId, e);
       }
@@ -199,8 +299,28 @@ export async function refreshAllIfStale(maxAgeMs: number): Promise<void> {
 
 export async function removeDownloadedWaterway(primaryLocationId: string): Promise<void> {
   const data = await getStored();
+  const w = data[primaryLocationId];
+  if (w?.mapPackName) {
+    try {
+      await deleteDriftguideOfflinePack(w.mapPackName);
+    } catch (e) {
+      console.warn('[waterwayCache] delete map pack', e);
+    }
+  }
   delete data[primaryLocationId];
   await setStored(data);
+}
+
+/** After deleting a Mapbox pack from Profile, drop matching AsyncStorage bundle. */
+export async function removeDownloadedDataForMapPack(mapPackName: string): Promise<void> {
+  const data = await getStored();
+  for (const [key, w] of Object.entries(data)) {
+    if (w.mapPackName === mapPackName) {
+      delete data[key];
+      await setStored(data);
+      return;
+    }
+  }
 }
 
 /** All locations from all downloaded waterways, for offline "Start trip" location list. */
