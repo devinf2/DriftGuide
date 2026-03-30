@@ -150,7 +150,11 @@ export function ConditionsTab({
             <View style={styles.conditionGridItem}>
               <Text style={styles.conditionGridLabel}>Moon</Text>
               <View style={styles.moonPhaseRow}>
-                <MoonPhaseShape phase={moonPhase} size={28} />
+                <MoonPhaseShape
+                  phase={moonPhase}
+                  size={28}
+                  southernHemisphere={location?.latitude != null && location.latitude < 0}
+                />
                 <Text style={styles.conditionGridValue}>{MOON_PHASE_LABELS[moonPhase]}</Text>
               </View>
             </View>
