@@ -24,20 +24,24 @@ export default function TripSurveyScreen() {
   const [rating, setRating] = useState<number | null>(null);
   const [userReportedClarity, setUserReportedClarity] = useState<WaterClarity | null>(null);
   const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'submit' | 'skip' | null>(null);
 
   const canSubmit = rating !== null;
   const trip = activeTrip?.id === id ? activeTrip : null;
+  const busy = pendingAction !== null;
 
-  const handleSubmit = async () => {
-    if (!id || !trip || !canSubmit) return;
-    setSubmitting(true);
+  const finishSurvey = async (
+    action: 'submit' | 'skip',
+    payload: {
+      rating: number | null;
+      user_reported_clarity: WaterClarity | null;
+      notes: string | null;
+    },
+  ) => {
+    if (!id || !trip) return;
+    setPendingAction(action);
     try {
-      const synced = await updateTripSurvey(id, {
-        rating,
-        user_reported_clarity: userReportedClarity,
-        notes: notes.trim() || null,
-      });
+      const synced = await updateTripSurvey(id, payload);
       if (!synced) {
         Alert.alert(
           'Saved on device',
@@ -47,8 +51,25 @@ export default function TripSurveyScreen() {
       }
       router.replace(`/trip/${id}/summary`);
     } catch {
-      setSubmitting(false);
+      setPendingAction(null);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    await finishSurvey('submit', {
+      rating,
+      user_reported_clarity: userReportedClarity,
+      notes: notes.trim() || null,
+    });
+  };
+
+  const handleSkip = async () => {
+    await finishSurvey('skip', {
+      rating: null,
+      user_reported_clarity: null,
+      notes: null,
+    });
   };
 
   if (!trip) {
@@ -133,14 +154,32 @@ export default function TripSurveyScreen() {
         />
 
         <Pressable
-          style={[styles.primaryButton, styles.submitButton, !canSubmit && styles.primaryButtonDisabled]}
+          style={[
+            styles.primaryButton,
+            styles.submitButton,
+            (!canSubmit || busy) && styles.primaryButtonDisabled,
+          ]}
           onPress={handleSubmit}
-          disabled={!canSubmit || submitting}
+          disabled={!canSubmit || busy}
         >
-          {submitting ? (
+          {pendingAction === 'submit' ? (
             <ActivityIndicator color={Colors.textInverse} />
           ) : (
             <Text style={styles.primaryButtonText}>Done</Text>
+          )}
+        </Pressable>
+
+        <Pressable
+          style={[styles.skipButton, busy && styles.skipButtonDisabled]}
+          onPress={handleSkip}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel="Skip survey"
+        >
+          {pendingAction === 'skip' ? (
+            <ActivityIndicator color={Colors.textSecondary} />
+          ) : (
+            <Text style={styles.skipButtonText}>Skip</Text>
           )}
         </Pressable>
       </ScrollView>
@@ -247,7 +286,19 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   submitButton: {
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  skipButton: {
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+  },
+  skipButtonDisabled: {
+    opacity: 0.5,
+  },
+  skipButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textSecondary,
   },
   primaryButtonText: {
     color: Colors.textInverse,

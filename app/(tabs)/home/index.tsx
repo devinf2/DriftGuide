@@ -1,39 +1,35 @@
-import { View, Text, StyleSheet, Pressable, FlatList, Alert, ActivityIndicator, ScrollView, Dimensions, RefreshControl, Image as RNImage } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
-import { format } from 'date-fns';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTripStore } from '@/src/stores/tripStore';
+import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { getTopFishingSpots, type SpotSuggestion } from '@/src/services/ai';
+import { fetchAllLocationConditions, getDriftGuideScore } from '@/src/services/conditions';
+import { haversineDistance } from '@/src/services/locationService';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { useTripStore } from '@/src/stores/tripStore';
+import { Location, LocationConditions, Trip } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
-import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
-import { useEffect, useState, useCallback } from 'react';
-import { Trip, Photo, Location, NextFlyRecommendation, LocationConditions } from '@/src/types';
-import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import * as ExpoLocation from 'expo-location';
-import {
-  getTopFishingSpots,
-  getFlyOfTheDay,
-  type FlyOfTheDayOptions,
-  type SpotSuggestion,
-} from '@/src/services/ai';
-import { fetchAllLocationConditions, getDriftGuideScore } from '@/src/services/conditions';
-import { fetchPhotos } from '@/src/services/photoService';
-import { haversineDistance } from '@/src/services/locationService';
+import { profileDisplayName } from '@/src/utils/profileDisplay';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
-import { getLocationSuccessSummary } from '@/src/services/locationSuccess';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { format } from 'date-fns';
+import * as ExpoLocation from 'expo-location';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const ALBUM_GRID_GAP = Spacing.sm;
-/** Max distance (km) for Hot Spot—only recommend spots within ~80 miles. */
-const HOT_SPOT_RADIUS_KM = 130;
-const ALBUM_COLS = 3;
-// Scroll padding (xl*2) + tile padding (sm*2) + gaps so 3 thumbs fit on one row
-const ALBUM_SIZE =
-  (Dimensions.get('window').width - Spacing.xl * 2 - Spacing.sm * 2 - ALBUM_GRID_GAP * (ALBUM_COLS - 1)) /
-  ALBUM_COLS;
+/**
+ * Max how many geotagged waters we send to the hot-spot model (smaller = closer-only).
+ * Final UI still shows at most 3, sorted by distance.
+ */
+const MAX_HOME_HOTSPOT_POOL = 8;
+/** Prefer at least this many candidates before tightening radius (else expand tiers). */
+const MIN_HOME_HOTSPOT_POOL = 3;
+/**
+ * Start with the tightest radius and only widen if there are not enough waters.
+ * Values in km (~28 / 50 / 75 / 110 mi).
+ */
+const HOME_HOTSPOT_RADIUS_TIERS_KM = [45, 80, 120, 180] as const;
 
 function getTimeGreeting(): string {
   const hour = new Date().getHours();
@@ -42,32 +38,96 @@ function getTimeGreeting(): string {
   return 'Good evening';
 }
 
-function formatConditionsSummary(c: LocationConditions): string {
-  const flow =
-    c.water.flow_cfs != null ? `${Math.round(c.water.flow_cfs)} cfs` : 'flow n/a';
-  return `${c.sky.label}, ${Math.round(c.temperature.temp_f)}\u00B0F, wind ${Math.round(c.wind.speed_mph)} mph, ${c.water.clarity}, ${flow}`;
+/**
+ * One line under the hero. Intentionally does not repeat `suggestion.reason`—that copy
+ * lives on Today's Angle cards so we don't show the same paragraph twice.
+ */
+function getHomeTagline(
+  hotSpotLoading: boolean,
+  firstHot: HotSpotData | undefined,
+): string {
+  if (hotSpotLoading) return 'Checking conditions for your waters…';
+  if (firstHot) {
+    return `${firstHot.location.name} is updated—tap below for the full picture and get out there.`;
+  }
+  return "Plan where you're going next—then we'll surface conditions and your trip tools.";
+}
+
+/** Distance from user for display; null if unknown. */
+function distanceKmForLocation(
+  loc: Location,
+  userCoords: { latitude: number; longitude: number } | null,
+): number | null {
+  if (!userCoords) return null;
+  const lat = loc.latitude ?? null;
+  const lng = loc.longitude ?? null;
+  if (lat == null || lng == null) return null;
+  return haversineDistance(userCoords.latitude, userCoords.longitude, lat, lng);
+}
+
+function formatDistanceLabel(km: number | null): string | null {
+  if (km == null || !Number.isFinite(km)) return null;
+  const mi = km * 0.621371;
+  if (mi < 0.25) return 'Nearby';
+  if (mi < 10) return `${Math.round(mi * 10) / 10} mi away`;
+  return `${Math.round(mi)} mi away`;
+}
+
+/**
+ * Prefer locations near the user: strict distance tiers, then nearest-N cap for the model.
+ * Falls back to all top-level waters when we have no GPS fix or no coordinates on file.
+ */
+function selectLocationsForHomeHotSpots(
+  topLevel: Location[],
+  userCoords: { latitude: number; longitude: number } | null,
+): Location[] {
+  const withCoords = topLevel.filter(
+    (l) => l.latitude != null && l.longitude != null,
+  ) as (Location & { latitude: number; longitude: number })[];
+  if (!userCoords || withCoords.length === 0) {
+    return topLevel;
+  }
+  const distKm = (l: (typeof withCoords)[number]) =>
+    haversineDistance(userCoords.latitude, userCoords.longitude, l.latitude, l.longitude);
+
+  const sorted = [...withCoords].sort((a, b) => distKm(a) - distKm(b));
+
+  for (const maxKm of HOME_HOTSPOT_RADIUS_TIERS_KM) {
+    const inBand = sorted.filter((l) => distKm(l) <= maxKm);
+    if (inBand.length >= MIN_HOME_HOTSPOT_POOL) {
+      return inBand.slice(0, MAX_HOME_HOTSPOT_POOL);
+    }
+  }
+  return sorted.slice(0, MAX_HOME_HOTSPOT_POOL);
 }
 
 type HotSpotData = {
   suggestion: SpotSuggestion;
   location: Location;
   conditions: import('@/src/types').LocationConditions;
+  /** km from user when location permission + coords available */
+  distanceKm: number | null;
 };
 
-function HotSpotCard({
+function HotSpotCardBody({
   hotSpotData,
-  onPress,
+  distanceLabel,
 }: {
   hotSpotData: HotSpotData;
-  onPress: () => void;
+  distanceLabel?: string | null;
 }) {
   const score = getDriftGuideScore(hotSpotData.conditions);
   return (
-    <Pressable style={styles.hotSpotCard} onPress={onPress}>
+    <>
       <View style={styles.hotSpotHeader}>
-        <Text style={styles.hotSpotName} numberOfLines={1}>
-          {hotSpotData.location.name}
-        </Text>
+        <View style={styles.hotSpotTitleBlock}>
+          <Text style={styles.hotSpotName} numberOfLines={2}>
+            {hotSpotData.location.name}
+          </Text>
+          {distanceLabel ? (
+            <Text style={styles.hotSpotDistance}>{distanceLabel}</Text>
+          ) : null}
+        </View>
         <View style={styles.hotSpotStarsRow}>
           {[0, 1, 2, 3, 4].map((i) => {
             const fullStars = Math.floor(score.stars);
@@ -95,11 +155,32 @@ function HotSpotCard({
         </View>
       </View>
       {hotSpotData.suggestion.reason ? (
-        <Text style={styles.hotSpotReason} numberOfLines={2}>
+        <Text style={styles.hotSpotReason} numberOfLines={3}>
           {hotSpotData.suggestion.reason}
         </Text>
       ) : null}
-      <Text style={styles.hotSpotTapHint}>Tap for report & conditions</Text>
+    </>
+  );
+}
+
+function HotSpotCard({
+  hotSpotData,
+  onPress,
+}: {
+  hotSpotData: HotSpotData;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={styles.hotSpotCard}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityHint="Opens spot report and conditions"
+    >
+      <HotSpotCardBody
+        hotSpotData={hotSpotData}
+        distanceLabel={formatDistanceLabel(hotSpotData.distanceKm)}
+      />
     </Pressable>
   );
 }
@@ -123,16 +204,12 @@ export default function HomeScreen() {
   const { profile, user } = useAuthStore();
   const { locations, fetchLocations } = useLocationStore();
   const [elapsed, setElapsed] = useState('0m');
-  const [albumPhotos, setAlbumPhotos] = useState<Photo[]>([]);
-  const [albumLoading, setAlbumLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [hotSpotList, setHotSpotList] = useState<HotSpotData[]>([]);
   const [hotSpotsExpanded, setHotSpotsExpanded] = useState(false);
   const [hotSpotLoading, setHotSpotLoading] = useState(false);
   const [hotSpotRefreshKey, setHotSpotRefreshKey] = useState(0);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [flyOfDay, setFlyOfDay] = useState<NextFlyRecommendation | null>(null);
-  const [flyOfDayLoading, setFlyOfDayLoading] = useState(false);
 
   useEffect(() => {
     if (!activeTrip) return;
@@ -187,16 +264,7 @@ export default function HomeScreen() {
       setHotSpotLoading(false);
       return;
     }
-    const candidates =
-      userCoords &&
-      topLevel.filter((loc) => {
-        const lat = loc.latitude ?? null;
-        const lng = loc.longitude ?? null;
-        if (lat == null || lng == null) return false;
-        return haversineDistance(userCoords.latitude, userCoords.longitude, lat, lng) <= HOT_SPOT_RADIUS_KM;
-      });
-    // When user is far from all spots, still show hot spots from all top-level locations
-    const spotsToUse = (candidates && candidates.length > 0 ? candidates : topLevel) as typeof topLevel;
+    const spotsToUse = selectLocationsForHomeHotSpots(topLevel, userCoords);
     if (spotsToUse.length === 0) {
       setHotSpotList([]);
       setHotSpotLoading(false);
@@ -209,10 +277,11 @@ export default function HomeScreen() {
       getTopFishingSpots(spotsToUse, conditionsMap).then((suggestions) => {
         if (cancelled) return;
         const list: HotSpotData[] = [];
+        const seenIds = new Set<string>();
         const suggestionName = (s: SpotSuggestion) => s.locationName.toLowerCase().trim();
         const primaryPart = (s: SpotSuggestion) => suggestionName(s).split(/[\s]*[-–—][\s]*/)[0]?.trim() ?? suggestionName(s);
-        for (const suggestion of suggestions.slice(0, 3)) {
-          const loc = locations.find(
+        for (const suggestion of suggestions.slice(0, 6)) {
+          const loc = spotsToUse.find(
             (l) => {
               const ln = l.name.toLowerCase();
               const sn = suggestionName(suggestion);
@@ -223,16 +292,61 @@ export default function HomeScreen() {
                 pp.includes(ln);
             },
           );
-          if (!loc) continue;
+          if (!loc || seenIds.has(loc.id)) continue;
           const conditions =
             conditionsMap.get(loc.id) ??
             (loc.parent_location_id ? conditionsMap.get(loc.parent_location_id) : undefined);
           const conditionsToUse =
             conditions ??
             (conditionsMap.size > 0 ? Array.from(conditionsMap.values())[0] : undefined);
-          if (conditionsToUse) list.push({ suggestion, location: loc, conditions: conditionsToUse });
+          if (conditionsToUse) {
+            seenIds.add(loc.id);
+            list.push({
+              suggestion,
+              location: loc,
+              conditions: conditionsToUse,
+              distanceKm: distanceKmForLocation(loc, userCoords),
+            });
+          }
         }
-        setHotSpotList(list);
+        list.sort((a, b) => {
+          const ad = a.distanceKm;
+          const bd = b.distanceKm;
+          if (ad == null && bd == null) return 0;
+          if (ad == null) return 1;
+          if (bd == null) return -1;
+          return ad - bd;
+        });
+        let top = list.slice(0, 3);
+        if (top.length === 0 && spotsToUse.length > 0) {
+          const fallback: HotSpotData[] = [];
+          for (const loc of spotsToUse) {
+            const conditions =
+              conditionsMap.get(loc.id) ??
+              (loc.parent_location_id ? conditionsMap.get(loc.parent_location_id) : undefined);
+            if (!conditions) continue;
+            fallback.push({
+              suggestion: {
+                locationName: loc.name,
+                reason: '',
+                confidence: 0.5,
+              },
+              location: loc,
+              conditions,
+              distanceKm: distanceKmForLocation(loc, userCoords),
+            });
+          }
+          fallback.sort((a, b) => {
+            const ad = a.distanceKm;
+            const bd = b.distanceKm;
+            if (ad == null && bd == null) return 0;
+            if (ad == null) return 1;
+            if (bd == null) return -1;
+            return ad - bd;
+          });
+          top = fallback.slice(0, 3);
+        }
+        setHotSpotList(top);
         setHotSpotLoading(false);
       });
     });
@@ -240,74 +354,6 @@ export default function HomeScreen() {
       cancelled = true;
     };
   }, [fullHome, locations, fetchLocations, hotSpotRefreshKey, userCoords?.latitude, userCoords?.longitude]);
-
-  const primaryHotSpotId = hotSpotList[0]?.location.id;
-
-  useEffect(() => {
-    if (!fullHome || !user?.id) {
-      setFlyOfDay(null);
-      setFlyOfDayLoading(false);
-      return;
-    }
-    if (hotSpotLoading) return;
-    let cancelled = false;
-    (async () => {
-      setFlyOfDayLoading(true);
-      try {
-        const userFlies = await fetchFlies(user.id).catch(() => getFliesFromCache(user.id));
-        if (cancelled) return;
-        const first = hotSpotList[0];
-        const opts: FlyOfTheDayOptions = { userFlies };
-        if (first) {
-          const successSummary = await getLocationSuccessSummary(first.location.id).catch(
-            () => 'No recent trip data.',
-          );
-          if (cancelled) return;
-          opts.locationName = first.location.name;
-          opts.conditionsSummary = formatConditionsSummary(first.conditions);
-          opts.locationSuccessSummary = successSummary;
-        }
-        const rec = await getFlyOfTheDay(user.id, opts);
-        if (!cancelled) setFlyOfDay(rec);
-      } catch {
-        if (!cancelled) setFlyOfDay(null);
-      } finally {
-        if (!cancelled) setFlyOfDayLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [fullHome, user?.id, hotSpotLoading, primaryHotSpotId, hotSpotRefreshKey]);
-
-  const loadAlbumPhotos = useCallback(async () => {
-    if (!user?.id) return;
-    setAlbumLoading(true);
-    try {
-      const photos = await fetchPhotos(user.id);
-      setAlbumPhotos(photos);
-    } catch (e) {
-      setAlbumPhotos([]);
-      const msg = e instanceof Error ? e.message : String(e);
-      const hint = msg.includes('does not exist') || msg.includes('relation')
-        ? ' Run Supabase migration 008_single_photos_table.sql to create the photos table.'
-        : '';
-      Alert.alert('Could not load album', msg + hint);
-    } finally {
-      setAlbumLoading(false);
-    }
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (user && fullHome) loadAlbumPhotos();
-  }, [user, fullHome, loadAlbumPhotos]);
-
-  // Refetch album whenever this tab is focused (e.g. after adding a photo or switching back)
-  useFocusEffect(
-    useCallback(() => {
-      if (user?.id && fullHome) loadAlbumPhotos();
-    }, [user?.id, fullHome, loadAlbumPhotos])
-  );
 
   const handleStartPlannedTrip = useCallback(async (tripId: string) => {
     const result = await startPlannedTrip(tripId);
@@ -333,11 +379,10 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadAlbumPhotos();
     if (user?.id && fullHome) fetchPlannedTrips(user.id);
     if (fullHome) setHotSpotRefreshKey((k) => k + 1);
     setRefreshing(false);
-  }, [loadAlbumPhotos, user?.id, fullHome, fetchPlannedTrips]);
+  }, [user?.id, fullHome, fetchPlannedTrips]);
 
   const handleResumeTrip = useCallback(() => {
     const s = useTripStore.getState();
@@ -412,10 +457,12 @@ export default function HomeScreen() {
       }
     >
       <View style={styles.hero}>
+        <Text style={styles.heroEyebrow}>{"Let's fish"}</Text>
         <Text style={styles.greeting}>
-          {getTimeGreeting()}{profile?.display_name ? `, ${profile.display_name}` : ''}
+          {getTimeGreeting()}
+          {profile ? `, ${profileDisplayName(profile)}` : ''}
         </Text>
-        <Text style={styles.subtitle}>Ready to hit the water?</Text>
+        <Text style={styles.subtitle}>{getHomeTagline(hotSpotLoading, hotSpotList[0])}</Text>
       </View>
 
       {activeTrip && isTripPaused && (
@@ -447,55 +494,9 @@ export default function HomeScreen() {
         </View>
       )}
 
-      <Pressable
-        style={styles.startButton}
-        onPress={() => router.push('/trip/new')}
-      >
-        <MaterialCommunityIcons name="fish" size={28} color={Colors.textInverse} />
-        <Text style={styles.startButtonText}>Plan a Trip</Text>
-      </Pressable>
-
-      <View style={styles.hotSpotSection}>
-        <Text style={styles.sectionTitle}>Hot Spot</Text>
-        {hotSpotLoading ? (
-          <View style={styles.hotSpotCard}>
-            <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.lg }} />
-          </View>
-        ) : (
-          <>
-            {hotSpotList.slice(0, hotSpotsExpanded ? 3 : 1).map((hotSpot) => (
-              <View key={hotSpot.location.id} style={styles.hotSpotCardWrap}>
-                <HotSpotCard
-                  hotSpotData={hotSpot}
-                  onPress={() => router.push(`/spot/${hotSpot.location.id}`)}
-                />
-              </View>
-            ))}
-            {hotSpotList.length > 1 && !hotSpotsExpanded && (
-              <Pressable
-                style={styles.seeMoreHotSpots}
-                onPress={() => setHotSpotsExpanded(true)}
-              >
-                <Text style={styles.seeMoreHotSpotsText}>See More</Text>
-                <Ionicons name="chevron-down" size={18} color={Colors.primary} />
-              </Pressable>
-            )}
-            {hotSpotsExpanded && hotSpotList.length > 1 && (
-              <Pressable
-                style={styles.seeMoreHotSpots}
-                onPress={() => setHotSpotsExpanded(false)}
-              >
-                <Text style={styles.seeMoreHotSpotsText}>See less</Text>
-                <Ionicons name="chevron-up" size={18} color={Colors.primary} />
-              </Pressable>
-            )}
-          </>
-        )}
-      </View>
-
       {plannedTrips.length > 0 && (
         <View style={styles.plannedSection}>
-          <Text style={styles.sectionTitle}>Your Planned Trips</Text>
+          <Text style={styles.sectionTitle}>Up next</Text>
           {plannedTripsLoading ? (
             <ActivityIndicator color={Colors.primary} style={{ marginTop: Spacing.md }} />
           ) : (
@@ -536,70 +537,49 @@ export default function HomeScreen() {
         </View>
       )}
 
-      <View style={styles.albumTile}>
-        <View style={styles.albumTileHeader}>
-          <Text style={styles.albumTileTitle}>Photo Album</Text>
-          <Pressable
-            style={styles.albumViewAllButton}
-            onPress={() => router.push('/home/photos')}
-          >
-            <Text style={styles.albumViewAllText}>View all</Text>
-            <MaterialCommunityIcons name="chevron-right" size={18} color={Colors.primary} />
-          </Pressable>
-        </View>
-        {albumLoading ? (
-          <View style={styles.albumGridPlaceholder}>
-            <ActivityIndicator color={Colors.primary} />
+      <View style={styles.todaysAngleSection}>
+        <Text style={styles.todaysAngleSectionTitle}>{"Today's angle"}</Text>
+        {hotSpotLoading ? (
+          <View style={[styles.hotSpotCard, styles.todaysAngleLoading]}>
+            <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.lg }} />
           </View>
-        ) : albumPhotos.length === 0 ? (
-          <Pressable style={styles.albumEmptyTile} onPress={() => router.push('/home/photos')}>
-            <MaterialCommunityIcons name="image-plus" size={40} color={Colors.textTertiary} />
-            <Text style={styles.albumEmptyText}>View all to add photos</Text>
-          </Pressable>
-        ) : (
-          <View style={styles.albumGrid}>
-            {albumPhotos.slice(0, 3).map((photo) => (
-              <Pressable
-                key={photo.id}
-                style={styles.albumThumb}
-                onPress={() => router.push('/home/photos')}
-              >
-                <RNImage
-                  source={{ uri: photo.url }}
-                  style={StyleSheet.absoluteFill}
-                  resizeMode="cover"
-                />
-              </Pressable>
-            ))}
-          </View>
-        )}
-      </View>
-
-      <View style={styles.flyOfDaySection}>
-        <Text style={styles.sectionTitle}>Fly of the day</Text>
-        {flyOfDayLoading || hotSpotLoading ? (
-          <View style={styles.flyOfDayCard}>
-            <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing.md }} />
-          </View>
-        ) : flyOfDay ? (
-          <View style={styles.flyOfDayCard}>
-            <View style={styles.flyOfDayHeader}>
-              <MaterialCommunityIcons name="hook" size={22} color={Colors.accent} />
-              <Text style={styles.flyOfDayPattern} numberOfLines={2}>
-                {flyOfDay.pattern}
-                {flyOfDay.size != null ? ` #${flyOfDay.size}` : ''}
-                {flyOfDay.color ? ` \u00B7 ${flyOfDay.color}` : ''}
-              </Text>
+        ) : hotSpotList[0] ? (
+          <>
+            <View style={styles.hotSpotCardWrap}>
+              <HotSpotCard
+                hotSpotData={hotSpotList[0]}
+                onPress={() => router.push(`/spot/${hotSpotList[0].location.id}`)}
+              />
             </View>
-            {flyOfDay.reason ? (
-              <Text style={styles.flyOfDayReason} numberOfLines={4}>
-                {flyOfDay.reason}
-              </Text>
+            {hotSpotsExpanded &&
+              hotSpotList.slice(1).map((hotSpot) => (
+                <View key={hotSpot.location.id} style={styles.hotSpotCardWrap}>
+                  <HotSpotCard
+                    hotSpotData={hotSpot}
+                    onPress={() => router.push(`/spot/${hotSpot.location.id}`)}
+                  />
+                </View>
+              ))}
+            {hotSpotList.length > 1 && !hotSpotsExpanded ? (
+              <Pressable style={styles.seeMoreHotSpots} onPress={() => setHotSpotsExpanded(true)}>
+                <Text style={styles.seeMoreHotSpotsText}>More waters to consider</Text>
+                <Ionicons name="chevron-down" size={18} color={Colors.primary} />
+              </Pressable>
             ) : null}
-          </View>
+            {hotSpotsExpanded && hotSpotList.length > 1 ? (
+              <Pressable style={styles.seeMoreHotSpots} onPress={() => setHotSpotsExpanded(false)}>
+                <Text style={styles.seeMoreHotSpotsText}>Show fewer</Text>
+                <Ionicons name="chevron-up" size={18} color={Colors.primary} />
+              </Pressable>
+            ) : null}
+          </>
         ) : (
-          <View style={styles.flyOfDayCard}>
-            <Text style={styles.flyOfDayEmpty}>Pull to refresh for a recommendation.</Text>
+          <View style={[styles.hotSpotCard, styles.todaysAngleEmptyCard]}>
+            <Text style={styles.todaysAngleEmptyText}>
+              {
+                "When you have waters in the app, we'll highlight where conditions look strongest so you can pick where to fish."
+              }
+            </Text>
           </View>
         )}
       </View>
@@ -624,47 +604,58 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
     marginBottom: Spacing.lg,
   },
+  heroEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+    marginBottom: Spacing.sm,
+  },
   greeting: {
     fontSize: FontSize.xxxl,
     fontWeight: '700',
     color: Colors.text,
   },
   subtitle: {
-    fontSize: FontSize.lg,
+    fontSize: FontSize.md,
     color: Colors.textSecondary,
-    marginTop: Spacing.xs,
+    marginTop: Spacing.sm,
+    lineHeight: 22,
   },
-  startButton: {
-    flexDirection: 'row',
+  todaysAngleSection: {
+    marginBottom: Spacing.lg,
+  },
+  todaysAngleSectionTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: Spacing.md,
+  },
+  todaysAngleLoading: {
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.lg,
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.xl,
-    marginBottom: Spacing.lg,
-    shadowColor: Colors.primaryDark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
   },
-  startButtonText: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.textInverse,
+  todaysAngleEmptyCard: {
+    paddingVertical: Spacing.xl,
+    paddingHorizontal: Spacing.sm,
   },
-  hotSpotSection: {
-    marginBottom: Spacing.lg,
+  todaysAngleEmptyText: {
+    fontSize: FontSize.md,
+    color: Colors.textSecondary,
+    lineHeight: 22,
   },
   hotSpotCardWrap: {
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.md,
   },
   hotSpotCard: {
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.lg,
-    padding: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.lg,
+    paddingRight: Spacing.lg,
+    paddingLeft: Spacing.lg + Spacing.sm,
     borderLeftWidth: 4,
     borderLeftColor: Colors.accent,
     borderWidth: 1,
@@ -673,19 +664,30 @@ const styles = StyleSheet.create({
   hotSpotHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: Spacing.sm,
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  hotSpotTitleBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   hotSpotName: {
-    flex: 1,
     fontSize: FontSize.lg,
     fontWeight: '700',
     color: Colors.text,
+  },
+  hotSpotDistance: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.primaryLight,
+    marginTop: Spacing.xs,
   },
   hotSpotStarsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
+    paddingTop: 2,
+    flexShrink: 0,
   },
   starPartialWrap: {
     width: 18,
@@ -710,124 +712,21 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     marginTop: Spacing.sm,
-  },
-  hotSpotTapHint: {
-    fontSize: FontSize.xs,
-    color: Colors.textTertiary,
-    marginTop: Spacing.xs,
+    lineHeight: 20,
   },
   seeMoreHotSpots: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.xs,
-    paddingVertical: Spacing.xs,
+    paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.sm,
+    marginTop: Spacing.xs,
   },
   seeMoreHotSpotsText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
     color: Colors.primary,
-  },
-  albumTile: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.lg,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.sm,
-    marginBottom: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  albumTileHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.xs,
-  },
-  albumTileTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  albumViewAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  albumViewAllText: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.primary,
-  },
-  albumEmptyTile: {
-    minHeight: ALBUM_SIZE,
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  albumGridPlaceholder: {
-    minHeight: ALBUM_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  albumEmptyText: {
-    fontSize: FontSize.sm,
-    color: Colors.textTertiary,
-  },
-  albumGrid: {
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
-    gap: ALBUM_GRID_GAP,
-  },
-  albumThumb: {
-    width: ALBUM_SIZE,
-    height: ALBUM_SIZE,
-    minWidth: ALBUM_SIZE,
-    minHeight: ALBUM_SIZE,
-    borderRadius: BorderRadius.md,
-    overflow: 'hidden',
-  },
-  flyOfDaySection: {
-    marginBottom: Spacing.lg,
-  },
-  flyOfDayCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.primary,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  flyOfDayHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  flyOfDayPattern: {
-    flex: 1,
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  flyOfDayReason: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginTop: Spacing.sm,
-    lineHeight: 20,
-  },
-  flyOfDayEmpty: {
-    fontSize: FontSize.sm,
-    color: Colors.textTertiary,
-    textAlign: 'center',
-    paddingVertical: Spacing.sm,
   },
   plannedSection: {
     marginBottom: Spacing.lg,

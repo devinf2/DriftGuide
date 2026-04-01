@@ -554,6 +554,8 @@ function buildSpotSuggestionPrompt(
   spots: LocationWithConditions[],
   season: string,
   timeOfDay: string,
+  contextDate: Date,
+  forPlannedTrip: boolean,
 ): string {
   const locationLines = spots.map(s => {
     const parts = [`- ${s.name}:`];
@@ -565,19 +567,27 @@ function buildSpotSuggestionPrompt(
     return parts.join(', ');
   });
 
+  const intro = forPlannedTrip
+    ? 'You are an expert fishing guide in Utah. Based on the planned date, season, time of day, and forecast (or current) weather plus current water flow/clarity below, recommend the top 3 places to fish for that trip.'
+    : 'You are an expert fishing guide in Utah. Based on the current season, time of day, and REAL-TIME weather/water conditions below, recommend the top 3 places to fish right now.';
+
   const lines = [
-    'You are an expert fishing guide in Utah. Based on the current season, time of day, and REAL-TIME weather/water conditions below, recommend the top 3 places to fish right now.',
+    intro,
     '',
     `Season: ${season}`,
     `Time of day: ${timeOfDay}`,
-    `Date: ${new Date().toLocaleDateString()}`,
+    `Date: ${contextDate.toLocaleDateString()}`,
     '',
-    'Available locations with current conditions:',
+    forPlannedTrip
+      ? 'Available locations with conditions (weather may be forecast for the planned time; flow is current):'
+      : 'Available locations with current conditions:',
     ...locationLines,
     '',
     'IMPORTANT: Strongly penalize locations with rain, thunderstorms, snow, or severe weather. Prefer locations with clear or partly cloudy skies and manageable wind. Also consider water clarity and flow — avoid blown-out or extremely high-flow spots.',
     '',
-    'Factor the real-time conditions heavily into your rankings and mention weather in your reasoning.',
+    forPlannedTrip
+      ? 'Factor forecast weather and current flow heavily into your rankings and mention conditions in your reasoning.'
+      : 'Factor the real-time conditions heavily into your rankings and mention weather in your reasoning.',
     '',
     'Respond with ONLY valid JSON array in this exact format, no other text:',
     '[{"locationName": "Exact Location Name", "reason": "Brief reason factoring in weather & conditions", "confidence": 0.85}]',
@@ -590,25 +600,28 @@ function buildSpotSuggestionPrompt(
 export async function getTopFishingSpots(
   locations: { id: string; name: string }[],
   conditionsMap?: Map<string, import('@/src/types').LocationConditions>,
+  contextDate?: Date,
 ): Promise<SpotSuggestion[]> {
   if (!OPENAI_API_KEY || locations.length === 0) {
     await new Promise(resolve => setTimeout(resolve, 500));
     return MOCK_SPOT_SUGGESTIONS;
   }
 
+  const ref = contextDate ?? new Date();
+  const forPlannedTrip = contextDate != null;
+
   const spots: LocationWithConditions[] = locations.map(loc => {
     const c = conditionsMap?.get(loc.id);
+    const omitWeather = c?.plannedTimeWeatherUnavailable;
     return {
       name: loc.name,
-      sky: c?.sky.condition,
-      tempF: c?.temperature.temp_f,
-      windMph: c?.wind.speed_mph,
+      sky: omitWeather ? undefined : c?.sky.condition,
+      tempF: omitWeather ? undefined : c?.temperature.temp_f,
+      windMph: omitWeather ? undefined : c?.wind.speed_mph,
       flowCfs: c?.water.flow_cfs,
       clarity: c ? String(c.water.clarity) : undefined,
     };
   });
-
-  const now = new Date();
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -621,7 +634,16 @@ export async function getTopFishingSpots(
         model: AI_MODEL,
         messages: [
           { role: 'system', content: 'You are an expert Utah fishing guide. Respond with ONLY valid JSON.' },
-          { role: 'user', content: buildSpotSuggestionPrompt(spots, getSeason(now), getTimeOfDay(now)) },
+          {
+            role: 'user',
+            content: buildSpotSuggestionPrompt(
+              spots,
+              getSeason(ref),
+              getTimeOfDay(ref),
+              ref,
+              forPlannedTrip,
+            ),
+          },
         ],
         max_tokens: 400,
         temperature: 0.7,

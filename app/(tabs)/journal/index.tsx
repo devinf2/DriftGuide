@@ -1,31 +1,39 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import {
-  View, Text, StyleSheet, FlatList, Pressable, RefreshControl,
-  ActivityIndicator, Modal, Dimensions, Image, ScrollView,
-  useWindowDimensions, Platform,
-} from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ExpoLocation from 'expo-location';
+import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
-import { startOfWeek, startOfMonth, startOfYear, isAfter } from 'date-fns';
-import { Colors, Spacing, FontSize, BorderRadius, LocationTypeColors } from '@/src/constants/theme';
-import { useAuthStore } from '@/src/stores/authStore';
-import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
-import {
-  Trip,
-  type CatchRow,
-  type LocationType,
-  type WaterFlowData,
-} from '@/src/types';
-import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
-import { formatTripDate, formatTripDuration, formatFishCount } from '@/src/utils/formatters';
-import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
-import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
-import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { BorderRadius, Colors, FontSize, LocationTypeColors, Spacing } from '@/src/constants/theme';
 import { getWeatherIconName } from '@/src/services/conditions';
-import { format } from 'date-fns';
+import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
+import { useAuthStore } from '@/src/stores/authStore';
+import {
+    Trip,
+    type CatchRow,
+    type LocationType,
+    type WaterFlowData,
+} from '@/src/types';
+import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
+import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
+import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
+import { Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { format, isAfter, startOfMonth, startOfWeek, startOfYear } from 'date-fns';
+import * as ExpoLocation from 'expo-location';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Dimensions,
+    FlatList,
+    Image,
+    Modal,
+    Platform,
+    Pressable, RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type ViewMode = 'list' | 'map';
 type MapLayer = 'journal' | 'fish';

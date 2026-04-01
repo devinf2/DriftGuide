@@ -41,6 +41,13 @@
       "expo-font",
       "expo-web-browser",
       "expo-apple-authentication",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow DriftGuide to access your photos for your profile picture.",
+          "cameraPermission": "Allow DriftGuide to use the camera for your profile picture."
+        }
+      ],
       "@rnmapbox/maps"
     ],
     "experiments": {

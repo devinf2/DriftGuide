@@ -15,7 +15,7 @@ import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
 import { Location, LocationConditions, ConditionRating, SessionType } from '@/src/types';
 import * as ExpoLocation from 'expo-location';
-import { fetchAllLocationConditions } from '@/src/services/conditions';
+import { fetchAllLocationConditionsForPlannedTime } from '@/src/services/conditions';
 import { getWeatherIconName } from '@/src/services/conditions';
 import { getTopFishingSpots, getSeason, getTimeOfDay, type SpotSuggestion } from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
@@ -30,6 +30,9 @@ import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 
 /** Max drive distance (km) for suggested spots — ~2 hours at 60 mph ≈ 120 mi ≈ 193 km. */
 const SUGGESTED_SPOTS_MAX_DRIVE_KM = 193;
+
+const PLANNED_WEATHER_UNAVAILABLE_NOTE =
+  "Weather data isn't available for your selected date (forecast only reaches about 5 days out). River flow below is still current.";
 
 const CONDITION_COLORS: Record<ConditionRating, string> = {
   good: Colors.success,
@@ -46,17 +49,20 @@ function ConditionIcon({
   value,
   rating,
   compact,
+  muted,
 }: {
   label: string;
   value: string;
   rating: ConditionRating;
   compact?: boolean;
+  muted?: boolean;
 }) {
+  const valueColor = muted ? Colors.textTertiary : CONDITION_COLORS[rating];
   return (
     <View style={styles.conditionItem}>
       <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
-        <ConditionDot rating={rating} />
-        <Text style={[styles.conditionValue, { color: CONDITION_COLORS[rating] }]} numberOfLines={1}>
+        {!muted ? <ConditionDot rating={rating} /> : <View style={[styles.conditionDot, { backgroundColor: Colors.textTertiary }]} />}
+        <Text style={[styles.conditionValue, { color: valueColor }]} numberOfLines={1}>
           {value}
         </Text>
       </View>
@@ -66,8 +72,9 @@ function ConditionIcon({
 }
 
 function SkyIcon({ conditions, compact }: { conditions: LocationConditions; compact?: boolean }) {
+  const unavailable = conditions.plannedTimeWeatherUnavailable;
   const iconName = getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap;
-  const color = CONDITION_COLORS[conditions.sky.rating];
+  const color = unavailable ? Colors.textTertiary : CONDITION_COLORS[conditions.sky.rating];
   return (
     <View style={styles.conditionItem}>
       <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
@@ -84,17 +91,20 @@ function SkyIcon({ conditions, compact }: { conditions: LocationConditions; comp
 }
 
 function ConditionsRow({ conditions }: { conditions: LocationConditions }) {
+  const u = conditions.plannedTimeWeatherUnavailable;
   return (
     <View style={styles.conditionsRow}>
       <ConditionIcon
         label="Wind"
-        value={`${conditions.wind.speed_mph}mph`}
+        value={u ? '\u2014' : `${conditions.wind.speed_mph}mph`}
         rating={conditions.wind.rating}
+        muted={u}
       />
       <ConditionIcon
         label="Temp"
-        value={`${conditions.temperature.temp_f}\u00B0`}
+        value={u ? '\u2014' : `${conditions.temperature.temp_f}\u00B0`}
         rating={conditions.temperature.rating}
+        muted={u}
       />
       <ConditionIcon
         label="Water"
@@ -141,7 +151,7 @@ export default function NewTripScreen() {
   const {
     locations, fetchLocations, searchLocations, addRecentLocation,
     getRecentLocations, lastAddedLocationId, setLastAddedLocationId, getLocationById,
-    pendingPlanTripLocationId, setPendingPlanTripLocationId,
+    setPendingPlanTripLocationId,
   } = useLocationStore();
 
   const [offlineLocations, setOfflineLocations] = useState<Location[]>([]);
@@ -268,23 +278,23 @@ export default function NewTripScreen() {
     setLastAddedLocationId(null);
   }, [lastAddedLocationId, effectiveLocations, isConnected, getLocationById, setLastAddedLocationId]);
 
-  // Pre-select location when opened with locationId param (e.g. deep link)
+  // Pre-select location when opened with locationId param (e.g. deep link or Select for trip from Home)
   useEffect(() => {
-    const locationId = params.locationId;
-    if (locationId && effectiveLocations.length > 0) {
-      const loc = getEffectiveLocationById(locationId);
-      if (loc) {
-        setSelectedLocation(loc);
-        setShowLocationSearch(false);
-        setSearchQuery('');
-      }
+    const raw = params.locationId;
+    const locationId = raw == null ? undefined : Array.isArray(raw) ? raw[0] : raw;
+    if (!locationId || effectiveLocations.length === 0) return;
+    const loc = effectiveLocations.find((l) => l.id === locationId);
+    if (loc) {
+      setSelectedLocation(loc);
+      setShowLocationSearch(false);
+      setSearchQuery('');
     }
-  }, [params.locationId, effectiveLocations.length]);
+  }, [params.locationId, effectiveLocations]);
 
-  // When returning from spot overview after tapping Select: apply pending location and close overview
+  // When returning from spot overview after tapping Select: apply pending location (read fresh on focus)
   useFocusEffect(
     useCallback(() => {
-      const pendingId = pendingPlanTripLocationId;
+      const pendingId = useLocationStore.getState().pendingPlanTripLocationId;
       if (!pendingId) return;
       setPendingPlanTripLocationId(null);
       const loc = getLocationById(pendingId) ?? effectiveLocations.find((l) => l.id === pendingId);
@@ -293,7 +303,7 @@ export default function NewTripScreen() {
         setShowLocationSearch(false);
         setSearchQuery('');
       }
-    }, [pendingPlanTripLocationId, setPendingPlanTripLocationId, getLocationById, effectiveLocations])
+    }, [setPendingPlanTripLocationId, getLocationById, effectiveLocations]),
   );
 
   const topLevelLocations = activeLocationsOnly(isConnected ? locations : offlineLocations).filter(
@@ -335,12 +345,12 @@ export default function NewTripScreen() {
       }
 
       if (cancelled) return;
-      const result = await fetchAllLocationConditions(topLevelLocations);
+      const result = await fetchAllLocationConditionsForPlannedTime(topLevelLocations, plannedDate);
       if (cancelled) return;
       setConditionsMap(result);
       setConditionsLoading(false);
 
-      const suggestions = await getTopFishingSpots(spotsForSuggestions, result);
+      const suggestions = await getTopFishingSpots(spotsForSuggestions, result, plannedDate);
       if (!cancelled) {
         setSpotSuggestions(suggestions);
         setSuggestionsLoading(false);
@@ -348,7 +358,7 @@ export default function NewTripScreen() {
     })();
 
     return () => { cancelled = true; };
-  }, [topLevelLocations.length]);
+  }, [topLevelLocations.length, plannedDate.getTime()]);
 
   const filteredLocations = searchQuery.trim()
     ? isConnected
@@ -426,7 +436,7 @@ export default function NewTripScreen() {
   const handleSelectSuggestion = useCallback((suggestion: SpotSuggestion) => {
     const match = findLocationForSuggestion(suggestion);
     if (match) {
-      router.push(`/spot/${match.id}`);
+      router.push(`/spot/${match.id}?fromPlanTrip=1`);
     }
   }, [findLocationForSuggestion, router]);
 
@@ -553,6 +563,20 @@ export default function NewTripScreen() {
         </Pressable>
       </Modal>
 
+      {(() => {
+        for (const c of conditionsMap.values()) {
+          if (c.plannedTimeWeatherUnavailable) {
+            return (
+              <View style={styles.plannedWeatherNote}>
+                <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
+                <Text style={styles.plannedWeatherNoteText}>{PLANNED_WEATHER_UNAVAILABLE_NOTE}</Text>
+              </View>
+            );
+          }
+        }
+        return null;
+      })()}
+
       <View style={styles.sectionLabelRow}>
         <Text style={styles.sectionLabel}>Where are you fishing?</Text>
         {isConnected ? (
@@ -589,6 +613,7 @@ export default function NewTripScreen() {
             </View>
             {(() => {
               const conditions = getConditionsForLocation(selectedLocation);
+              const u = conditions?.plannedTimeWeatherUnavailable;
               return conditions ? (
                 <View style={styles.selectedConditionsRow}>
                   <View style={styles.selectedConditionItem}>
@@ -597,17 +622,19 @@ export default function NewTripScreen() {
                   <View style={styles.selectedConditionItem}>
                     <ConditionIcon
                       label="Wind"
-                      value={`${conditions.wind.speed_mph}mph`}
+                      value={u ? '\u2014' : `${conditions.wind.speed_mph}mph`}
                       rating={conditions.wind.rating}
                       compact
+                      muted={u}
                     />
                   </View>
                   <View style={styles.selectedConditionItem}>
                     <ConditionIcon
                       label="Temp"
-                      value={`${conditions.temperature.temp_f}\u00B0F`}
+                      value={u ? '\u2014' : `${conditions.temperature.temp_f}\u00B0F`}
                       rating={conditions.temperature.rating}
                       compact
+                      muted={u}
                     />
                   </View>
                   <View style={styles.selectedConditionItem}>
@@ -666,7 +693,7 @@ export default function NewTripScreen() {
                       ]}
                       onPress={() => {
                         if (isConnected) {
-                          router.push(`/spot/${loc.id}`);
+                          router.push(`/spot/${loc.id}?fromPlanTrip=1`);
                         } else {
                           setSelectedLocation(loc);
                           setShowLocationSearch(false);
@@ -859,6 +886,22 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl + 80,
+  },
+  plannedWeatherNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderRadius: BorderRadius.md,
+  },
+  plannedWeatherNoteText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
   },
   offlineBanner: {
     paddingHorizontal: Spacing.lg,

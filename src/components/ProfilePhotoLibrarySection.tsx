@@ -1,42 +1,60 @@
-import { useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  ActivityIndicator,
-  Image as RNImage,
-  Dimensions,
-  TextInput,
-  Alert,
-  Modal,
-  useWindowDimensions,
-} from 'react-native';
-import { useRouter, useNavigation } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useAuthStore } from '@/src/stores/authStore';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { fetchPhotosWithTrip, addPhoto, PhotoQueuedOfflineError, PhotoWithTrip } from '@/src/services/photoService';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import {
+  addPhoto,
+  fetchPhotosWithTrip,
+  PhotoQueuedOfflineError,
+  type PhotoWithTrip,
+} from '@/src/services/photoService';
 import { fetchTripsFromCloud } from '@/src/services/sync';
-import { Trip } from '@/src/types';
+import { useAuthStore } from '@/src/stores/authStore';
+import type { Trip } from '@/src/types';
+import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image as RNImage,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const NUM_COLS = 3;
-const GAP = Spacing.sm;
-const THUMB_SIZE =
-  (Dimensions.get('window').width - Spacing.xl * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
+/** Tighter grid; must match profile tab horizontal scroll padding. */
+const GRID_GAP = Spacing.xs;
+const GRID_H_INSET = Spacing.md;
 
-export default function PhotoLibraryScreen() {
-  const router = useRouter();
-  const navigation = useNavigation();
+function formatPhotoThumbDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    return format(d, 'MMM d');
+  } catch {
+    return null;
+  }
+}
+
+export function ProfilePhotoLibrarySection() {
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
   const { isConnected } = useNetworkStatus();
+
+  const thumbSize = useMemo(
+    () => (winWidth - GRID_H_INSET * 2 - GRID_GAP * (NUM_COLS - 1)) / NUM_COLS,
+    [winWidth],
+  );
+
   const [photos, setPhotos] = useState<PhotoWithTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -81,18 +99,22 @@ export default function PhotoLibraryScreen() {
     if (!addPhotoUri || !user?.id) return;
     let cancelled = false;
     setAddPhotoTripsLoading(true);
-    fetchTripsFromCloud(user.id).then((trips) => {
-      if (!cancelled) setAddPhotoTrips(trips);
-    }).finally(() => {
-      if (!cancelled) setAddPhotoTripsLoading(false);
-    });
-    return () => { cancelled = true; };
+    fetchTripsFromCloud(user.id)
+      .then((trips) => {
+        if (!cancelled) setAddPhotoTrips(trips);
+      })
+      .finally(() => {
+        if (!cancelled) setAddPhotoTripsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [addPhotoUri, user?.id]);
 
   const locations = useMemo(() => {
     const map = new Map<string, string>();
     photos.forEach((p) => {
-      const loc = (p as PhotoWithTrip).trip?.location;
+      const loc = p.trip?.location;
       if (loc?.id && loc?.name) map.set(loc.id, loc.name);
     });
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
@@ -117,7 +139,7 @@ export default function PhotoLibraryScreen() {
   const filteredPhotos = useMemo(() => {
     return photos.filter((p) => {
       if (selectedLocationIds.length > 0) {
-        const tripLocId = (p as PhotoWithTrip).trip?.location?.id;
+        const tripLocId = p.trip?.location?.id;
         if (!tripLocId || !selectedLocationIds.includes(tripLocId)) return false;
       }
       if (selectedFlyPatterns.length > 0) {
@@ -150,38 +172,19 @@ export default function PhotoLibraryScreen() {
 
   const toggleLocation = useCallback((id: string) => {
     setSelectedLocationIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   }, []);
   const toggleFly = useCallback((fly: string) => {
     setSelectedFlyPatterns((prev) =>
-      prev.includes(fly) ? prev.filter((x) => x !== fly) : [...prev, fly]
+      prev.includes(fly) ? prev.filter((x) => x !== fly) : [...prev, fly],
     );
   }, []);
   const toggleSpecies = useCallback((species: string) => {
     setSelectedSpecies((prev) =>
-      prev.includes(species) ? prev.filter((x) => x !== species) : [...prev, species]
+      prev.includes(species) ? prev.filter((x) => x !== species) : [...prev, species],
     );
   }, []);
-
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <Pressable
-          onPress={() => setFilterModalVisible(true)}
-          style={styles.headerFilterButton}
-          hitSlop={12}
-        >
-          <MaterialCommunityIcons
-            name={hasActiveFilters ? 'filter' : 'filter-outline'}
-            size={22}
-            color="#FFFFFF"
-          />
-          {hasActiveFilters && <View style={styles.headerFilterBadge} />}
-        </Pressable>
-      ),
-    });
-  }, [navigation, hasActiveFilters]);
 
   const handlePickAddPhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -226,7 +229,7 @@ export default function PhotoLibraryScreen() {
       await loadPhotos();
     } catch (e) {
       if (e instanceof PhotoQueuedOfflineError) {
-        Alert.alert('Saved on device', 'Photo will upload when you\'re back online.');
+        Alert.alert('Saved on device', "Photo will upload when you're back online.");
         setAddPhotoUri(null);
       } else {
         Alert.alert('Upload failed', (e as Error).message);
@@ -234,64 +237,97 @@ export default function PhotoLibraryScreen() {
     } finally {
       setUploading(false);
     }
-  }, [user?.id, addPhotoUri, addPhotoTripId, addPhotoCaption, addPhotoSpecies, addPhotoFlyPattern, addPhotoFlySize, addPhotoFlyColor, loadPhotos, isConnected]);
+  }, [
+    user?.id,
+    addPhotoUri,
+    addPhotoTripId,
+    addPhotoCaption,
+    addPhotoSpecies,
+    addPhotoFlyPattern,
+    addPhotoFlySize,
+    addPhotoFlyColor,
+    loadPhotos,
+    isConnected,
+  ]);
 
   const handleCancelAddPhoto = useCallback(() => {
     setAddPhotoUri(null);
     setAddPhotoDropdownOpen(false);
   }, []);
 
-  const contentStyle = {
-    paddingTop: Spacing.md,
-    paddingBottom: insets.bottom + 80,
-  };
-
   return (
-    <View style={styles.container}>
-      <ScrollView style={styles.scroll} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <View style={styles.placeholder}>
-            <ActivityIndicator color={Colors.primary} />
-          </View>
-        ) : filteredPhotos.length === 0 ? (
-          <View style={styles.empty}>
-            <MaterialCommunityIcons name="image-multiple-outline" size={48} color={Colors.textTertiary} />
-            <Text style={styles.emptyText}>
-              {photos.length === 0 ? 'No photos yet.' : 'No photos match the filters.'}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.grid}>
-            {filteredPhotos.map((photo) => (
+    <View style={styles.wrap}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Photos</Text>
+        <View style={styles.sectionHeaderActions}>
+          <Pressable
+            onPress={() => setFilterModalVisible(true)}
+            style={styles.headerIconBtn}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Filter photos"
+          >
+            <View style={styles.filterIconWrap}>
+              <MaterialCommunityIcons
+                name={hasActiveFilters ? 'filter' : 'filter-outline'}
+                size={20}
+                color={Colors.primary}
+              />
+              {hasActiveFilters ? <View style={styles.filterBadge} /> : null}
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={handlePickAddPhoto}
+            style={styles.headerIconBtn}
+            hitSlop={12}
+            disabled={uploading}
+            accessibilityRole="button"
+            accessibilityLabel="Add photo"
+          >
+            {uploading ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <MaterialCommunityIcons name="plus-circle-outline" size={22} color={Colors.primary} />
+            )}
+          </Pressable>
+        </View>
+      </View>
+
+      {loading ? (
+        <View style={styles.placeholder}>
+          <ActivityIndicator color={Colors.primary} />
+        </View>
+      ) : filteredPhotos.length === 0 ? (
+        <View style={styles.empty}>
+          <MaterialCommunityIcons name="image-multiple-outline" size={48} color={Colors.textTertiary} />
+          <Text style={styles.emptyText}>
+            {photos.length === 0 ? 'No photos yet.' : 'No photos match the filters.'}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.grid}>
+          {filteredPhotos.map((photo) => {
+            const dateLabel = formatPhotoThumbDate(photo.captured_at ?? photo.created_at);
+            return (
               <Pressable
                 key={photo.id}
-                style={styles.thumb}
+                style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
                 onPress={() => setSelectedPhoto(photo)}
               >
-                <RNImage
-                  source={{ uri: photo.url }}
-                  style={StyleSheet.absoluteFill}
-                  resizeMode="cover"
-                />
+                <RNImage source={{ uri: photo.url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                {dateLabel ? (
+                  <View style={styles.dateBanner} pointerEvents="none">
+                    <Text style={styles.dateBannerText} numberOfLines={1}>
+                      {dateLabel}
+                    </Text>
+                  </View>
+                ) : null}
               </Pressable>
-            ))}
-          </View>
-        )}
-      </ScrollView>
+            );
+          })}
+        </View>
+      )}
 
-      <Pressable
-        style={[styles.fab, { bottom: insets.bottom + 16 }]}
-        onPress={handlePickAddPhoto}
-        disabled={uploading}
-      >
-        {uploading ? (
-          <ActivityIndicator size="small" color={Colors.textInverse} />
-        ) : (
-          <MaterialCommunityIcons name="plus" size={28} color={Colors.textInverse} />
-        )}
-      </Pressable>
-
-      {/* Add photo details modal */}
       <Modal visible={!!addPhotoUri} transparent animationType="fade">
         <Pressable style={styles.addPhotoModalOverlay} onPress={() => setAddPhotoDropdownOpen(false)}>
           <View style={styles.addPhotoModal}>
@@ -333,7 +369,10 @@ export default function PhotoLibraryScreen() {
                 <ScrollView style={styles.dropdownOptions} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   <Pressable
                     style={styles.dropdownOptionRow}
-                    onPress={() => { setAddPhotoTripId(null); setAddPhotoDropdownOpen(false); }}
+                    onPress={() => {
+                      setAddPhotoTripId(null);
+                      setAddPhotoDropdownOpen(false);
+                    }}
                   >
                     <Text style={styles.dropdownOptionText}>None</Text>
                   </Pressable>
@@ -344,7 +383,10 @@ export default function PhotoLibraryScreen() {
                       <Pressable
                         key={t.id}
                         style={styles.dropdownOptionRow}
-                        onPress={() => { setAddPhotoTripId(t.id); setAddPhotoDropdownOpen(false); }}
+                        onPress={() => {
+                          setAddPhotoTripId(t.id);
+                          setAddPhotoDropdownOpen(false);
+                        }}
                       >
                         <Text style={styles.dropdownOptionText}>{t.location?.name ?? 'Trip'}</Text>
                       </Pressable>
@@ -398,29 +440,36 @@ export default function PhotoLibraryScreen() {
         </Pressable>
       </Modal>
 
-      {/* Filter modal */}
       <Modal
         visible={filterModalVisible}
         animationType="slide"
         transparent
-        onRequestClose={() => { setFilterModalVisible(false); setOpenDropdown(null); }}
+        onRequestClose={() => {
+          setFilterModalVisible(false);
+          setOpenDropdown(null);
+        }}
       >
         <Pressable
           style={styles.modalOverlay}
-          onPress={() => { setFilterModalVisible(false); setOpenDropdown(null); }}
+          onPress={() => {
+            setFilterModalVisible(false);
+            setOpenDropdown(null);
+          }}
         >
           <Pressable style={styles.filterModalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.filterModalHeader}>
               <Text style={styles.filterModalTitle}>Filters</Text>
               <Pressable
-                onPress={() => { setFilterModalVisible(false); setOpenDropdown(null); }}
+                onPress={() => {
+                  setFilterModalVisible(false);
+                  setOpenDropdown(null);
+                }}
                 hitSlop={12}
               >
                 <MaterialCommunityIcons name="close" size={24} color={Colors.text} />
               </Pressable>
             </View>
             <ScrollView style={styles.filterModalBody} keyboardShouldPersistTaps="handled">
-              {/* Location multi-select dropdown */}
               <Text style={styles.filterLabel}>Location</Text>
               <Pressable
                 style={styles.dropdownTrigger}
@@ -462,16 +511,13 @@ export default function PhotoLibraryScreen() {
                 </ScrollView>
               )}
 
-              {/* Fly multi-select dropdown */}
               <Text style={styles.filterLabel}>Fly</Text>
               <Pressable
                 style={styles.dropdownTrigger}
                 onPress={() => setOpenDropdown((d) => (d === 'fly' ? null : 'fly'))}
               >
                 <Text style={styles.dropdownTriggerText} numberOfLines={1}>
-                  {selectedFlyPatterns.length === 0
-                    ? 'All flies'
-                    : selectedFlyPatterns.join(', ')}
+                  {selectedFlyPatterns.length === 0 ? 'All flies' : selectedFlyPatterns.join(', ')}
                 </Text>
                 <MaterialCommunityIcons
                   name={openDropdown === 'fly' ? 'chevron-up' : 'chevron-down'}
@@ -482,11 +528,7 @@ export default function PhotoLibraryScreen() {
               {openDropdown === 'fly' && (
                 <ScrollView style={styles.dropdownOptions} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {flyOptions.map((fly) => (
-                    <Pressable
-                      key={fly}
-                      style={styles.dropdownOptionRow}
-                      onPress={() => toggleFly(fly)}
-                    >
+                    <Pressable key={fly} style={styles.dropdownOptionRow} onPress={() => toggleFly(fly)}>
                       <MaterialCommunityIcons
                         name={selectedFlyPatterns.includes(fly) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                         size={22}
@@ -501,16 +543,13 @@ export default function PhotoLibraryScreen() {
                 </ScrollView>
               )}
 
-              {/* Species multi-select dropdown */}
               <Text style={styles.filterLabel}>Species</Text>
               <Pressable
                 style={styles.dropdownTrigger}
                 onPress={() => setOpenDropdown((d) => (d === 'species' ? null : 'species'))}
               >
                 <Text style={styles.dropdownTriggerText} numberOfLines={1}>
-                  {selectedSpecies.length === 0
-                    ? 'All species'
-                    : selectedSpecies.join(', ')}
+                  {selectedSpecies.length === 0 ? 'All species' : selectedSpecies.join(', ')}
                 </Text>
                 <MaterialCommunityIcons
                   name={openDropdown === 'species' ? 'chevron-up' : 'chevron-down'}
@@ -521,11 +560,7 @@ export default function PhotoLibraryScreen() {
               {openDropdown === 'species' && (
                 <ScrollView style={styles.dropdownOptions} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {speciesOptions.map((sp) => (
-                    <Pressable
-                      key={sp}
-                      style={styles.dropdownOptionRow}
-                      onPress={() => toggleSpecies(sp)}
-                    >
+                    <Pressable key={sp} style={styles.dropdownOptionRow} onPress={() => toggleSpecies(sp)}>
                       <MaterialCommunityIcons
                         name={selectedSpecies.includes(sp) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                         size={22}
@@ -562,7 +597,10 @@ export default function PhotoLibraryScreen() {
             <View style={styles.filterModalFooter}>
               <Pressable
                 style={styles.applyButton}
-                onPress={() => { setFilterModalVisible(false); setOpenDropdown(null); }}
+                onPress={() => {
+                  setFilterModalVisible(false);
+                  setOpenDropdown(null);
+                }}
               >
                 <Text style={styles.applyButtonText}>Apply</Text>
               </Pressable>
@@ -571,7 +609,6 @@ export default function PhotoLibraryScreen() {
         </Pressable>
       </Modal>
 
-      {/* Full-screen photo view — scrollable so photo and metadata aren't cut off */}
       <Modal
         visible={selectedPhoto != null}
         animationType="fade"
@@ -589,7 +626,10 @@ export default function PhotoLibraryScreen() {
           {selectedPhoto && (
             <ScrollView
               style={styles.fullScreenScroll}
-              contentContainerStyle={[styles.fullScreenScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
+              contentContainerStyle={[
+                styles.fullScreenScrollContent,
+                { paddingBottom: insets.bottom + Spacing.xl },
+              ]}
               showsVerticalScrollIndicator={false}
             >
               <RNImage
@@ -598,19 +638,25 @@ export default function PhotoLibraryScreen() {
                 resizeMode="contain"
               />
               <View style={styles.photoInfo}>
-                {(selectedPhoto as PhotoWithTrip).trip?.location?.name ? (
+                {selectedPhoto.trip?.location?.name ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} />{' '}
-                    {(selectedPhoto as PhotoWithTrip).trip?.location?.name}
+                    {selectedPhoto.trip.location.name}
                   </Text>
                 ) : null}
-                {(selectedPhoto.fly_pattern || selectedPhoto.fly_size || selectedPhoto.fly_color) ? (
+                {selectedPhoto.fly_pattern || selectedPhoto.fly_size || selectedPhoto.fly_color ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} />{' '}
-                    {[selectedPhoto.fly_pattern, selectedPhoto.fly_size ? `#${selectedPhoto.fly_size}` : null, selectedPhoto.fly_color].filter(Boolean).join(' ')}
+                    {[
+                      selectedPhoto.fly_pattern,
+                      selectedPhoto.fly_size ? `#${selectedPhoto.fly_size}` : null,
+                      selectedPhoto.fly_color,
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                   </Text>
                 ) : null}
-                {(selectedPhoto.captured_at || selectedPhoto.created_at) ? (
+                {selectedPhoto.captured_at || selectedPhoto.created_at ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="calendar" size={16} color={Colors.textInverse} />{' '}
                     {format(new Date(selectedPhoto.captured_at || selectedPhoto.created_at!), 'MMM d, yyyy')}
@@ -635,34 +681,54 @@ export default function PhotoLibraryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
+  wrap: {
+    marginTop: Spacing.md,
   },
-  headerFilterButton: {
-    padding: Spacing.sm,
-    marginRight: Spacing.xs,
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    marginBottom: Spacing.sm,
   },
-  headerFilterBadge: {
+  sectionTitle: {
+    flex: 1,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  sectionHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  headerIconBtn: {
+    padding: Spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterIconWrap: {
+    position: 'relative',
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#FFFFFF',
-    marginLeft: 2,
-  },
-  scroll: {
-    flex: 1,
+    backgroundColor: Colors.primary,
   },
   placeholder: {
-    minHeight: 200,
+    minHeight: 120,
     justifyContent: 'center',
     alignItems: 'center',
   },
   empty: {
-    minHeight: 200,
+    minHeight: 120,
     justifyContent: 'center',
     alignItems: 'center',
     gap: Spacing.sm,
@@ -674,29 +740,27 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: GAP,
-    paddingHorizontal: Spacing.xl,
+    gap: GRID_GAP,
   },
   thumb: {
-    width: THUMB_SIZE,
-    height: THUMB_SIZE,
-    borderRadius: BorderRadius.md,
+    borderRadius: BorderRadius.sm,
     overflow: 'hidden',
   },
-  fab: {
+  dateBanner: {
     position: 'absolute',
-    right: Spacing.xl,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 4,
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    maxWidth: '92%',
+  },
+  dateBannerText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   modalOverlay: {
     flex: 1,

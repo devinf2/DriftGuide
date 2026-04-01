@@ -11,13 +11,6 @@ export default function HomeTabLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ headerShown: false, title: 'Home' }} />
-      <Stack.Screen
-        name="photos"
-        options={{
-          title: 'Photo Library',
-          headerBackTitle: 'Back',
-        }}
-      />
     </Stack>
   );
 }

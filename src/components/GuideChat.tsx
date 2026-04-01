@@ -110,7 +110,10 @@ export default function GuideChat({
       <ScrollView
         ref={scrollRef}
         style={styles.messages}
-        contentContainerStyle={styles.messagesContent}
+        contentContainerStyle={[
+          styles.messagesContent,
+          variant === 'full' && styles.messagesContentFabClearance,
+        ]}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.welcomeCard}>
@@ -199,6 +202,10 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     paddingBottom: Spacing.xxl,
     gap: Spacing.sm,
+  },
+  /** Room so the last bubbles are not covered by the tab-level plan-trip FAB (bottom-right). */
+  messagesContentFabClearance: {
+    paddingBottom: Spacing.xxl + 88,
   },
   welcomeCard: {
     backgroundColor: Colors.surface,

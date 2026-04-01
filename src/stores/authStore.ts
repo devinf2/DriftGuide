@@ -13,6 +13,7 @@ interface AuthState {
   setSession: (session: Session | null) => void;
   setProfile: (profile: Profile | null) => void;
   fetchProfile: () => Promise<void>;
+  updateProfileNames: (firstName: string, lastName: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -45,6 +46,27 @@ export const useAuthStore = create<AuthState>()(
         if (!error && data) {
           set({ profile: data as Profile });
         }
+      },
+
+      updateProfileNames: async (firstName, lastName) => {
+        const user = get().user;
+        if (!user) return { error: 'Not signed in' };
+        const fn = firstName.trim();
+        const ln = lastName.trim();
+        const combined = [fn, ln].filter(Boolean).join(' ');
+        const display_name =
+          combined || get().profile?.display_name?.trim() || 'Angler';
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            first_name: fn || null,
+            last_name: ln || null,
+            display_name,
+          })
+          .eq('id', user.id);
+        if (error) return { error: error.message };
+        await get().fetchProfile();
+        return { error: null };
       },
 
       signUp: async (email, password, displayName) => {

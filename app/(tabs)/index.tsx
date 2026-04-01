@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
 import { useRouter } from 'expo-router';
+import { useEffect } from 'react';
 
 /**
  * Redirect (tabs)/index to (tabs)/home so the Fish tab always shows the home stack.

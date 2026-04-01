@@ -1,35 +1,35 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  TextInput,
-  ScrollView,
-  ActivityIndicator,
-  Keyboard,
-  Platform,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import * as ExpoLocation from 'expo-location';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
-import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
-import { useLocationStore } from '@/src/stores/locationStore';
-import type { Location } from '@/src/types';
-import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
-import { filterLocationsByQuery } from '@/src/utils/locationSearch';
-import { activeLocationsOnly } from '@/src/utils/locationVisibility';
+    AddLocationMapSheet,
+    type AddLocationMapSheetRef,
+} from '@/src/components/add-location/AddLocationMapSheet';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
-import {
-  AddLocationMapSheet,
-  type AddLocationMapSheetRef,
-} from '@/src/components/add-location/AddLocationMapSheet';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
+import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
+import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
+import { useLocationStore } from '@/src/stores/locationStore';
+import type { Location } from '@/src/types';
+import { filterLocationsByQuery } from '@/src/utils/locationSearch';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import * as ExpoLocation from 'expo-location';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Keyboard,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function MapTabScreen() {
   const router = useRouter();
@@ -322,6 +322,7 @@ export default function MapTabScreen() {
                 onMapIdle={addingLocation ? handleMapIdleWhileAdding : undefined}
                 onZoomLevelChange={setMapZoom}
                 trailingFab={addLocationFab}
+                reservePlanTripFabSpacing
               />
               {addingLocation ? (
                 <View style={styles.centerPinWrap} pointerEvents="none">

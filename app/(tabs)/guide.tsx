@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ExpoLocation from 'expo-location';
 import GuideChat from '@/src/components/GuideChat';
-import { useAuthStore } from '@/src/stores/authStore';
-import { useLocationStore } from '@/src/stores/locationStore';
+import type { AIContext } from '@/src/services/ai';
 import { getSeason, getTimeOfDay } from '@/src/services/ai';
 import { fetchFlies } from '@/src/services/flyService';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
-import type { AIContext } from '@/src/services/ai';
+import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationStore } from '@/src/stores/locationStore';
+import * as ExpoLocation from 'expo-location';
+import { useCallback, useEffect, useRef } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function GuideScreen() {
   const insets = useSafeAreaInsets();

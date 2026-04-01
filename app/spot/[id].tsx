@@ -79,7 +79,12 @@ function SpotModalHeader({
 }
 
 export default function SpotFishingTripScreen() {
-  const { id, planTripPicker } = useLocalSearchParams<{ id: string; planTripPicker?: string }>();
+  const { id, planTripPicker, fromPlanTrip } = useLocalSearchParams<{
+    id: string;
+    planTripPicker?: string;
+    /** Set when opening spot from Plan a Trip (suggestions or search) so Select returns to that screen with the water chosen. */
+    fromPlanTrip?: string;
+  }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
@@ -299,13 +304,21 @@ export default function SpotFishingTripScreen() {
 
   const handlePlanTripHere = () => {
     if (!id) return;
-    setPendingPlanTripLocationId(id);
-    const fromPlanTripMapPicker = planTripPicker === '1' || planTripPicker === 'true';
-    if (fromPlanTripMapPicker) {
+    const returningToPlanTrip =
+      planTripPicker === '1' ||
+      planTripPicker === 'true' ||
+      fromPlanTrip === '1' ||
+      fromPlanTrip === 'true';
+    if (returningToPlanTrip) {
+      setPendingPlanTripLocationId(id);
       router.dismissTo('/trip/new');
-    } else {
-      router.back();
+      return;
     }
+    setPendingPlanTripLocationId(null);
+    router.replace({
+      pathname: '/trip/new',
+      params: { locationId: id },
+    });
   };
 
   const handleMoreInfo = () => {

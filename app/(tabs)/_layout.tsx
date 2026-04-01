@@ -1,8 +1,10 @@
-import React from 'react';
-import { Tabs } from 'expo-router';
-import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PlanTripFab } from '@/src/components/PlanTripFab';
 import { Colors } from '@/src/constants/theme';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { Tabs } from 'expo-router';
+import React from 'react';
+import { View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export const unstable_settings = {
   initialRouteName: 'home',
@@ -11,6 +13,7 @@ export const unstable_settings = {
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   return (
+    <View style={{ flex: 1 }}>
     <Tabs
       initialRouteName="home"
       screenOptions={{
@@ -76,5 +79,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    <PlanTripFab />
+    </View>
   );
 }

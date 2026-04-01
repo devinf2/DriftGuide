@@ -1,8 +1,10 @@
-import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
+import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
-import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import type { BoundingBox } from '@/src/types/boundingBox';
 import { boundingBoxFromLngLatPair } from '@/src/types/boundingBox';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
@@ -20,7 +22,6 @@ import {
     type ReactElement,
     type ReactNode,
 } from 'react';
-import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 export type MapboxMapMarker = {
@@ -157,16 +158,18 @@ const ZOOM_CLUSTER_GAP = Spacing.sm;
 function resolveAttributionPosition(
   showZoomControls: boolean,
   hasTrailingFab: boolean,
+  planTripFabClearance: number,
 ): { bottom: number; right: number } | undefined {
   if (!showZoomControls && !hasTrailingFab) return undefined;
+  const rowBottom = Spacing.lg + planTripFabClearance;
   if (hasTrailingFab) {
     return {
-      bottom: Spacing.lg,
+      bottom: rowBottom,
       right: Spacing.md + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP,
     };
   }
   return {
-    bottom: Spacing.lg,
+    bottom: rowBottom,
     right: Spacing.md + ZOOM_BUTTON_WIDTH + ZOOM_CLUSTER_GAP,
   };
 }
@@ -205,6 +208,8 @@ type TripMapboxMapViewProps = {
    * Use for e.g. add-location FAB on the Map tab.
    */
   trailingFab?: ReactElement | null;
+  /** Extra bottom inset so controls sit above the tab-level plan-trip FAB. */
+  reservePlanTripFabSpacing?: boolean;
 };
 
 /**
@@ -229,6 +234,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       zoomStep = 1,
       showZoomControls = true,
       trailingFab = null,
+      reservePlanTripFabSpacing = false,
     },
     ref,
   ) {
@@ -354,10 +360,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     };
 
     const hasTrailingFab = trailingFab != null;
+    const planTripFabClearance = reservePlanTripFabSpacing ? PLAN_TRIP_FAB_MAP_CLEARANCE : 0;
+    const trailingFabBottom = Spacing.lg + planTripFabClearance;
     const zoomClusterBottom =
       showZoomControls && hasTrailingFab
-        ? Spacing.lg + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
-        : Spacing.lg;
+        ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
+        : Spacing.lg + planTripFabClearance;
 
     const resolvedStyleURL = mapStyle ?? mapboxStyleURLForBasemap(basemapId);
     const showBasemap = showBasemapSwitcher && mapStyle == null;
@@ -372,7 +380,11 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           scaleBarEnabled={false}
           logoEnabled
           attributionEnabled
-          attributionPosition={resolveAttributionPosition(showZoomControls, hasTrailingFab)}
+          attributionPosition={resolveAttributionPosition(
+            showZoomControls,
+            hasTrailingFab,
+            planTripFabClearance,
+          )}
           onCameraChanged={
             onCameraChanged
               ? (state: unknown) => handleCameraChanged(state as MapCameraStatePayload)
@@ -424,7 +436,10 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           </View>
         ) : null}
         {trailingFab ? (
-          <View style={styles.trailingFabAnchor} pointerEvents="box-none">
+          <View
+            style={[styles.trailingFabAnchor, { bottom: trailingFabBottom }]}
+            pointerEvents="box-none"
+          >
             {trailingFab}
           </View>
         ) : null}
@@ -443,7 +458,6 @@ const styles = StyleSheet.create({
   trailingFabAnchor: {
     position: 'absolute',
     right: Spacing.md,
-    bottom: Spacing.lg,
   },
   zoomCluster: {
     position: 'absolute',

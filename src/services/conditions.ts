@@ -1,5 +1,5 @@
 import { Location, LocationConditions, ConditionRating, WaterClarity, WeatherData, WaterFlowData } from '@/src/types';
-import { getWeather } from './weather';
+import { getWeather, getWeatherForPlannedTime } from './weather';
 import { getStreamFlow } from './waterFlow';
 
 function rateWind(speedMph: number): ConditionRating {
@@ -22,6 +22,7 @@ function rateWater(clarity: WaterClarity): ConditionRating {
 
 function rateSky(condition: string): ConditionRating {
   const c = condition.toLowerCase();
+  if (c === 'unavailable') return 'fair';
   if (c.includes('thunder') || c.includes('storm') || c.includes('blizzard')) return 'poor';
   if (c.includes('rain') || c.includes('drizzle') || c.includes('shower') || c.includes('snow') || c.includes('sleet')) return 'poor';
   if (c.includes('overcast') || c.includes('fog') || c.includes('mist') || c.includes('haze')) return 'fair';
@@ -31,6 +32,7 @@ function rateSky(condition: string): ConditionRating {
 
 export function formatSkyLabel(condition: string): string {
   const c = condition.toLowerCase();
+  if (c === 'unavailable') return '\u2014';
   if (c.includes('thunder') || c.includes('storm')) return 'Storm';
   if (c.includes('heavy rain')) return 'Heavy Rain';
   if (c.includes('rain') || c.includes('drizzle') || c.includes('shower')) return 'Rain';
@@ -46,6 +48,7 @@ export function formatSkyLabel(condition: string): string {
 
 export function getWeatherIconName(condition: string): string {
   const c = condition.toLowerCase();
+  if (c === 'unavailable') return 'cloud-offline-outline';
   if (c.includes('thunder') || c.includes('storm')) return 'thunderstorm-outline';
   if (c.includes('snow') || c.includes('blizzard') || c.includes('sleet')) return 'snow-outline';
   if (c.includes('rain') || c.includes('drizzle') || c.includes('shower')) return 'rainy-outline';
@@ -129,10 +132,22 @@ export interface DriftGuideScoreResult {
 
 /** Compute a 0–5 star score (continuous) from current conditions, with water (and flow) weighted more. Fire = 5 stars. */
 export function getDriftGuideScore(conditions: LocationConditions): DriftGuideScoreResult {
+  const waterP = getWaterPoints(conditions);
+
+  if (conditions.plannedTimeWeatherUnavailable) {
+    const weightedSum = WEIGHT_WATER * waterP;
+    const maxWeighted = WEIGHT_WATER * 3;
+    const normalized = weightedSum / maxWeighted;
+    const stars = Math.max(0, Math.min(5, Math.round(normalized * 5 * 10) / 10));
+    return {
+      stars: stars < 0.1 ? 0.5 : stars,
+      showFire: false,
+    };
+  }
+
   const skyP = RATING_POINTS[conditions.sky.rating];
   const windP = RATING_POINTS[conditions.wind.rating];
   const tempP = RATING_POINTS[conditions.temperature.rating];
-  const waterP = getWaterPoints(conditions);
 
   const weightedSum =
     WEIGHT_SKY * skyP +
@@ -157,6 +172,120 @@ export async function fetchAllLocationConditions(
 
   const settled = await Promise.allSettled(
     locations.map(loc => fetchLocationConditions(loc, locations)),
+  );
+
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      results.set(result.value.locationId, result.value);
+    }
+  }
+
+  return results;
+}
+
+function coordKey(lat: number, lng: number): string {
+  return `${lat},${lng}`;
+}
+
+function resolveLocationCoords(
+  location: Location,
+  allLocations: Location[],
+): { lat: number; lng: number } | null {
+  const parent = location.parent_location_id
+    ? allLocations.find(l => l.id === location.parent_location_id)
+    : null;
+  const lat = location.latitude ?? parent?.latitude ?? null;
+  const lng = location.longitude ?? parent?.longitude ?? null;
+  if (lat == null || lng == null) return null;
+  return { lat, lng };
+}
+
+async function buildLocationConditionsWithWeather(
+  location: Location,
+  allLocations: Location[],
+  weather: WeatherData | null,
+  plannedTimeWeatherUnavailable: boolean,
+  weatherIsForecastForPlannedTime: boolean,
+): Promise<LocationConditions> {
+  const stationId = (location.metadata as Record<string, string> | null)?.usgs_station_id;
+  const waterFlow = stationId ? await getStreamFlow(stationId) : null;
+
+  const condition = plannedTimeWeatherUnavailable ? 'unavailable' : (weather?.condition ?? 'Clear');
+  const windSpeed = plannedTimeWeatherUnavailable ? 0 : (weather?.wind_speed_mph ?? 0);
+  const tempF = plannedTimeWeatherUnavailable
+    ? 60
+    : (waterFlow?.water_temp_f ?? weather?.temperature_f ?? 60);
+  const clarity = waterFlow?.clarity ?? 'unknown';
+  const flowCfs = waterFlow?.flow_cfs ?? null;
+
+  return {
+    locationId: location.id,
+    sky: { condition, label: formatSkyLabel(condition), rating: rateSky(condition) },
+    wind: { speed_mph: windSpeed, rating: plannedTimeWeatherUnavailable ? 'fair' : rateWind(windSpeed) },
+    temperature: {
+      temp_f: tempF,
+      rating: plannedTimeWeatherUnavailable ? 'fair' : rateTemperature(tempF),
+    },
+    water: { clarity, flow_cfs: flowCfs, rating: rateWater(clarity) },
+    fetchedAt: new Date().toISOString(),
+    ...(weatherIsForecastForPlannedTime ? { weatherIsForecastForPlannedTime: true } : {}),
+    ...(plannedTimeWeatherUnavailable ? { plannedTimeWeatherUnavailable: true } : {}),
+  };
+}
+
+/**
+ * Conditions for plan-a-trip: one forecast request per distinct coordinates; water/flow still current USGS.
+ */
+export async function fetchAllLocationConditionsForPlannedTime(
+  locations: Location[],
+  plannedAt: Date,
+): Promise<Map<string, LocationConditions>> {
+  const results = new Map<string, LocationConditions>();
+  const groupCoords = new Map<string, { lat: number; lng: number }>();
+  const locationCoords = new Map<string, { lat: number; lng: number } | null>();
+
+  for (const loc of locations) {
+    const coords = resolveLocationCoords(loc, locations);
+    locationCoords.set(loc.id, coords);
+    if (coords) {
+      groupCoords.set(coordKey(coords.lat, coords.lng), coords);
+    }
+  }
+
+  const weatherByKey = new Map<string, Awaited<ReturnType<typeof getWeatherForPlannedTime>>>();
+  await Promise.all(
+    Array.from(groupCoords.values()).map(async ({ lat, lng }) => {
+      const key = coordKey(lat, lng);
+      const r = await getWeatherForPlannedTime(lat, lng, plannedAt);
+      weatherByKey.set(key, r);
+    }),
+  );
+
+  const settled = await Promise.allSettled(
+    locations.map(async loc => {
+      const coords = locationCoords.get(loc.id) ?? null;
+      let weather: WeatherData | null = null;
+      let plannedTimeWeatherUnavailable = false;
+      let weatherIsForecastForPlannedTime = false;
+
+      if (coords) {
+        const wr = weatherByKey.get(coordKey(coords.lat, coords.lng));
+        if (wr?.status === 'ok') {
+          weather = wr.data;
+          weatherIsForecastForPlannedTime = wr.source === 'forecast';
+        } else {
+          plannedTimeWeatherUnavailable = true;
+        }
+      }
+
+      return buildLocationConditionsWithWeather(
+        loc,
+        locations,
+        weather,
+        plannedTimeWeatherUnavailable,
+        weatherIsForecastForPlannedTime,
+      );
+    }),
   );
 
   for (const result of settled) {

@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import { Trip, TripEvent, FlyChangeData, CatchData, NoteData, FishingType, WeatherData, WaterFlowData, Location, NextFlyRecommendation, EventConditionsSnapshot, SessionType } from '@/src/types';
 import { getMoonPhase } from '@/src/utils/moonPhase';
-import { captureTripBookmarkCoords } from '@/src/utils/tripGps';
+import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/utils/tripGps';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
 import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
 import { getFallbackRecommendation, getSmartFlyRecommendation, getSeason, getTimeOfDay } from '@/src/services/ai';
@@ -100,7 +100,58 @@ function buildConditionsSnapshot(
 
 export const useTripStore = create<TripState>()(
   persist(
-    (set, get) => ({
+    (set, get) => {
+      const addTripToPendingIfNeeded = (tripId: string, trip: Trip, events: TripEvent[]) => {
+        void savePendingTrip(tripId, trip, events)
+          .then(() => {
+            set((s) => ({
+              pendingSyncTrips: s.pendingSyncTrips.includes(tripId)
+                ? s.pendingSyncTrips
+                : [...s.pendingSyncTrips, tripId],
+            }));
+          })
+          .catch((e) => console.error('savePendingTrip failed:', e));
+      };
+
+      const syncNewTripInBackground = (tripId: string) => {
+        void (async () => {
+          const refined = await captureTripBookmarkCoords();
+          let trip = get().activeTrip;
+          let events = get().events;
+          if (!trip || trip.id !== tripId) return;
+
+          if (refined) {
+            const te = events[0];
+            if (te?.trip_id === tripId) {
+              const patchedTrip = {
+                ...trip,
+                start_latitude: refined.latitude,
+                start_longitude: refined.longitude,
+              };
+              const patchedEv = {
+                ...te,
+                latitude: refined.latitude,
+                longitude: refined.longitude,
+              };
+              const patchedEvents = [patchedEv, ...events.slice(1)];
+              set({ activeTrip: patchedTrip, events: patchedEvents });
+              trip = get().activeTrip!;
+              events = get().events;
+            }
+          }
+
+          if (!get().isOnline) {
+            addTripToPendingIfNeeded(tripId, trip, events);
+            return;
+          }
+          const ok = await syncTripToCloud(trip, events);
+          if (!ok) {
+            addTripToPendingIfNeeded(tripId, trip, events);
+          }
+        })();
+      };
+
+      return {
       activeTrip: null,
       fishingElapsedMs: 0,
       fishingSegmentStartedAt: null,
@@ -163,7 +214,7 @@ export const useTripStore = create<TripState>()(
         const planned = plannedTrips.find(t => t.id === tripId);
         if (!planned) return null;
 
-        const startCoords = await captureTripBookmarkCoords();
+        const startCoords = await captureTripBookmarkCoordsFast();
         const startLat = startCoords?.latitude ?? null;
         const startLon = startCoords?.longitude ?? null;
 
@@ -211,7 +262,7 @@ export const useTripStore = create<TripState>()(
           plannedTrips: state.plannedTrips.filter(t => t.id !== tripId),
         }));
 
-        await syncTripToCloud(activatedTrip, [startEvent]);
+        syncNewTripInBackground(tripId);
         return tripId;
       },
 
@@ -241,7 +292,7 @@ export const useTripStore = create<TripState>()(
         if (existing?.status === 'active') return existing.id;
 
         const tripId = uuidv4();
-        const startCoords = await captureTripBookmarkCoords();
+        const startCoords = await captureTripBookmarkCoordsFast();
         const startLat = startCoords?.latitude ?? null;
         const startLon = startCoords?.longitude ?? null;
         const trip: Trip = {
@@ -300,7 +351,7 @@ export const useTripStore = create<TripState>()(
           recommendationLoading: false,
         });
 
-        await syncTripToCloud(trip, [startEvent]);
+        syncNewTripInBackground(tripId);
         return tripId;
       },
 
@@ -411,9 +462,10 @@ export const useTripStore = create<TripState>()(
         const { activeTrip, events, fishCount, weatherData, waterFlowData, nextFlyRecommendation } = get();
         if (!activeTrip) return { synced: false };
 
-        const endCoords = await captureTripBookmarkCoords();
-        const endLat = endCoords?.latitude ?? null;
-        const endLon = endCoords?.longitude ?? null;
+        const tripId = activeTrip.id;
+        const fastCoords = await captureTripBookmarkCoordsFast();
+        const endLat = fastCoords?.latitude ?? null;
+        const endLon = fastCoords?.longitude ?? null;
 
         const endedTrip: Trip = {
           ...activeTrip,
@@ -429,8 +481,9 @@ export const useTripStore = create<TripState>()(
             : activeTrip.ai_recommendation_cache,
         };
 
+        const endEventId = uuidv4();
         const endEvent: TripEvent = {
-          id: uuidv4(),
+          id: endEventId,
           trip_id: activeTrip.id,
           event_type: 'note',
           timestamp: new Date().toISOString(),
@@ -441,19 +494,6 @@ export const useTripStore = create<TripState>()(
         };
 
         const allEvents = [...events, endEvent];
-
-        const synced = await syncTripToCloud(endedTrip, allEvents);
-
-        if (!synced) {
-          try {
-            await savePendingTrip(activeTrip.id, endedTrip, allEvents);
-          } catch (e) {
-            console.error('Failed to save pending trip locally:', e);
-          }
-          set(state => ({
-            pendingSyncTrips: [...state.pendingSyncTrips, activeTrip.id],
-          }));
-        }
 
         set({
           activeTrip: endedTrip,
@@ -468,7 +508,63 @@ export const useTripStore = create<TripState>()(
           conditionsLoading: false,
           recommendationLoading: false,
         });
-        return { synced };
+
+        if (!get().isOnline) {
+          try {
+            const t = get().activeTrip;
+            const ev = get().events;
+            if (t && ev.length) {
+              await savePendingTrip(tripId, t, ev);
+              set((s) => ({
+                pendingSyncTrips: s.pendingSyncTrips.includes(tripId)
+                  ? s.pendingSyncTrips
+                  : [...s.pendingSyncTrips, tripId],
+              }));
+            }
+          } catch (e) {
+            console.error('Failed to save pending trip locally:', e);
+          }
+          return { synced: false };
+        }
+
+        void (async () => {
+          const refined = await captureTripBookmarkCoords();
+          let trip = get().activeTrip;
+          let evs = get().events;
+          if (!trip || trip.id !== tripId || trip.status !== 'completed') return;
+
+          if (refined) {
+            const patchedTrip = {
+              ...trip,
+              end_latitude: refined.latitude,
+              end_longitude: refined.longitude,
+            };
+            const patchedEvs = evs.map((e) =>
+              e.id === endEventId
+                ? { ...e, latitude: refined.latitude, longitude: refined.longitude }
+                : e,
+            );
+            set({ activeTrip: patchedTrip, events: patchedEvs });
+            trip = get().activeTrip!;
+            evs = get().events;
+          }
+
+          const synced = await syncTripToCloud(trip, evs);
+          if (!synced) {
+            try {
+              await savePendingTrip(tripId, trip, evs);
+              set((s) => ({
+                pendingSyncTrips: s.pendingSyncTrips.includes(tripId)
+                  ? s.pendingSyncTrips
+                  : [...s.pendingSyncTrips, tripId],
+              }));
+            } catch (e) {
+              console.error('Failed to save pending trip locally:', e);
+            }
+          }
+        })();
+
+        return { synced: true };
       },
 
       updateTripSurvey: async (tripId, payload): Promise<boolean> => {
@@ -975,7 +1071,8 @@ export const useTripStore = create<TripState>()(
           recommendationLoading: false,
         });
       },
-    }),
+    };
+    },
     {
       name: 'trip-storage',
       storage: createJSONStorage(() => AsyncStorage),

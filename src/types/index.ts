@@ -31,8 +31,12 @@ export type MoonPhase =
 export interface Profile {
   id: string;
   display_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   preferred_fishing_type: FishingType;
   created_at: string;
+  /** Public Supabase Storage URL for profile image (photos bucket). */
+  avatar_url?: string | null;
 }
 
 export type AccessPointStatus = 'pending' | 'approved';
@@ -370,6 +374,10 @@ export interface LocationConditions {
   temperature: { temp_f: number; rating: ConditionRating };
   water: { clarity: WaterClarity; flow_cfs: number | null; rating: ConditionRating };
   fetchedAt: string;
+  /** Set on plan-a-trip when sky/wind/temp come from OpenWeather forecast for the selected time. */
+  weatherIsForecastForPlannedTime?: boolean;
+  /** Forecast API does not cover the selected date (~5 day horizon). Water/flow are still current. */
+  plannedTimeWeatherUnavailable?: boolean;
 }
 
 export interface FishingSpotSuggestion {

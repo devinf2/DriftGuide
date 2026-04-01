@@ -233,3 +233,59 @@ function urlToStoragePath(url: string): string | null {
     return null;
   }
 }
+
+function isProfileAvatarObjectPath(userId: string, storagePath: string): boolean {
+  return storagePath.startsWith(`photos/${userId}/profile-`);
+}
+
+/** Upload a new profile image, set profiles.avatar_url, and remove the previous profile file when safe. */
+export async function uploadProfileAvatar(
+  userId: string,
+  uri: string,
+  options?: { previousAvatarUrl?: string | null },
+): Promise<string> {
+  const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
+  const path = `photos/${userId}/profile-${uuidv4()}.${ext}`;
+
+  const body = await readFileAsArrayBuffer(uri);
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, body, {
+      contentType: getMimeType(ext),
+      upsert: false,
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(uploadData.path);
+  const url = publicUrlData.publicUrl;
+
+  const prev = options?.previousAvatarUrl;
+  if (prev) {
+    const oldPath = urlToStoragePath(prev);
+    if (oldPath && isProfileAvatarObjectPath(userId, oldPath)) {
+      await supabase.storage.from(BUCKET).remove([oldPath]).catch(() => {});
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from('profiles')
+    .update({ avatar_url: url })
+    .eq('id', userId);
+
+  if (updateError) throw updateError;
+  return url;
+}
+
+/** Clear avatar in DB and remove the profile object from storage when it matches our path pattern. */
+export async function clearProfileAvatar(userId: string, avatarUrl: string | null | undefined): Promise<void> {
+  if (avatarUrl) {
+    const oldPath = urlToStoragePath(avatarUrl);
+    if (oldPath && isProfileAvatarObjectPath(userId, oldPath)) {
+      await supabase.storage.from(BUCKET).remove([oldPath]).catch(() => {});
+    }
+  }
+
+  const { error } = await supabase.from('profiles').update({ avatar_url: null }).eq('id', userId);
+  if (error) throw error;
+}
