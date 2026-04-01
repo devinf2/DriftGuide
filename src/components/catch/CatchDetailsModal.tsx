@@ -20,10 +20,14 @@ import { COMMON_SPECIES as SPECIES_OPTIONS, FLY_COLORS, FLY_NAMES, FLY_SIZES } f
 import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
 import { addPhoto, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { fetchHistoricalWeather } from '@/src/services/historicalWeather';
 import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
 import { upsertEventSorted } from '@/src/utils/journalTimeline';
+import { extractPhotoMetadataFromPickerAsset, type PhotoExifMetadata } from '@/src/utils/imageExif';
+import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
 import type {
   CatchData,
+  EventConditionsSnapshot,
   Fly,
   FlyChangeData,
   PresentationMethod,
@@ -39,6 +43,12 @@ export type CatchDetailsSubmitAdd = {
   latitude: number | null;
   longitude: number | null;
   photoUri: string | null;
+  /** EXIF / photo capture time for storage and catch timestamp when present */
+  photoCapturedAtIso?: string | null;
+  /** Catch event time (usually same as photo when EXIF exists) */
+  catchTimestampIso?: string | null;
+  /** Historical or explicit snapshot; omit to use live trip conditions in store */
+  conditionsSnapshot?: EventConditionsSnapshot | null;
 };
 
 function buildFlyChangePayload(primary: FlyChangeData, dropper: FlyChangeData | null): FlyChangeData {
@@ -83,6 +93,10 @@ function mergeEditCatchEvents(
   catchData: CatchData,
   latitude: number | null,
   longitude: number | null,
+  eventOverrides?: {
+    timestamp?: string;
+    conditions_snapshot?: EventConditionsSnapshot | null;
+  },
 ): TripEvent[] {
   const newFlyPayload = buildFlyChangePayload(primary, dropper);
   const linkedId = catchData.active_fly_event_id;
@@ -113,10 +127,21 @@ function mergeEditCatchEvents(
     activeFlyId = newFlyId;
   }
 
+  const ts =
+    eventOverrides?.timestamp != null && !Number.isNaN(Date.parse(eventOverrides.timestamp))
+      ? eventOverrides.timestamp
+      : editing.timestamp;
+  const snap =
+    eventOverrides && 'conditions_snapshot' in eventOverrides
+      ? eventOverrides.conditions_snapshot
+      : editing.conditions_snapshot;
+
   const nextCatch: TripEvent = {
     ...editing,
     latitude,
     longitude,
+    timestamp: ts,
+    conditions_snapshot: snap ?? null,
     data: { ...catchData, active_fly_event_id: activeFlyId },
   };
   return upsertEventSorted(events, nextCatch);
@@ -178,6 +203,8 @@ export function CatchDetailsModal({
   const [catchDepth, setCatchDepth] = useState('');
   const [catchPhotoUri, setCatchPhotoUri] = useState<string | null>(null);
   const [existingPhotoUrl, setExistingPhotoUrl] = useState<string | null>(null);
+  /** Set when user picks a photo that includes EXIF (library or camera). */
+  const [photoExifMeta, setPhotoExifMeta] = useState<PhotoExifMetadata | null>(null);
   const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper'>('primary');
   const [catchPresentation, setCatchPresentation] = useState<PresentationMethod | null>(null);
   const [catchReleased, setCatchReleased] = useState<boolean | null>(true);
@@ -244,6 +271,7 @@ export function CatchDetailsModal({
     setCatchDepth('');
     setCatchPhotoUri(null);
     setExistingPhotoUrl(null);
+    setPhotoExifMeta(null);
     setCatchCaughtOnFly('primary');
     setCatchReleased(true);
     setCatchStructure(null);
@@ -283,6 +311,7 @@ export function CatchDetailsModal({
       setCatchQty(String(Math.max(1, data.quantity ?? 1)));
       setCatchDepth(data.depth_ft != null ? String(data.depth_ft) : '');
       setCatchPhotoUri(null);
+      setPhotoExifMeta(null);
       setExistingPhotoUrl(data.photo_url ?? null);
       setCatchCaughtOnFly(data.caught_on_fly ?? 'primary');
       setCatchPresentation(data.presentation_method ?? null);
@@ -411,19 +440,39 @@ export function CatchDetailsModal({
     setCatchFlyDropdownOpen(null);
   };
 
+  const applyPhotoExifToPin = useCallback((meta: PhotoExifMetadata) => {
+    if (meta.latitude != null && meta.longitude != null) {
+      setPinLat(meta.latitude);
+      setPinLon(meta.longitude);
+      setLatText(String(meta.latitude));
+      setLonText(String(meta.longitude));
+      setEditPinFormSynced(true);
+      setCoordRecenterTick((t) => t + 1);
+    }
+  }, []);
+
   const pickPhotoInternal = async (source: 'camera' | 'library') => {
     if (onPickPhotoProp) {
       onPickPhotoProp(source);
       return;
     }
+    const pickerOpts = { allowsEditing: false, quality: 0.85 as const, exif: true };
     if (source === 'camera') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission needed', 'Allow camera access to take a photo.');
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.85 });
-      if (!result.canceled && result.assets?.[0]?.uri) setCatchPhotoUri(result.assets[0].uri);
+      const result = await ImagePicker.launchCameraAsync(pickerOpts);
+      const asset = result.assets?.[0];
+      if (!result.canceled && asset?.uri) {
+        const meta = extractPhotoMetadataFromPickerAsset(asset);
+        const hasMeta =
+          meta.takenAt != null || meta.latitude != null || meta.longitude != null;
+        setPhotoExifMeta(hasMeta ? meta : null);
+        setCatchPhotoUri(asset.uri);
+        applyPhotoExifToPin(meta);
+      }
     } else {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -432,10 +481,17 @@ export function CatchDetailsModal({
       }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.85,
+        ...pickerOpts,
       });
-      if (!result.canceled && result.assets?.[0]?.uri) setCatchPhotoUri(result.assets[0].uri);
+      const asset = result.assets?.[0];
+      if (!result.canceled && asset?.uri) {
+        const meta = extractPhotoMetadataFromPickerAsset(asset);
+        const hasMeta =
+          meta.takenAt != null || meta.latitude != null || meta.longitude != null;
+        setPhotoExifMeta(hasMeta ? meta : null);
+        setCatchPhotoUri(asset.uri);
+        applyPhotoExifToPin(meta);
+      }
     }
   };
 
@@ -500,6 +556,22 @@ export function CatchDetailsModal({
           setSubmitting(false);
           return;
         }
+
+        let catchTimestampIso: string | null = null;
+        let photoCapturedAtIso: string | null = null;
+        if (photoExifMeta?.takenAt) {
+          catchTimestampIso = photoExifMeta.takenAt.toISOString();
+          photoCapturedAtIso = catchTimestampIso;
+        }
+
+        let conditionsSnapshot: EventConditionsSnapshot | null | undefined = undefined;
+        if (photoExifMeta?.takenAt != null && lat != null && lon != null) {
+          const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
+          conditionsSnapshot = hist
+            ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
+            : null;
+        }
+
         await onSubmitAdd({
           primary,
           dropper,
@@ -517,6 +589,9 @@ export function CatchDetailsModal({
           latitude: lat,
           longitude: lon,
           photoUri: catchPhotoUri,
+          photoCapturedAtIso,
+          catchTimestampIso,
+          conditionsSnapshot,
         });
         onClose();
       } else if (mode === 'edit' && editingEvent && onSubmitEdit) {
@@ -535,7 +610,7 @@ export function CatchDetailsModal({
                 fly_size: (useDropper ? dropper!.size : primary.size) ?? undefined,
                 fly_color: (useDropper ? dropper!.color : primary.color) ?? undefined,
                 fly_id: useDropper ? dropper!.fly_id : primary.fly_id,
-                captured_at: editingEvent.timestamp,
+                captured_at: photoExifMeta?.takenAt?.toISOString() ?? editingEvent.timestamp,
               },
               { isOnline: true },
             );
@@ -566,6 +641,23 @@ export function CatchDetailsModal({
           structure: catchStructure,
         };
 
+        let eventOverrides:
+          | { timestamp?: string; conditions_snapshot?: EventConditionsSnapshot | null }
+          | undefined;
+        if (catchPhotoUri && photoExifMeta?.takenAt) {
+          if (lat != null && lon != null) {
+            const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
+            eventOverrides = {
+              timestamp: photoExifMeta.takenAt.toISOString(),
+              conditions_snapshot: hist
+                ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
+                : null,
+            };
+          } else {
+            eventOverrides = { timestamp: photoExifMeta.takenAt.toISOString() };
+          }
+        }
+
         const nextEvents = mergeEditCatchEvents(
           allEvents,
           editingEvent,
@@ -574,6 +666,7 @@ export function CatchDetailsModal({
           catchData,
           lat,
           lon,
+          eventOverrides,
         );
         await onSubmitEdit(nextEvents);
         onClose();
@@ -601,9 +694,8 @@ export function CatchDetailsModal({
           {gpsFillBusy ? (
             <ActivityIndicator size="small" color={Colors.primary} />
           ) : (
-            <MaterialIcons name="my-location" size={18} color={Colors.primary} />
+            <Text style={styles.useGpsButtonText}>Use current location</Text>
           )}
-          <Text style={styles.useGpsButtonText}>Use current location</Text>
         </Pressable>
       </View>
       <View style={styles.coordRow}>
@@ -826,6 +918,7 @@ export function CatchDetailsModal({
                       onPress={() => {
                         setCatchPhotoUri(null);
                         setExistingPhotoUrl(null);
+                        setPhotoExifMeta(null);
                       }}
                     >
                       <MaterialIcons name="close" size={18} color={Colors.textInverse} />
@@ -844,6 +937,15 @@ export function CatchDetailsModal({
                   </>
                 )}
               </View>
+              {photoExifMeta?.takenAt ? (
+                <Text style={styles.exifHint}>
+                  Using date and time from the photo
+                  {photoExifMeta.latitude != null && photoExifMeta.longitude != null
+                    ? '; map pin from photo location when available'
+                    : ''}
+                  . Weather is filled from historical data when coordinates are set.
+                </Text>
+              ) : null}
 
               <Text style={styles.flyFieldLabel}>Notes</Text>
               <TextInput
@@ -1058,6 +1160,7 @@ export function CatchDetailsModal({
                 style={styles.catchModalCancel}
                 onPress={() => {
                   setCatchPhotoUri(null);
+                  setPhotoExifMeta(null);
                   onClose();
                 }}
               >
@@ -1167,6 +1270,13 @@ const styles = StyleSheet.create({
   },
   coordRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
   coordInput: { flex: 1 },
+  exifHint: {
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.xs,
+    lineHeight: 18,
+  },
   flyFieldLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',

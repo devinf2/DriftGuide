@@ -558,7 +558,7 @@ export default function NewTripScreen() {
         {isConnected ? (
           <Pressable
             style={({ pressed }) => [styles.useMapButton, pressed && styles.useMapButtonPressed]}
-            onPress={() => router.push('/trip/add-location')}
+            onPress={() => router.push('/trip/pick-location-map')}
             hitSlop={8}
           >
             <Ionicons name="map-outline" size={16} color={Colors.primary} />
@@ -710,7 +710,7 @@ export default function NewTripScreen() {
                           onPress={() => {
                             const [lng, lat] = f.center;
                             router.push({
-                              pathname: '/trip/add-location',
+                              pathname: '/trip/pick-location-map',
                               params: {
                                 presetName: encodeURIComponent(f.place_name),
                                 lat: String(lat),
@@ -738,14 +738,15 @@ export default function NewTripScreen() {
                       style={styles.addLocationButton}
                       onPress={() =>
                         router.push({
-                          pathname: '/trip/add-location',
-                          params: {
-                            presetName: encodeURIComponent(searchQuery.trim()),
-                          },
+                          pathname: '/trip/pick-location-map',
+                          params:
+                            searchQuery.trim().length > 0
+                              ? { presetName: encodeURIComponent(searchQuery.trim()) }
+                              : {},
                         })
                       }
                     >
-                      <Text style={styles.addLocationButtonText}>+ Add location</Text>
+                      <Text style={styles.addLocationButtonText}>Choose on map</Text>
                     </Pressable>
                   </View>
                 )}

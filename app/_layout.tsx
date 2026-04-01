@@ -110,6 +110,10 @@ export default function RootLayout() {
               options={{ title: 'Add Location', presentation: 'modal' }}
             />
             <Stack.Screen
+              name="trip/pick-location-map"
+              options={{ headerShown: false, animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
               name="trip/add-access-point"
               options={{ title: 'Add access point', presentation: 'modal' }}
             />

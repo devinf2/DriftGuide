@@ -10,10 +10,11 @@ import {
   Keyboard,
   Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
@@ -25,21 +26,29 @@ import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
-import {
-  AddLocationMapSheet,
-  type AddLocationMapSheetRef,
-} from '@/src/components/add-location/AddLocationMapSheet';
-import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 
-export default function MapTabScreen() {
+function parseCoordParam(s: string | undefined): number {
+  if (s == null || s === '') return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/**
+ * Full catalog map (same markers/search as the Map tab) for choosing a saved location
+ * when planning a trip. Opens the spot overview; confirming uses {@link useLocationStore.setPendingPlanTripLocationId}.
+ */
+export default function PickLocationMapScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
+  const presetLat = parseCoordParam(params.lat);
+  const presetLng = parseCoordParam(params.lng);
+  const hasPresetMapCoords = Number.isFinite(presetLat) && Number.isFinite(presetLng);
+
   const { locations, fetchLocations } = useLocationStore();
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const userProximityRef = useRef<[number, number] | null>(null);
-  const addLocationSheetRef = useRef<AddLocationMapSheetRef | null>(null);
-
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_MAP_CENTER);
   const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
   const [cameraNonce, setCameraNonce] = useState(0);
@@ -48,22 +57,38 @@ export default function MapTabScreen() {
   const [mapSuggestions, setMapSuggestions] = useState<MapboxGeocodeFeature[]>([]);
   const [mapSuggestionsLoading, setMapSuggestionsLoading] = useState(false);
   const [locationAllowed, setLocationAllowed] = useState(false);
-  const [addingLocation, setAddingLocation] = useState(false);
-  const [addPin, setAddPin] = useState<{ latitude: number; longitude: number }>({
-    latitude: DEFAULT_MAP_CENTER[1],
-    longitude: DEFAULT_MAP_CENTER[0],
-  });
-  const [mapInteractionBlocked, setMapInteractionBlocked] = useState(false);
-  /** Snapshot of search bar when add mode opens — seeds the Name field once per open. */
-  const [addLocationSearchSeed, setAddLocationSearchSeed] = useState('');
-  /** Bottom sheet height — map stage uses this as marginBottom so the map center matches the crosshair. */
-  const [addSheetHeight, setAddSheetHeight] = useState(300);
+
+  const chooseLocation = useCallback((loc: Location) => {
+    Keyboard.dismiss();
+    router.push(`/spot/${loc.id}?planTripPicker=1`);
+  }, [router]);
 
   useFocusEffect(
     useCallback(() => {
       if (locations.length === 0) void fetchLocations();
     }, [locations.length, fetchLocations]),
   );
+
+  useEffect(() => {
+    const raw = params.presetName;
+    if (raw == null || String(raw).trim() === '') return;
+    const decoded = (() => {
+      try {
+        return decodeURIComponent(String(raw)).trim();
+      } catch {
+        return String(raw).trim();
+      }
+    })();
+    if (decoded) setSearchText(decoded);
+  }, [params.presetName]);
+
+  useEffect(() => {
+    if (!hasPresetMapCoords) return;
+    setMapCenter([presetLng, presetLat]);
+    setMapZoom(USER_LOCATION_ZOOM);
+    userProximityRef.current = [presetLng, presetLat];
+    setCameraNonce((n) => n + 1);
+  }, [hasPresetMapCoords, presetLat, presetLng]);
 
   useEffect(() => {
     let subscription: ExpoLocation.LocationSubscription | undefined;
@@ -77,11 +102,13 @@ export default function MapTabScreen() {
         });
         const { latitude, longitude } = loc.coords;
         userProximityRef.current = [longitude, latitude];
-        setMapCenter([longitude, latitude]);
-        setMapZoom(USER_LOCATION_ZOOM);
-        setCameraNonce((n) => n + 1);
+        if (!hasPresetMapCoords) {
+          setMapCenter([longitude, latitude]);
+          setMapZoom(USER_LOCATION_ZOOM);
+          setCameraNonce((n) => n + 1);
+        }
       } catch {
-        /* keep DEFAULT_MAP_CENTER */
+        /* keep DEFAULT_MAP_CENTER or preset */
       }
 
       subscription = await ExpoLocation.watchPositionAsync(
@@ -99,7 +126,7 @@ export default function MapTabScreen() {
     return () => {
       subscription?.remove();
     };
-  }, []);
+  }, [hasPresetMapCoords]);
 
   useEffect(() => {
     const q = searchText.trim();
@@ -142,61 +169,19 @@ export default function MapTabScreen() {
     searchText.trim().length >= 2 &&
     (mapSuggestionsLoading || mapSuggestions.length > 0 || savedLocationMatches.length > 0);
 
-  const beginAddLocation = useCallback(() => {
-    const [lng, lat] = mapCenter;
-    setAddPin({ latitude: lat, longitude: lng });
-    setAddLocationSearchSeed(searchText);
-    setAddingLocation(true);
-  }, [mapCenter, searchText]);
-
-  const endAddLocation = useCallback(() => {
-    setAddingLocation(false);
+  const applyMapFeatureToMap = useCallback((f: MapboxGeocodeFeature) => {
+    const [lng, lat] = f.center;
+    setSearchText(f.place_name);
+    setMapCenter([lng, lat]);
+    setMapZoom(USER_LOCATION_ZOOM);
+    setCameraNonce((n) => n + 1);
+    setSearchInputFocused(false);
     Keyboard.dismiss();
   }, []);
 
-  const handleMapIdleWhileAdding = useCallback((state: MapCameraStatePayload) => {
-    const [lng, lat] = state.properties.center;
-    setAddPin({ latitude: lat, longitude: lng });
-  }, []);
-
-  const applyMapFeatureToMap = useCallback(
-    (f: MapboxGeocodeFeature) => {
-      const [lng, lat] = f.center;
-      setSearchText(f.place_name);
-      if (addingLocation) {
-        addLocationSheetRef.current?.syncNameFromMapFeature(f.place_name);
-        setAddPin({ latitude: lat, longitude: lng });
-      }
-      setMapCenter([lng, lat]);
-      setMapZoom(USER_LOCATION_ZOOM);
-      setCameraNonce((n) => n + 1);
-      setSearchInputFocused(false);
-      Keyboard.dismiss();
-    },
-    [addingLocation],
-  );
-
-  const addLocationFab = useMemo(
-    () => (
-      <Pressable
-        style={({ pressed }) => [styles.addLocationFab, pressed && styles.addLocationFabPressed]}
-        onPress={() => (addingLocation ? endAddLocation() : beginAddLocation())}
-        accessibilityRole="button"
-        accessibilityLabel={addingLocation ? 'Cancel adding location' : 'Add location'}
-      >
-        <MaterialIcons name={addingLocation ? 'close' : 'add'} size={28} color={Colors.textInverse} />
-      </Pressable>
-    ),
-    [addingLocation, beginAddLocation, endAddLocation],
-  );
-
   const catalogMarkers = useMemo(
-    () =>
-      buildCatalogMapboxMarkers(locations, (loc) => {
-        if (addingLocation) endAddLocation();
-        router.push(`/spot/${loc.id}`);
-      }),
-    [locations, router, addingLocation, endAddLocation],
+    () => buildCatalogMapboxMarkers(locations, chooseLocation),
+    [locations, chooseLocation],
   );
 
   const renderSuggestionRow = (
@@ -222,11 +207,39 @@ export default function MapTabScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar style="light" />
+      <View style={[styles.planHeaderBar, { paddingTop: insets.top }]}>
+        <View style={[styles.planHeaderSide, styles.planHeaderSideStart]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            onPress={() => router.back()}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              marginLeft: 8,
+              paddingVertical: Spacing.sm,
+              paddingRight: Spacing.sm,
+              opacity: pressed ? 0.65 : 1,
+            })}
+            hitSlop={12}
+          >
+            <Ionicons name="chevron-back" size={22} color="#FFFFFF" style={styles.planHeaderBackIcon} />
+            <Text style={styles.planHeaderBackText}>Back</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.planHeaderTitle} numberOfLines={1}>
+          Choose location
+        </Text>
+        <View style={styles.planHeaderSide} />
+      </View>
+
       <View
         style={[
           styles.headerStrip,
           {
-            paddingTop: insets.top + Spacing.sm,
+            paddingTop: Spacing.sm,
             paddingLeft: Spacing.lg + insets.left,
             paddingRight: Spacing.lg + insets.right,
           },
@@ -234,15 +247,10 @@ export default function MapTabScreen() {
       >
         <TextInput
           style={styles.searchInput}
-          placeholder={addingLocation ? 'Search map & DriftGuide…' : 'Search Locations'}
+          placeholder="Search locations"
           placeholderTextColor={Colors.textTertiary}
           value={searchText}
-          onChangeText={(text) => {
-            setSearchText(text);
-            if (addingLocation) {
-              addLocationSheetRef.current?.syncNameFromSearch(text);
-            }
-          }}
+          onChangeText={setSearchText}
           onFocus={() => setSearchInputFocused(true)}
           onBlur={() => {
             setTimeout(() => setSearchInputFocused(false), 200);
@@ -263,10 +271,9 @@ export default function MapTabScreen() {
                     renderSuggestionRow(
                       `loc-${loc.id}`,
                       loc.name,
-                      addingLocation ? 'Use existing location' : 'Open location',
+                      'Use for this trip',
                       () => {
-                        router.push(`/spot/${loc.id}`);
-                        if (addingLocation) endAddLocation();
+                        chooseLocation(loc);
                         setSearchInputFocused(false);
                         Keyboard.dismiss();
                       },
@@ -295,55 +302,22 @@ export default function MapTabScreen() {
         ) : null}
       </View>
 
-      <View
-        style={styles.mapContainer}
-        pointerEvents={mapInteractionBlocked ? 'none' : 'auto'}
-      >
+      <View style={styles.mapContainer}>
         {Platform.OS === 'web' ? (
           <View style={styles.webPlaceholder}>
-            <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+            <Ionicons name="map-outline" size={48} color={Colors.textTertiary} />
             <Text style={styles.webPlaceholderText}>Map is available in the iOS and Android app.</Text>
           </View>
         ) : (
-          <>
-            <View
-              style={[
-                styles.mapStage,
-                addingLocation ? { marginBottom: addSheetHeight } : null,
-              ]}
-            >
-              <TripMapboxMapView
-                containerStyle={styles.map}
-                centerCoordinate={mapCenter}
-                zoomLevel={mapZoom}
-                cameraKey={`map-tab-${cameraNonce}`}
-                markers={catalogMarkers}
-                showUserLocation={locationAllowed}
-                onMapIdle={addingLocation ? handleMapIdleWhileAdding : undefined}
-                onZoomLevelChange={setMapZoom}
-                trailingFab={addLocationFab}
-              />
-              {addingLocation ? (
-                <View style={styles.centerPinWrap} pointerEvents="none">
-                  <Ionicons name="location-sharp" size={44} color={Colors.primary} style={styles.centerPinIcon} />
-                </View>
-              ) : null}
-            </View>
-            <AddLocationMapSheet
-              ref={addLocationSheetRef}
-              visible={addingLocation}
-              initialSearchText={addLocationSearchSeed}
-              pinLatitude={addPin.latitude}
-              pinLongitude={addPin.longitude}
-              onRequestClose={endAddLocation}
-              onSheetHeightChange={setAddSheetHeight}
-              onMapInteractionBlockedChange={setMapInteractionBlocked}
-              onSaved={(id) => {
-                router.push(`/spot/${id}`);
-                endAddLocation();
-              }}
-            />
-          </>
+          <TripMapboxMapView
+            containerStyle={styles.map}
+            centerCoordinate={mapCenter}
+            zoomLevel={mapZoom}
+            cameraKey={`pick-loc-map-${cameraNonce}`}
+            markers={catalogMarkers}
+            showUserLocation={locationAllowed}
+            onZoomLevelChange={setMapZoom}
+          />
         )}
       </View>
     </View>
@@ -354,6 +328,36 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  planHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2C4670',
+    paddingBottom: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  planHeaderSide: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  planHeaderSideStart: {
+    alignItems: 'flex-start',
+  },
+  planHeaderTitle: {
+    flexShrink: 1,
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  planHeaderBackIcon: {
+    marginLeft: -4,
+  },
+  planHeaderBackText: {
+    fontSize: FontSize.md,
+    color: '#FFFFFF',
+    fontWeight: '400',
   },
   headerStrip: {
     backgroundColor: Colors.surface,
@@ -430,20 +434,8 @@ const styles = StyleSheet.create({
   mapContainer: {
     flex: 1,
   },
-  mapStage: {
-    flex: 1,
-    minHeight: 0,
-  },
   map: {
     ...StyleSheet.absoluteFillObject,
-  },
-  centerPinWrap: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  centerPinIcon: {
-    marginBottom: 26,
   },
   webPlaceholder: {
     flex: 1,
@@ -456,21 +448,5 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.textSecondary,
     textAlign: 'center',
-  },
-  addLocationFab: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  addLocationFabPressed: {
-    opacity: 0.88,
   },
 });

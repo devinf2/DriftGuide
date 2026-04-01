@@ -79,7 +79,7 @@ function SpotModalHeader({
 }
 
 export default function SpotFishingTripScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, planTripPicker } = useLocalSearchParams<{ id: string; planTripPicker?: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
@@ -87,7 +87,7 @@ export default function SpotFishingTripScreen() {
   const [creatorMenu, setCreatorMenu] = useState<LocationCreatorManageState | null>(null);
   const [manageMenuOpen, setManageMenuOpen] = useState(false);
   const userProxRef = useRef<[number, number] | null>(null);
-
+  const [spotMapUserLayer, setSpotMapUserLayer] = useState(false);
   const [activeTab, setActiveTab] = useState<SpotTabKey>('overview');
   const [conditions, setConditions] = useState<LocationConditions | null>(null);
   const [report, setReport] = useState<string | null>(null);
@@ -142,6 +142,7 @@ export default function SpotFishingTripScreen() {
     (async () => {
       const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
+      setSpotMapUserLayer(true);
       try {
         const loc = await ExpoLocation.getCurrentPositionAsync({
           accuracy: ExpoLocation.Accuracy.Balanced,
@@ -297,8 +298,12 @@ export default function SpotFishingTripScreen() {
   }, [aiInput, location, conditions, weatherData, waterFlowData, locations, user?.id]);
 
   const handlePlanTripHere = () => {
-    if (id) {
-      setPendingPlanTripLocationId(id);
+    if (!id) return;
+    setPendingPlanTripLocationId(id);
+    const fromPlanTripMapPicker = planTripPicker === '1' || planTripPicker === 'true';
+    if (fromPlanTripMapPicker) {
+      router.dismissTo('/trip/new');
+    } else {
       router.back();
     }
   };
@@ -716,7 +721,7 @@ export default function SpotFishingTripScreen() {
                 centerCoordinate={[lng, lat]}
                 zoomLevel={USER_LOCATION_ZOOM}
                 markers={spotMapboxMarkers}
-                showUserLocation={false}
+                showUserLocation={spotMapUserLayer}
                 compassEnabled
               />
             </View>

@@ -204,17 +204,9 @@ export default function JournalScreen() {
     [filteredCatches],
   );
 
-  const filteredTripIds = useMemo(() => new Set(filteredTrips.map(t => t.id)), [filteredTrips]);
-
-  /** Catches with coords on trips in the current journal filter (for Journal map layer pins). */
-  const journalCatchPins = useMemo(
-    () => fishMapPins.filter(c => filteredTripIds.has(c.trip_id)),
-    [fishMapPins, filteredTripIds],
-  );
-
   const journalFraming = useMemo(
-    () => journalMapDefaultFraming(filteredTrips, journalCatchPins),
-    [filteredTrips, journalCatchPins],
+    () => journalMapDefaultFraming(filteredTrips, []),
+    [filteredTrips],
   );
 
   useEffect(() => {
@@ -290,20 +282,7 @@ export default function JournalScreen() {
         ),
       };
       });
-      const catchMarkers = journalCatchPins.map((c) => ({
-        id: `journal-catch-${c.id}`,
-        coordinate: [c.longitude!, c.latitude!] as [number, number],
-        title: c.species?.trim() || 'Catch',
-        onPress: () => handleFishMarkerPress(c),
-        children: (
-          <View style={styles.fishMarkerWrap} pointerEvents="box-none">
-            <View style={styles.fishMarkerBubble}>
-              <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
-            </View>
-          </View>
-        ),
-      }));
-      return [...placeMarkers, ...catchMarkers];
+      return placeMarkers;
     }
     return fishMapPins.map((c) => ({
       id: `fish-${c.id}`,
@@ -326,7 +305,7 @@ export default function JournalScreen() {
         </View>
       ),
     }));
-  }, [mapLayer, locationGroups, journalCatchPins, fishMapPins, handleMarkerPress, handleFishMarkerPress]);
+  }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress]);
 
   const renderTrip = ({ item }: { item: Trip }) => {
     const locationType = item.location?.type as LocationType | undefined;
@@ -584,14 +563,12 @@ export default function JournalScreen() {
             />
           )}
 
-          {mapLayer === 'journal' &&
-            locationGroups.length === 0 &&
-            journalCatchPins.length === 0 && (
+          {mapLayer === 'journal' && locationGroups.length === 0 && (
             <View style={styles.mapEmptyOverlay} pointerEvents="none">
               <View style={styles.mapEmptyBubble}>
                 <Text style={styles.mapEmptyText}>
                   {dateRange === 'all'
-                    ? 'No trip locations or catch pins yet'
+                    ? 'No trip locations on the map yet'
                     : 'Nothing on the map in this period'}
                 </Text>
               </View>

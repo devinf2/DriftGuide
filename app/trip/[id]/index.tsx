@@ -372,7 +372,17 @@ export default function TripDashboardScreen() {
   const handleCatchSubmitAdd = useCallback(
     async (payload: CatchDetailsSubmitAdd) => {
       if (!activeTrip?.id || !activeTrip?.user_id) return;
-      const { primary, dropper, catchFields, latitude, longitude, photoUri } = payload;
+      const {
+        primary,
+        dropper,
+        catchFields,
+        latitude,
+        longitude,
+        photoUri,
+        photoCapturedAtIso,
+        catchTimestampIso,
+        conditionsSnapshot,
+      } = payload;
       const flyChanged =
         currentFly?.pattern !== primary.pattern ||
         (currentFly?.size ?? null) !== primary.size ||
@@ -396,7 +406,7 @@ export default function TripDashboardScreen() {
               fly_size: primary.size ?? undefined,
               fly_color: primary.color ?? undefined,
               fly_id: primary.fly_id ?? undefined,
-              captured_at: new Date().toISOString(),
+              captured_at: photoCapturedAtIso ?? catchTimestampIso ?? new Date().toISOString(),
             }
           : null;
 
@@ -411,6 +421,14 @@ export default function TripDashboardScreen() {
         }
       }
 
+      const catchOptions =
+        catchTimestampIso != null || conditionsSnapshot !== undefined
+          ? {
+              ...(catchTimestampIso != null ? { timestampIso: catchTimestampIso } : {}),
+              ...(conditionsSnapshot !== undefined ? { conditionsSnapshot } : {}),
+            }
+          : undefined;
+
       const eventId = addCatch(
         {
           ...catchFields,
@@ -418,6 +436,8 @@ export default function TripDashboardScreen() {
         },
         latitude,
         longitude,
+        undefined,
+        catchOptions,
       );
 
       if (photoOptions && !photoUrl && eventId) {
@@ -940,7 +960,6 @@ export default function TripDashboardScreen() {
               const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
               if (status !== 'granted') {
                 setMapLocationError('Location permission is needed to show your position on the map.');
-                setMapLocationLoading(false);
                 return;
               }
               const loc = await ExpoLocation.getCurrentPositionAsync({
@@ -950,7 +969,7 @@ export default function TripDashboardScreen() {
                 lat: loc.coords.latitude,
                 lon: loc.coords.longitude,
               });
-            } catch (e) {
+            } catch {
               setMapLocationError('Could not get your location.');
             } finally {
               setMapLocationLoading(false);

@@ -13,6 +13,7 @@ import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { getCachedConditions } from '@/src/services/waterwayCache';
 import { latestFlyChangeRigFromEvents, totalFishFromEvents } from '@/src/utils/journalTimeline';
+import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
 
 const IN_TRIP_SYNC_DEBOUNCE_MS = 5000;
 let inTripSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -67,6 +68,10 @@ interface TripState {
     longitude?: number | null,
     /** Stable client id for offline-first sync (omit to assign a new uuid). */
     clientEventId?: string | null,
+    options?: {
+      timestampIso?: string;
+      conditionsSnapshot?: EventConditionsSnapshot | null;
+    },
   ) => string | undefined;
   updateEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
   removeCatch: () => void;
@@ -85,14 +90,12 @@ interface TripState {
   replaceActiveTripEvents: (events: TripEvent[]) => void;
 }
 
-function buildConditionsSnapshot(weather: WeatherData | null, waterFlow: WaterFlowData | null): EventConditionsSnapshot | null {
-  if (!weather && !waterFlow) return null;
-  return {
-    weather,
-    waterFlow,
-    captured_at: new Date().toISOString(),
-    moon_phase: getMoonPhase(new Date()),
-  };
+function buildConditionsSnapshot(
+  weather: WeatherData | null,
+  waterFlow: WaterFlowData | null,
+  capturedAt?: Date,
+): EventConditionsSnapshot | null {
+  return buildEventConditionsSnapshot(weather, waterFlow, capturedAt ?? new Date());
 }
 
 export const useTripStore = create<TripState>()(
@@ -540,7 +543,7 @@ export const useTripStore = create<TripState>()(
         }, IN_TRIP_SYNC_DEBOUNCE_MS);
       },
 
-      addCatch: (data, latitude, longitude, clientEventId): string | undefined => {
+      addCatch: (data, latitude, longitude, clientEventId, options): string | undefined => {
         const { activeTrip, currentFlyEventId, fishCount, weatherData, waterFlowData, isTripPaused } = get();
         if (!activeTrip || isTripPaused) return undefined;
         const qty = Math.max(1, data?.quantity ?? 1);
@@ -549,11 +552,21 @@ export const useTripStore = create<TripState>()(
             ? clientEventId.trim()
             : uuidv4();
 
+        const timestamp =
+          options?.timestampIso && !Number.isNaN(Date.parse(options.timestampIso))
+            ? options.timestampIso
+            : new Date().toISOString();
+
+        const conditions_snapshot =
+          options?.conditionsSnapshot !== undefined
+            ? options.conditionsSnapshot
+            : buildConditionsSnapshot(weatherData, waterFlowData);
+
         const catchEvent: TripEvent = {
           id: eventId,
           trip_id: activeTrip.id,
           event_type: 'catch',
-          timestamp: new Date().toISOString(),
+          timestamp,
           data: {
             species: data?.species ?? null,
             size_inches: data?.size_inches ?? null,
@@ -567,7 +580,7 @@ export const useTripStore = create<TripState>()(
             released: data?.released ?? null,
             structure: data?.structure ?? null,
           } as CatchData,
-          conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
+          conditions_snapshot,
           latitude: latitude ?? null,
           longitude: longitude ?? null,
         };
