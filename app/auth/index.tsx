@@ -1,7 +1,87 @@
-import { useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Image } from 'react-native';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useMemo, useState } from 'react';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      flexGrow: 1,
+      justifyContent: 'center',
+      padding: Spacing.xl,
+    },
+    header: {
+      alignItems: 'center',
+      marginBottom: Spacing.xxl,
+    },
+    logo: {
+      width: 200,
+      height: 200,
+      marginBottom: Spacing.md,
+    },
+    subtitle: {
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      marginTop: Spacing.xs,
+    },
+    form: {
+      gap: Spacing.md,
+    },
+    input: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    error: {
+      color: colors.error,
+      fontSize: FontSize.sm,
+      textAlign: 'center',
+    },
+    button: {
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.lg,
+      alignItems: 'center',
+      marginTop: Spacing.sm,
+    },
+    buttonDisabled: {
+      opacity: 0.6,
+    },
+    buttonText: {
+      color: colors.textInverse,
+      fontSize: FontSize.lg,
+      fontWeight: '700',
+    },
+    switchButton: {
+      alignItems: 'center',
+      padding: Spacing.md,
+    },
+    switchText: {
+      color: colors.primary,
+      fontSize: FontSize.md,
+    },
+  });
+}
 
 export default function AuthScreen() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -11,6 +91,8 @@ export default function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { signIn, signUp } = useAuthStore();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const handleSubmit = async () => {
     setError(null);
@@ -51,7 +133,7 @@ export default function AuthScreen() {
             <TextInput
               style={styles.input}
               placeholder="Display Name"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               value={displayName}
               onChangeText={setDisplayName}
               autoCapitalize="words"
@@ -60,7 +142,7 @@ export default function AuthScreen() {
           <TextInput
             style={styles.input}
             placeholder="Email"
-            placeholderTextColor={Colors.textTertiary}
+            placeholderTextColor={colors.textTertiary}
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"
@@ -69,13 +151,13 @@ export default function AuthScreen() {
           <TextInput
             style={styles.input}
             placeholder="Password"
-            placeholderTextColor={Colors.textTertiary}
+            placeholderTextColor={colors.textTertiary}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
           />
 
-          {error && <Text style={styles.error}>{error}</Text>}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Pressable
             style={[styles.button, loading && styles.buttonDisabled]}
@@ -103,70 +185,3 @@ export default function AuthScreen() {
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  content: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: Spacing.xl,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: Spacing.xxl,
-  },
-  logo: {
-    width: 200,
-    height: 200,
-    marginBottom: Spacing.md,
-  },
-  subtitle: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    marginTop: Spacing.xs,
-  },
-  form: {
-    gap: Spacing.md,
-  },
-  input: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  error: {
-    color: Colors.error,
-    fontSize: FontSize.sm,
-    textAlign: 'center',
-  },
-  button: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    alignItems: 'center',
-    marginTop: Spacing.sm,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-  },
-  switchButton: {
-    alignItems: 'center',
-    padding: Spacing.md,
-  },
-  switchText: {
-    color: Colors.primary,
-    fontSize: FontSize.md,
-  },
-});

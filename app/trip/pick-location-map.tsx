@@ -16,7 +16,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -38,6 +39,9 @@ function parseCoordParam(s: string | undefined): number {
  * when planning a trip. Opens the spot overview; confirming uses {@link useLocationStore.setPendingPlanTripLocationId}.
  */
 export default function PickLocationMapScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createPickLocationStyles(colors), [colors]);
+
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
@@ -180,8 +184,21 @@ export default function PickLocationMapScreen() {
   }, []);
 
   const catalogMarkers = useMemo(
-    () => buildCatalogMapboxMarkers(locations, chooseLocation),
-    [locations, chooseLocation],
+    () =>
+      buildCatalogMapboxMarkers(locations, chooseLocation, {
+        primary: colors.primary,
+        surface: colors.surface,
+        surfaceElevated: colors.surfaceElevated,
+        colorScheme: resolvedScheme,
+      }),
+    [
+      locations,
+      chooseLocation,
+      colors.primary,
+      colors.surface,
+      colors.surfaceElevated,
+      resolvedScheme,
+    ],
   );
 
   const renderSuggestionRow = (
@@ -191,7 +208,7 @@ export default function PickLocationMapScreen() {
     onPress: () => void,
   ) => (
     <Pressable key={key} style={styles.suggestionRow} onPress={onPress}>
-      <Ionicons name="location-outline" size={20} color={Colors.primary} />
+      <Ionicons name="location-outline" size={20} color={colors.primary} />
       <View style={styles.suggestionTextBlock}>
         <Text style={styles.suggestionTitle} numberOfLines={2}>
           {title}
@@ -225,7 +242,7 @@ export default function PickLocationMapScreen() {
             })}
             hitSlop={12}
           >
-            <Ionicons name="chevron-back" size={22} color="#FFFFFF" style={styles.planHeaderBackIcon} />
+            <Ionicons name="chevron-back" size={22} color={colors.textInverse} style={styles.planHeaderBackIcon} />
             <Text style={styles.planHeaderBackText}>Back</Text>
           </Pressable>
         </View>
@@ -248,7 +265,7 @@ export default function PickLocationMapScreen() {
         <TextInput
           style={styles.searchInput}
           placeholder="Search locations"
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           value={searchText}
           onChangeText={setSearchText}
           onFocus={() => setSearchInputFocused(true)}
@@ -283,7 +300,7 @@ export default function PickLocationMapScreen() {
               ) : null}
               {mapSuggestionsLoading ? (
                 <View style={styles.suggestionsLoadingRow}>
-                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <ActivityIndicator size="small" color={colors.primary} />
                   <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
                 </View>
               ) : null}
@@ -305,7 +322,7 @@ export default function PickLocationMapScreen() {
       <View style={styles.mapContainer}>
         {Platform.OS === 'web' ? (
           <View style={styles.webPlaceholder}>
-            <Ionicons name="map-outline" size={48} color={Colors.textTertiary} />
+            <Ionicons name="map-outline" size={48} color={colors.textTertiary} />
             <Text style={styles.webPlaceholderText}>Map is available in the iOS and Android app.</Text>
           </View>
         ) : (
@@ -324,15 +341,16 @@ export default function PickLocationMapScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createPickLocationStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   planHeaderBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2C4670',
+    backgroundColor: colors.primary,
     paddingBottom: Spacing.sm,
     paddingHorizontal: Spacing.xs,
   },
@@ -348,7 +366,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: colors.textInverse,
     textAlign: 'center',
   },
   planHeaderBackIcon: {
@@ -356,33 +374,33 @@ const styles = StyleSheet.create({
   },
   planHeaderBackText: {
     fontSize: FontSize.md,
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontWeight: '400',
   },
   headerStrip: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     paddingBottom: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
     zIndex: 2,
   },
   searchInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   suggestionsPanel: {
     marginTop: Spacing.sm,
     maxHeight: 200,
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   suggestionsScroll: {
@@ -391,7 +409,7 @@ const styles = StyleSheet.create({
   suggestionsSectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     paddingHorizontal: Spacing.md,
@@ -407,7 +425,7 @@ const styles = StyleSheet.create({
   },
   suggestionsLoadingText: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   suggestionRow: {
     flexDirection: 'row',
@@ -416,19 +434,19 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   suggestionTextBlock: {
     flex: 1,
   },
   suggestionTitle: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '500',
   },
   suggestionSubtitle: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 2,
   },
   mapContainer: {
@@ -446,7 +464,8 @@ const styles = StyleSheet.create({
   webPlaceholderText: {
     marginTop: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
-});
+  });
+}

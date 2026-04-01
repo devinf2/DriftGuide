@@ -8,7 +8,8 @@ import {
 import { fetchTripsFromCloud } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
 import type { Trip } from '@/src/types';
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
@@ -45,6 +46,8 @@ function formatPhotoThumbDate(iso: string | null | undefined): string | null {
 }
 
 export function ProfilePhotoLibrarySection() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createProfilePhotoLibraryStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
@@ -271,7 +274,7 @@ export function ProfilePhotoLibrarySection() {
               <MaterialCommunityIcons
                 name={hasActiveFilters ? 'filter' : 'filter-outline'}
                 size={20}
-                color={Colors.primary}
+                color={colors.primary}
               />
               {hasActiveFilters ? <View style={styles.filterBadge} /> : null}
             </View>
@@ -285,9 +288,9 @@ export function ProfilePhotoLibrarySection() {
             accessibilityLabel="Add photo"
           >
             {uploading ? (
-              <ActivityIndicator size="small" color={Colors.primary} />
+              <ActivityIndicator size="small" color={colors.primary} />
             ) : (
-              <MaterialCommunityIcons name="plus-circle-outline" size={22} color={Colors.primary} />
+              <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
             )}
           </Pressable>
         </View>
@@ -295,11 +298,11 @@ export function ProfilePhotoLibrarySection() {
 
       {loading ? (
         <View style={styles.placeholder}>
-          <ActivityIndicator color={Colors.primary} />
+          <ActivityIndicator color={colors.primary} />
         </View>
       ) : filteredPhotos.length === 0 ? (
         <View style={styles.empty}>
-          <MaterialCommunityIcons name="image-multiple-outline" size={48} color={Colors.textTertiary} />
+          <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
           <Text style={styles.emptyText}>
             {photos.length === 0 ? 'No photos yet.' : 'No photos match the filters.'}
           </Text>
@@ -337,7 +340,7 @@ export function ProfilePhotoLibrarySection() {
               <TextInput
                 style={styles.addPhotoModalInput}
                 placeholder="Add a caption"
-                placeholderTextColor={Colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 value={addPhotoCaption}
                 onChangeText={setAddPhotoCaption}
               />
@@ -345,7 +348,7 @@ export function ProfilePhotoLibrarySection() {
               <TextInput
                 style={styles.addPhotoModalInput}
                 placeholder="e.g. Brown Trout"
-                placeholderTextColor={Colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 value={addPhotoSpecies}
                 onChangeText={setAddPhotoSpecies}
               />
@@ -362,7 +365,7 @@ export function ProfilePhotoLibrarySection() {
                 <MaterialCommunityIcons
                   name={addPhotoDropdownOpen ? 'chevron-up' : 'chevron-down'}
                   size={20}
-                  color={Colors.textSecondary}
+                  color={colors.textSecondary}
                 />
               </Pressable>
               {addPhotoDropdownOpen && (
@@ -377,7 +380,7 @@ export function ProfilePhotoLibrarySection() {
                     <Text style={styles.dropdownOptionText}>None</Text>
                   </Pressable>
                   {addPhotoTripsLoading ? (
-                    <ActivityIndicator size="small" color={Colors.primary} style={{ padding: Spacing.md }} />
+                    <ActivityIndicator size="small" color={colors.primary} style={{ padding: Spacing.md }} />
                   ) : (
                     addPhotoTrips.map((t) => (
                       <Pressable
@@ -398,7 +401,7 @@ export function ProfilePhotoLibrarySection() {
               <TextInput
                 style={styles.addPhotoModalInput}
                 placeholder="e.g. Elk Hair Caddis"
-                placeholderTextColor={Colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 value={addPhotoFlyPattern}
                 onChangeText={setAddPhotoFlyPattern}
               />
@@ -406,7 +409,7 @@ export function ProfilePhotoLibrarySection() {
               <TextInput
                 style={styles.addPhotoModalInput}
                 placeholder="e.g. 14"
-                placeholderTextColor={Colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 value={addPhotoFlySize}
                 onChangeText={setAddPhotoFlySize}
                 keyboardType="numeric"
@@ -415,7 +418,7 @@ export function ProfilePhotoLibrarySection() {
               <TextInput
                 style={styles.addPhotoModalInput}
                 placeholder="e.g. Tan"
-                placeholderTextColor={Colors.textTertiary}
+                placeholderTextColor={colors.textTertiary}
                 value={addPhotoFlyColor}
                 onChangeText={setAddPhotoFlyColor}
               />
@@ -430,7 +433,7 @@ export function ProfilePhotoLibrarySection() {
                 disabled={uploading}
               >
                 {uploading ? (
-                  <ActivityIndicator size="small" color={Colors.textInverse} />
+                  <ActivityIndicator size="small" color={colors.textInverse} />
                 ) : (
                   <Text style={styles.addPhotoModalSaveText}>Save</Text>
                 )}
@@ -466,7 +469,7 @@ export function ProfilePhotoLibrarySection() {
                 }}
                 hitSlop={12}
               >
-                <MaterialCommunityIcons name="close" size={24} color={Colors.text} />
+                <MaterialCommunityIcons name="close" size={24} color={colors.text} />
               </Pressable>
             </View>
             <ScrollView style={styles.filterModalBody} keyboardShouldPersistTaps="handled">
@@ -486,7 +489,7 @@ export function ProfilePhotoLibrarySection() {
                 <MaterialCommunityIcons
                   name={openDropdown === 'location' ? 'chevron-up' : 'chevron-down'}
                   size={20}
-                  color={Colors.textSecondary}
+                  color={colors.textSecondary}
                 />
               </Pressable>
               {openDropdown === 'location' && (
@@ -500,7 +503,7 @@ export function ProfilePhotoLibrarySection() {
                       <MaterialCommunityIcons
                         name={selectedLocationIds.includes(loc.id) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                         size={22}
-                        color={selectedLocationIds.includes(loc.id) ? Colors.primary : Colors.border}
+                        color={selectedLocationIds.includes(loc.id) ? colors.primary : colors.border}
                       />
                       <Text style={styles.dropdownOptionText}>{loc.name}</Text>
                     </Pressable>
@@ -522,7 +525,7 @@ export function ProfilePhotoLibrarySection() {
                 <MaterialCommunityIcons
                   name={openDropdown === 'fly' ? 'chevron-up' : 'chevron-down'}
                   size={20}
-                  color={Colors.textSecondary}
+                  color={colors.textSecondary}
                 />
               </Pressable>
               {openDropdown === 'fly' && (
@@ -532,7 +535,7 @@ export function ProfilePhotoLibrarySection() {
                       <MaterialCommunityIcons
                         name={selectedFlyPatterns.includes(fly) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                         size={22}
-                        color={selectedFlyPatterns.includes(fly) ? Colors.primary : Colors.border}
+                        color={selectedFlyPatterns.includes(fly) ? colors.primary : colors.border}
                       />
                       <Text style={styles.dropdownOptionText}>{fly}</Text>
                     </Pressable>
@@ -554,7 +557,7 @@ export function ProfilePhotoLibrarySection() {
                 <MaterialCommunityIcons
                   name={openDropdown === 'species' ? 'chevron-up' : 'chevron-down'}
                   size={20}
-                  color={Colors.textSecondary}
+                  color={colors.textSecondary}
                 />
               </Pressable>
               {openDropdown === 'species' && (
@@ -564,7 +567,7 @@ export function ProfilePhotoLibrarySection() {
                       <MaterialCommunityIcons
                         name={selectedSpecies.includes(sp) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                         size={22}
-                        color={selectedSpecies.includes(sp) ? Colors.primary : Colors.border}
+                        color={selectedSpecies.includes(sp) ? colors.primary : colors.border}
                       />
                       <Text style={styles.dropdownOptionText}>{sp}</Text>
                     </Pressable>
@@ -580,7 +583,7 @@ export function ProfilePhotoLibrarySection() {
                 <TextInput
                   style={styles.dateInput}
                   placeholder="From (YYYY-MM-DD)"
-                  placeholderTextColor={Colors.textTertiary}
+                  placeholderTextColor={colors.textTertiary}
                   value={dateFrom}
                   onChangeText={setDateFrom}
                 />
@@ -588,7 +591,7 @@ export function ProfilePhotoLibrarySection() {
                 <TextInput
                   style={styles.dateInput}
                   placeholder="To (YYYY-MM-DD)"
-                  placeholderTextColor={Colors.textTertiary}
+                  placeholderTextColor={colors.textTertiary}
                   value={dateTo}
                   onChangeText={setDateTo}
                 />
@@ -621,7 +624,7 @@ export function ProfilePhotoLibrarySection() {
             style={[styles.fullScreenClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setSelectedPhoto(null)}
           >
-            <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+            <MaterialCommunityIcons name="close" size={28} color={colors.textInverse} />
           </Pressable>
           {selectedPhoto && (
             <ScrollView
@@ -640,13 +643,13 @@ export function ProfilePhotoLibrarySection() {
               <View style={styles.photoInfo}>
                 {selectedPhoto.trip?.location?.name ? (
                   <Text style={styles.photoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} />{' '}
+                    <MaterialCommunityIcons name="map-marker" size={16} color={colors.textInverse} />{' '}
                     {selectedPhoto.trip.location.name}
                   </Text>
                 ) : null}
                 {selectedPhoto.fly_pattern || selectedPhoto.fly_size || selectedPhoto.fly_color ? (
                   <Text style={styles.photoInfoRow}>
-                    <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} />{' '}
+                    <MaterialCommunityIcons name="hook" size={16} color={colors.textInverse} />{' '}
                     {[
                       selectedPhoto.fly_pattern,
                       selectedPhoto.fly_size ? `#${selectedPhoto.fly_size}` : null,
@@ -658,13 +661,13 @@ export function ProfilePhotoLibrarySection() {
                 ) : null}
                 {selectedPhoto.captured_at || selectedPhoto.created_at ? (
                   <Text style={styles.photoInfoRow}>
-                    <MaterialCommunityIcons name="calendar" size={16} color={Colors.textInverse} />{' '}
+                    <MaterialCommunityIcons name="calendar" size={16} color={colors.textInverse} />{' '}
                     {format(new Date(selectedPhoto.captured_at || selectedPhoto.created_at!), 'MMM d, yyyy')}
                   </Text>
                 ) : null}
                 {selectedPhoto.species ? (
                   <Text style={styles.photoInfoRow}>
-                    <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} />{' '}
+                    <MaterialCommunityIcons name="fish" size={16} color={colors.textInverse} />{' '}
                     {selectedPhoto.species}
                   </Text>
                 ) : null}
@@ -680,7 +683,8 @@ export function ProfilePhotoLibrarySection() {
   );
 }
 
-const styles = StyleSheet.create({
+function createProfilePhotoLibraryStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   wrap: {
     marginTop: Spacing.md,
   },
@@ -693,7 +697,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   sectionHeaderActions: {
     flexDirection: 'row',
@@ -720,7 +724,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   placeholder: {
     minHeight: 120,
@@ -735,7 +739,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   grid: {
     flexDirection: 'row',
@@ -757,7 +761,7 @@ const styles = StyleSheet.create({
     maxWidth: '92%',
   },
   dateBannerText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontSize: FontSize.xs,
     fontWeight: '700',
     letterSpacing: 0.2,
@@ -775,7 +779,7 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
   },
   addPhotoModal: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     width: '100%',
@@ -785,7 +789,7 @@ const styles = StyleSheet.create({
   addPhotoModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.md,
   },
   addPhotoModalScroll: {
@@ -793,14 +797,14 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   addPhotoModalInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.sm,
   },
   addPhotoModalButtons: {
@@ -812,13 +816,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     alignItems: 'center',
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   addPhotoModalCancelText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   addPhotoModalSave: {
     flex: 1,
@@ -826,7 +830,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     minHeight: 40,
   },
   addPhotoModalSaveDisabled: {
@@ -835,10 +839,10 @@ const styles = StyleSheet.create({
   addPhotoModalSaveText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   filterModalCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     paddingBottom: 34,
@@ -851,12 +855,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   filterModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   filterModalBody: {
     maxHeight: 400,
@@ -866,7 +870,7 @@ const styles = StyleSheet.create({
   filterLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginBottom: Spacing.xs,
@@ -876,25 +880,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.sm,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.xs,
   },
   dropdownTriggerText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
     marginRight: Spacing.sm,
   },
   dropdownOptions: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.sm,
     maxHeight: 180,
     paddingVertical: Spacing.xs,
@@ -908,12 +912,12 @@ const styles = StyleSheet.create({
   },
   dropdownOptionText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   dropdownEmpty: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     padding: Spacing.sm,
   },
   dateRow: {
@@ -924,25 +928,25 @@ const styles = StyleSheet.create({
   },
   dateInput: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   dateSep: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   filterModalFooter: {
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
   },
   applyButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.sm,
     alignItems: 'center',
@@ -950,7 +954,7 @@ const styles = StyleSheet.create({
   applyButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   fullScreenPhoto: {
     flex: 1,
@@ -979,12 +983,13 @@ const styles = StyleSheet.create({
   },
   photoInfoRow: {
     fontSize: FontSize.md,
-    color: Colors.textInverse,
+    color: colors.textInverse,
     marginBottom: Spacing.xs,
   },
   photoInfoCaption: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: Spacing.xs,
   },
-});
+  });
+}

@@ -1,4 +1,4 @@
-import { Colors, LocationTypeColors } from '@/src/constants/theme';
+import { ColorsLight, locationTypeMapPinAccent } from '@/src/constants/theme';
 import type { Location, LocationType } from '@/src/types';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { isLocationActive } from '@/src/utils/locationVisibility';
@@ -28,6 +28,9 @@ export function catalogLocationMarkersInViewport(
   locations: Location[],
   dataViewport: BoundingBox | null,
   excludeLocationId: string | null | undefined,
+  /** Fallback pin color when type has no mapping; pass theme `textTertiary` from the active palette. */
+  textTertiaryFallback: string = ColorsLight.textTertiary,
+  mapColorScheme: 'light' | 'dark' = 'light',
 ): CatalogMapMarker[] {
   if (!dataViewport) return [];
   type Row = { loc: Location; lat: number; lon: number };
@@ -52,7 +55,7 @@ export function catalogLocationMarkersInViewport(
       lon,
       lat,
       title: r.loc.name,
-      color: LocationTypeColors[r.loc.type] ?? Colors.textTertiary,
+      color: locationTypeMapPinAccent(r.loc.type, mapColorScheme, textTertiaryFallback),
       locationType: r.loc.type,
     };
   });

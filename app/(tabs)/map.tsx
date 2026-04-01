@@ -6,7 +6,8 @@ import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { useLocationStore } from '@/src/stores/locationStore';
 import type { Location } from '@/src/types';
@@ -31,9 +32,190 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+/** Reserve right edge for Mapbox’s top-right compass (diameter + margin). */
+const MAP_SEARCH_COMPASS_CLEARANCE = 52;
+
+function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
+  const glass = {
+    idle:
+      scheme === 'dark'
+        ? { bg: 'rgba(30, 41, 59, 0.72)', border: 'rgba(51, 65, 85, 0.85)' }
+        : { bg: 'rgba(255, 255, 255, 0.42)', border: 'rgba(226, 232, 240, 0.65)' },
+    editing:
+      scheme === 'dark'
+        ? { bg: 'rgba(30, 41, 59, 0.88)', border: 'rgba(71, 85, 105, 0.95)' }
+        : { bg: 'rgba(255, 255, 255, 0.58)', border: 'rgba(226, 232, 240, 0.85)' },
+    filled:
+      scheme === 'dark'
+        ? { bg: 'rgba(51, 65, 85, 0.92)', border: 'rgba(100, 116, 139, 0.95)' }
+        : { bg: 'rgba(255, 255, 255, 0.8)', border: 'rgba(226, 232, 240, 0.95)' },
+  };
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    mapContainer: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    headerOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 2,
+      paddingBottom: Spacing.sm,
+    },
+    headerOverlayIdle: {
+      backgroundColor: 'transparent',
+    },
+    headerOverlayActive: {
+      backgroundColor: colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      shadowColor: '#000',
+      shadowOpacity: 0.06,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 3,
+    },
+    searchBlock: {
+      alignSelf: 'stretch',
+      marginRight: MAP_SEARCH_COMPASS_CLEARANCE,
+      minWidth: 0,
+    },
+    searchInput: {
+      width: '100%',
+      borderRadius: BorderRadius.md,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+      borderWidth: 1,
+    },
+    searchInputIdle: {
+      backgroundColor: glass.idle.bg,
+      borderColor: glass.idle.border,
+    },
+    searchInputEditingGlass: {
+      backgroundColor: glass.editing.bg,
+      borderColor: glass.editing.border,
+    },
+    searchInputFilledGlass: {
+      backgroundColor: glass.filled.bg,
+      borderColor: glass.filled.border,
+    },
+    searchInputCompact: {
+      paddingVertical: 5,
+      paddingHorizontal: 12,
+      fontSize: FontSize.sm,
+      borderRadius: BorderRadius.sm,
+    },
+    suggestionsPanel: {
+      marginTop: Spacing.xs,
+      maxHeight: 187,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 4,
+    },
+    suggestionsScroll: {
+      maxHeight: 187,
+    },
+    suggestionsSectionLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textTertiary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      paddingHorizontal: Spacing.sm,
+      paddingTop: Spacing.xs,
+      paddingBottom: 2,
+    },
+    suggestionsLoadingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: Spacing.sm,
+    },
+    suggestionsLoadingText: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+    },
+    suggestionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+      paddingVertical: 6,
+      paddingHorizontal: Spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderLight,
+    },
+    suggestionTitle: {
+      flex: 1,
+      fontSize: FontSize.sm,
+      color: colors.text,
+      fontWeight: '500',
+      lineHeight: 18,
+    },
+    mapStage: {
+      flex: 1,
+      minHeight: 0,
+    },
+    map: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    centerPinWrap: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    centerPinIcon: {
+      marginBottom: 26,
+    },
+    webPlaceholder: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: Spacing.xl,
+    },
+    webPlaceholderText: {
+      marginTop: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    addLocationFab: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 4,
+    },
+    addLocationFabPressed: {
+      opacity: 0.88,
+    },
+  });
+}
+
 export default function MapTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const { locations, fetchLocations } = useLocationStore();
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -188,24 +370,42 @@ export default function MapTabScreen() {
         accessibilityRole="button"
         accessibilityLabel={addingLocation ? 'Cancel adding location' : 'Add location'}
       >
-        <MaterialIcons name={addingLocation ? 'close' : 'add'} size={28} color={Colors.textInverse} />
+        <MaterialIcons name={addingLocation ? 'close' : 'add'} size={28} color={colors.textInverse} />
       </Pressable>
     ),
-    [addingLocation, beginAddLocation, endAddLocation],
+    [addingLocation, beginAddLocation, colors.textInverse, endAddLocation, styles],
   );
 
   const catalogMarkers = useMemo(
     () =>
-      buildCatalogMapboxMarkers(locations, (loc) => {
-        if (addingLocation) endAddLocation();
-        router.push(`/spot/${loc.id}`);
-      }),
-    [locations, router, addingLocation, endAddLocation],
+      buildCatalogMapboxMarkers(
+        locations,
+        (loc) => {
+          if (addingLocation) endAddLocation();
+          router.push(`/spot/${loc.id}`);
+        },
+        {
+          primary: colors.primary,
+          surface: colors.surface,
+          surfaceElevated: colors.surfaceElevated,
+          colorScheme: resolvedScheme,
+        },
+      ),
+    [
+      locations,
+      router,
+      addingLocation,
+      endAddLocation,
+      colors.primary,
+      colors.surface,
+      colors.surfaceElevated,
+      resolvedScheme,
+    ],
   );
 
   const renderSuggestionRow = (key: string, title: string, onPress: () => void) => (
     <Pressable key={key} style={styles.suggestionRow} onPress={onPress}>
-      <Ionicons name="location-outline" size={16} color={Colors.primary} />
+      <Ionicons name="location-outline" size={16} color={colors.primary} />
       <Text style={styles.suggestionTitle} numberOfLines={2}>
         {title}
       </Text>
@@ -220,7 +420,7 @@ export default function MapTabScreen() {
       >
         {Platform.OS === 'web' ? (
           <View style={styles.webPlaceholder}>
-            <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+            <MaterialIcons name="map" size={48} color={colors.textTertiary} />
             <Text style={styles.webPlaceholderText}>Map is available in the iOS and Android app.</Text>
           </View>
         ) : (
@@ -242,10 +442,11 @@ export default function MapTabScreen() {
                 onZoomLevelChange={setMapZoom}
                 trailingFab={addLocationFab}
                 reservePlanTripFabSpacing
+                mapTabControlLayout
               />
               {addingLocation ? (
                 <View style={styles.centerPinWrap} pointerEvents="none">
-                  <Ionicons name="location-sharp" size={44} color={Colors.primary} style={styles.centerPinIcon} />
+                  <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
                 </View>
               ) : null}
             </View>
@@ -279,38 +480,41 @@ export default function MapTabScreen() {
           headerBarActive ? styles.headerOverlayActive : styles.headerOverlayIdle,
         ]}
       >
-        <TextInput
-          style={[
-            styles.searchInput,
-            searchAtRest
-              ? styles.searchInputIdle
-              : searchInputFocused || addingLocation
-                ? styles.searchInputEditingGlass
-                : styles.searchInputFilledGlass,
-            !searchAtRest && styles.searchInputCompact,
-          ]}
-          placeholder={addingLocation ? 'Search map & DriftGuide…' : 'Search Locations'}
-          placeholderTextColor={Colors.textTertiary}
-          value={searchText}
-          onChangeText={(text) => {
-            setSearchText(text);
-            if (addingLocation) {
-              addLocationSheetRef.current?.syncNameFromSearch(text);
+        <View style={styles.searchBlock}>
+          <TextInput
+            style={[
+              styles.searchInput,
+              searchAtRest
+                ? styles.searchInputIdle
+                : searchInputFocused || addingLocation
+                  ? styles.searchInputEditingGlass
+                  : styles.searchInputFilledGlass,
+              !searchAtRest && styles.searchInputCompact,
+            ]}
+            placeholder={addingLocation ? 'Search map & DriftGuide…' : 'Search Locations'}
+            placeholderTextColor={
+              resolvedScheme === 'dark' ? '#CBD5E1' : colors.textSecondary
             }
-          }}
-          onFocus={() => setSearchInputFocused(true)}
-          onBlur={() => {
-            setTimeout(() => setSearchInputFocused(false), 200);
-          }}
-          returnKeyType="done"
-        />
-        {showSearchSuggestions ? (
-          <View style={styles.suggestionsPanel}>
-            <ScrollView
-              style={styles.suggestionsScroll}
-              keyboardShouldPersistTaps="handled"
-              nestedScrollEnabled
-            >
+            value={searchText}
+            onChangeText={(text) => {
+              setSearchText(text);
+              if (addingLocation) {
+                addLocationSheetRef.current?.syncNameFromSearch(text);
+              }
+            }}
+            onFocus={() => setSearchInputFocused(true)}
+            onBlur={() => {
+              setTimeout(() => setSearchInputFocused(false), 200);
+            }}
+            returnKeyType="done"
+          />
+          {showSearchSuggestions ? (
+            <View style={styles.suggestionsPanel}>
+              <ScrollView
+                style={styles.suggestionsScroll}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
               {savedLocationMatches.length > 0 ? (
                 <>
                   <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
@@ -326,7 +530,7 @@ export default function MapTabScreen() {
               ) : null}
               {mapSuggestionsLoading ? (
                 <View style={styles.suggestionsLoadingRow}>
-                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <ActivityIndicator size="small" color={colors.primary} />
                   <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
                 </View>
               ) : null}
@@ -338,164 +542,11 @@ export default function MapTabScreen() {
                   )}
                 </>
               ) : null}
-            </ScrollView>
-          </View>
-        ) : null}
+              </ScrollView>
+            </View>
+          ) : null}
+        </View>
       </View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  mapContainer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  headerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 2,
-    paddingBottom: Spacing.sm,
-  },
-  headerOverlayIdle: {
-    backgroundColor: 'transparent',
-  },
-  headerOverlayActive: {
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
-  },
-  searchInput: {
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    borderWidth: 1,
-  },
-  searchInputIdle: {
-    backgroundColor: 'rgba(255, 255, 255, 0.42)',
-    borderColor: 'rgba(226, 232, 240, 0.65)',
-  },
-  searchInputEditingGlass: {
-    backgroundColor: 'rgba(255, 255, 255, 0.58)',
-    borderColor: 'rgba(226, 232, 240, 0.85)',
-  },
-  searchInputFilledGlass: {
-    backgroundColor: 'rgba(255, 255, 255, 0.8)',
-    borderColor: 'rgba(226, 232, 240, 0.95)',
-  },
-  searchInputCompact: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    fontSize: FontSize.sm,
-    borderRadius: BorderRadius.sm,
-  },
-  suggestionsPanel: {
-    marginTop: Spacing.xs,
-    maxHeight: 187,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
-  },
-  suggestionsScroll: {
-    maxHeight: 187,
-  },
-  suggestionsSectionLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    paddingHorizontal: Spacing.sm,
-    paddingTop: Spacing.xs,
-    paddingBottom: 2,
-  },
-  suggestionsLoadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.sm,
-  },
-  suggestionsLoadingText: {
-    fontSize: FontSize.xs,
-    color: Colors.textTertiary,
-  },
-  suggestionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingVertical: 6,
-    paddingHorizontal: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-  },
-  suggestionTitle: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    color: Colors.text,
-    fontWeight: '500',
-    lineHeight: 18,
-  },
-  mapStage: {
-    flex: 1,
-    minHeight: 0,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  centerPinWrap: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  centerPinIcon: {
-    marginBottom: 26,
-  },
-  webPlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.xl,
-  },
-  webPlaceholderText: {
-    marginTop: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  addLocationFab: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  addLocationFabPressed: {
-    opacity: 0.88,
-  },
-});

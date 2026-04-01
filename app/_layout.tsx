@@ -8,9 +8,10 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
-import { useAuthStore } from '@/src/stores/authStore';
-import { supabase } from '@/src/services/supabase';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
+import { supabase } from '@/src/services/supabase';
+import { useAuthStore } from '@/src/stores/authStore';
+import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -59,6 +60,82 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ThemedNavigation() {
+  const { colors, resolvedScheme } = useAppTheme();
+
+  return (
+    <>
+      <AuthGate>
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.primary },
+            headerTintColor: colors.textInverse,
+            headerTitleStyle: { color: colors.textInverse, fontWeight: '600' },
+          }}
+        >
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="auth" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="trip/new"
+            options={{
+              title: 'Plan a Trip',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
+            name="spot/[id]"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
+            name="spot/edit-pin"
+            options={{
+              title: 'Edit pin',
+              presentation: 'modal',
+              headerBackTitle: 'Back',
+            }}
+          />
+          <Stack.Screen
+            name="trip/add-location"
+            options={{ title: 'Add Location', presentation: 'modal' }}
+          />
+          <Stack.Screen
+            name="trip/pick-location-map"
+            options={{ headerShown: false, animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="trip/add-access-point"
+            options={{ title: 'Add access point', presentation: 'modal' }}
+          />
+          <Stack.Screen
+            name="trip/download-waterway"
+            options={{ title: 'Download for offline', headerBackTitle: 'Back', headerLargeTitle: false }}
+          />
+          <Stack.Screen
+            name="trip/offline-region-picker"
+            options={{ title: 'Choose region', headerBackTitle: 'Back' }}
+          />
+          <Stack.Screen
+            name="trip/[id]"
+            options={{ headerShown: false, animation: 'slide_from_right' }}
+          />
+          <Stack.Screen name="photos" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="fly-box"
+            options={{
+              title: 'Fly Box',
+              headerBackTitle: 'Back',
+            }}
+          />
+        </Stack>
+      </AuthGate>
+      <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />
+    </>
+  );
+}
+
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
@@ -77,71 +154,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <AuthGate>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="auth" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="trip/new"
-              options={{
-                title: 'Plan a Trip',
-                headerShown: false,
-              }}
-            />
-            <Stack.Screen
-              name="spot/[id]"
-              options={{
-                presentation: 'modal',
-                headerShown: false,
-              }}
-            />
-            <Stack.Screen
-              name="spot/edit-pin"
-              options={{
-                title: 'Edit pin',
-                presentation: 'modal',
-                headerBackTitle: 'Back',
-                headerStyle: { backgroundColor: '#2C4670' },
-                headerTintColor: '#FFFFFF',
-              }}
-            />
-            <Stack.Screen
-              name="trip/add-location"
-              options={{ title: 'Add Location', presentation: 'modal' }}
-            />
-            <Stack.Screen
-              name="trip/pick-location-map"
-              options={{ headerShown: false, animation: 'slide_from_right' }}
-            />
-            <Stack.Screen
-              name="trip/add-access-point"
-              options={{ title: 'Add access point', presentation: 'modal' }}
-            />
-            <Stack.Screen
-              name="trip/download-waterway"
-              options={{ title: 'Download for offline', headerBackTitle: 'Back', headerLargeTitle: false }}
-            />
-            <Stack.Screen
-              name="trip/offline-region-picker"
-              options={{ title: 'Choose region', headerBackTitle: 'Back' }}
-            />
-            <Stack.Screen
-              name="trip/[id]"
-              options={{ headerShown: false, animation: 'slide_from_right' }}
-            />
-            <Stack.Screen name="photos" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="fly-box"
-              options={{
-                title: 'Fly Box',
-                headerBackTitle: 'Back',
-                headerStyle: { backgroundColor: '#2C4670' },
-                headerTintColor: '#FFFFFF',
-              }}
-            />
-          </Stack>
-        </AuthGate>
-        <StatusBar style="dark" />
+        <ThemeProvider>
+          <ThemedNavigation />
+        </ThemeProvider>
       </GestureHandlerRootView>
     </SafeAreaProvider>
   );

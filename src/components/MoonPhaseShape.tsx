@@ -1,8 +1,8 @@
+import { useAppTheme } from '@/src/theme/ThemeProvider';
+import type { MoonPhase } from '@/src/types';
 import React, { useId } from 'react';
 import { View } from 'react-native';
 import Svg, { Circle, ClipPath, Defs, G } from 'react-native-svg';
-import { Colors } from '@/src/constants/theme';
-import type { MoonPhase } from '@/src/types';
 
 const SIZE = 28;
 const R = 12;
@@ -48,6 +48,7 @@ export function MoonPhaseShape({
   size?: number;
   southernHemisphere?: boolean;
 }) {
+  const { colors } = useAppTheme();
   const clipId = useId().replace(/:/g, '');
   const { fraction, waxing } = PHASE_CONFIG[phase];
   const isNew = fraction <= 0;
@@ -90,7 +91,7 @@ export function MoonPhaseShape({
           cy={C}
           r={R}
           fill="none"
-          stroke={Colors.textSecondary}
+          stroke={colors.textSecondary}
           strokeWidth={1.25}
         />
       </Svg>

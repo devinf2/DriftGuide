@@ -1,5 +1,6 @@
 import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrarySection';
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { uploadProfileAvatar } from '@/src/services/photoService';
 import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -8,7 +9,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -34,9 +35,11 @@ type QuickTileProps = {
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   label: string;
   onPress: () => void;
+  colors: ThemeColors;
+  styles: any;
 };
 
-function QuickTile({ icon, label, onPress }: QuickTileProps) {
+function QuickTile({ icon, label, onPress, colors, styles }: QuickTileProps) {
   return (
     <Pressable
       onPress={onPress}
@@ -45,7 +48,7 @@ function QuickTile({ icon, label, onPress }: QuickTileProps) {
       accessibilityLabel={label}
     >
       <View style={styles.quickTileIconWrap}>
-        <MaterialCommunityIcons name={icon} size={20} color={Colors.primary} />
+        <MaterialCommunityIcons name={icon} size={20} color={colors.primary} />
       </View>
       <Text style={styles.quickTileLabel} numberOfLines={2}>
         {label}
@@ -55,6 +58,8 @@ function QuickTile({ icon, label, onPress }: QuickTileProps) {
 }
 
 export default function ProfileScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createProfileStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, profile, fetchProfile, updateProfileNames } = useAuthStore();
@@ -167,7 +172,7 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="Edit name"
             >
-              <MaterialCommunityIcons name="pencil-outline" size={20} color={Colors.primary} />
+              <MaterialCommunityIcons name="pencil-outline" size={20} color={colors.primary} />
             </Pressable>
             <Pressable
               onPress={() => router.push('/profile/settings')}
@@ -176,7 +181,7 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="Settings"
             >
-              <MaterialCommunityIcons name="cog-outline" size={20} color={Colors.primary} />
+              <MaterialCommunityIcons name="cog-outline" size={20} color={colors.primary} />
             </Pressable>
           </View>
           <View style={styles.headerRow}>
@@ -202,13 +207,13 @@ export default function ProfileScreen() {
                   )}
                   {avatarUploading ? (
                     <View style={styles.avatarLoading}>
-                      <ActivityIndicator color={Colors.textInverse} />
+                      <ActivityIndicator color={colors.textInverse} />
                     </View>
                   ) : null}
                 </View>
                 {!avatarUploading ? (
                   <View style={styles.avatarEditBadge} pointerEvents="none">
-                    <MaterialCommunityIcons name="camera-plus" size={14} color={Colors.primary} />
+                    <MaterialCommunityIcons name="camera-plus" size={14} color={colors.primary} />
                   </View>
                 ) : null}
               </View>
@@ -225,9 +230,9 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.quickRow}>
-          <QuickTile icon="hook" label="Fly Box" onPress={() => router.push('/fly-box')} />
-          <QuickTile icon="map-outline" label="Offline maps" onPress={() => router.push('/profile/offline-maps')} />
-          <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} />
+          <QuickTile icon="hook" label="Fly Box" onPress={() => router.push('/fly-box')} colors={colors} styles={styles} />
+          <QuickTile icon="map-outline" label="Offline maps" onPress={() => router.push('/profile/offline-maps')} colors={colors} styles={styles} />
+          <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
         </View>
 
         <ProfilePhotoLibrarySection />
@@ -244,7 +249,7 @@ export default function ProfileScreen() {
               value={firstNameDraft}
               onChangeText={setFirstNameDraft}
               placeholder="First name"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               autoCapitalize="words"
               editable={!savingName}
             />
@@ -254,7 +259,7 @@ export default function ProfileScreen() {
               value={lastNameDraft}
               onChangeText={setLastNameDraft}
               placeholder="Last name"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               autoCapitalize="words"
               editable={!savingName}
             />
@@ -272,7 +277,7 @@ export default function ProfileScreen() {
                 disabled={savingName}
               >
                 {savingName ? (
-                  <ActivityIndicator color={Colors.textInverse} />
+                  <ActivityIndicator color={colors.textInverse} />
                 ) : (
                   <Text style={styles.nameModalPrimaryText}>Save</Text>
                 )}
@@ -335,7 +340,7 @@ export default function ProfileScreen() {
                 disabled={avatarUploading}
               >
                 {avatarUploading ? (
-                  <ActivityIndicator color={Colors.textInverse} />
+                  <ActivityIndicator color={colors.textInverse} />
                 ) : (
                   <Text style={styles.avatarPreviewBtnPrimaryText}>Use this photo</Text>
                 )}
@@ -348,237 +353,239 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  content: {
-    paddingHorizontal: Spacing.md,
-    paddingBottom: Spacing.lg,
-  },
-  headerCard: {
-    position: 'relative',
-    backgroundColor: Colors.surface,
-    borderRadius: R,
-    padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
-  },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  headerTextCol: { flex: 1, minWidth: 0, paddingRight: 44 },
-  avatarPressable: { borderRadius: 30 },
-  avatarPressablePressed: { opacity: 0.85 },
-  avatarWrapper: { width: 56, height: 56, position: 'relative' },
-  avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  avatarEditBadge: {
-    position: 'absolute',
-    right: -4,
-    bottom: -4,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.2,
-        shadowRadius: 2,
-      },
-      android: { elevation: 3 },
-    }),
-  },
-  avatarImage: { width: '100%', height: '100%' },
-  avatarLoading: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.textInverse },
-  name: { fontSize: FontSize.xl, fontWeight: '700', color: Colors.text },
-  email: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.xs },
-  headerActions: {
-    position: 'absolute',
-    top: Spacing.sm,
-    right: Spacing.sm,
-    zIndex: 1,
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
-  headerActionBtn: {
-    padding: Spacing.xs,
-  },
-  quickRow: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.md },
-  quickTile: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 72,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3 },
-      android: { elevation: 1 },
-    }),
-  },
-  quickTilePressed: { opacity: 0.92 },
-  quickTileIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 2,
-  },
-  quickTileLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.text,
-    textAlign: 'center',
-  },
-  nameModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    padding: Spacing.md,
-  },
-  nameModalCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-  },
-  nameModalTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
-  nameModalHint: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.xs, marginBottom: Spacing.md },
-  inputLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: Spacing.xs,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  input: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    marginBottom: Spacing.md,
-  },
-  nameModalActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
-  nameModalSecondary: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-  },
-  nameModalSecondaryText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
-  nameModalPrimary: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.primary,
-    minHeight: 48,
-  },
-  nameModalPrimaryDisabled: { opacity: 0.75 },
-  nameModalPrimaryText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textInverse },
-  avatarPreviewBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-  },
-  avatarPreviewCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    zIndex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-      },
-      android: { elevation: 8 },
-    }),
-  },
-  avatarPreviewTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text, textAlign: 'center' },
-  avatarPreviewSubtext: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginTop: Spacing.sm,
-    lineHeight: 20,
-  },
-  avatarPreviewCircle: {
-    alignSelf: 'center',
-    marginTop: Spacing.md,
-    marginBottom: Spacing.sm,
-    overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: Colors.borderLight,
-  },
-  avatarPreviewImage: { width: '100%', height: '100%' },
-  avatarPreviewActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    marginTop: Spacing.sm,
-  },
-  avatarPreviewBtnSecondary: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    minWidth: 140,
-    alignItems: 'center',
-  },
-  avatarPreviewBtnSecondaryText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.text },
-  avatarPreviewBtnPrimary: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.primary,
-    minWidth: 140,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarPreviewBtnPrimaryDisabled: { opacity: 0.75 },
-  avatarPreviewBtnPrimaryText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textInverse },
-});
+function createProfileStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    content: {
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.lg,
+    },
+    headerCard: {
+      position: 'relative',
+      backgroundColor: colors.surface,
+      borderRadius: R,
+      padding: Spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+        android: { elevation: 2 },
+      }),
+    },
+    headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+    headerTextCol: { flex: 1, minWidth: 0, paddingRight: 44 },
+    avatarPressable: { borderRadius: 30 },
+    avatarPressablePressed: { opacity: 0.85 },
+    avatarWrapper: { width: 56, height: 56, position: 'relative' },
+    avatar: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      overflow: 'hidden',
+    },
+    avatarEditBadge: {
+      position: 'absolute',
+      right: -4,
+      bottom: -4,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      justifyContent: 'center',
+      alignItems: 'center',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.2,
+          shadowRadius: 2,
+        },
+        android: { elevation: 3 },
+      }),
+    },
+    avatarImage: { width: '100%', height: '100%' },
+    avatarLoading: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0,0,0,0.35)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    avatarText: { fontSize: FontSize.xxl, fontWeight: '700', color: colors.textInverse },
+    name: { fontSize: FontSize.xl, fontWeight: '700', color: colors.text },
+    email: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs },
+    headerActions: {
+      position: 'absolute',
+      top: Spacing.sm,
+      right: Spacing.sm,
+      zIndex: 1,
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: Spacing.xs,
+    },
+    headerActionBtn: {
+      padding: Spacing.xs,
+    },
+    quickRow: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.md },
+    quickTile: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 72,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3 },
+        android: { elevation: 1 },
+      }),
+    },
+    quickTilePressed: { opacity: 0.92 },
+    quickTileIconWrap: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 2,
+    },
+    quickTileLabel: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.text,
+      textAlign: 'center',
+    },
+    nameModalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'center',
+      padding: Spacing.md,
+    },
+    nameModalCard: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    nameModalTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
+    nameModalHint: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs, marginBottom: Spacing.md },
+    inputLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    input: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.text,
+      marginBottom: Spacing.md,
+    },
+    nameModalActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
+    nameModalSecondary: {
+      flex: 1,
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.background,
+    },
+    nameModalSecondaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.text },
+    nameModalPrimary: {
+      flex: 1,
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.primary,
+      minHeight: 48,
+    },
+    nameModalPrimaryDisabled: { opacity: 0.75 },
+    nameModalPrimaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.textInverse },
+    avatarPreviewBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'center',
+    },
+    avatarPreviewCard: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      zIndex: 1,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.15,
+          shadowRadius: 12,
+        },
+        android: { elevation: 8 },
+      }),
+    },
+    avatarPreviewTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text, textAlign: 'center' },
+    avatarPreviewSubtext: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginTop: Spacing.sm,
+      lineHeight: 20,
+    },
+    avatarPreviewCircle: {
+      alignSelf: 'center',
+      marginTop: Spacing.md,
+      marginBottom: Spacing.sm,
+      overflow: 'hidden',
+      borderWidth: 2,
+      borderColor: colors.borderLight,
+    },
+    avatarPreviewImage: { width: '100%', height: '100%' },
+    avatarPreviewActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'center',
+      gap: Spacing.sm,
+      marginTop: Spacing.sm,
+    },
+    avatarPreviewBtnSecondary: {
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.background,
+      minWidth: 140,
+      alignItems: 'center',
+    },
+    avatarPreviewBtnSecondaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.text },
+    avatarPreviewBtnPrimary: {
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.primary,
+      minWidth: 140,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarPreviewBtnPrimaryDisabled: { opacity: 0.75 },
+    avatarPreviewBtnPrimaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.textInverse },
+  });
+}

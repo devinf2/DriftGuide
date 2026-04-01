@@ -1,8 +1,22 @@
-import { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { askAI } from '@/src/services/ai';
 import type { AIContext } from '@/src/services/ai';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type RefreshControlProps,
+} from 'react-native';
+
+const DRIFTGUIDE_LOGO = require('@/assets/images/logo.png');
 
 export interface Message {
   id: string;
@@ -24,12 +38,164 @@ export interface GuideChatProps {
   welcomeSubtitle?: string;
   /** Optional top padding (e.g. safe area). */
   contentTopPadding?: number;
+  /** Rendered above chat bubbles (e.g. home briefing). When set, the default welcome card is hidden. */
+  listHeaderComponent?: ReactNode;
+  /** Pull-to-refresh on the message scroll area (e.g. home). */
+  refreshControl?: ReactElement<RefreshControlProps>;
+  /** When true, assistant replies render as a thread row with the DriftGuide logo (e.g. Fish home). */
+  useAssistantAvatar?: boolean;
 }
 
 const DEFAULT_TITLE = 'AI Fishing Guide';
 const DEFAULT_SUBTITLE = "Ask me anything about fishing — what fly to use, where to fish, technique tips, or why the fish aren't biting.";
 const MODAL_TITLE = 'Ask DriftGuide';
 const MODAL_SUBTITLE = "Planning a trip? Ask where to go, what to use, or anything else — I'll use your planned time and location when relevant.";
+
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    modalHeaderTitle: {
+      fontSize: FontSize.lg,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    modalCloseButton: {
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: Spacing.sm,
+    },
+    modalCloseText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.primary,
+    },
+    messages: {
+      flex: 1,
+    },
+    messagesContent: {
+      paddingTop: Spacing.lg,
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.xxl,
+      gap: Spacing.sm,
+    },
+    messagesContentFabClearance: {
+      paddingBottom: Spacing.xxl + 88,
+    },
+    welcomeCard: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.lg,
+      marginBottom: Spacing.sm,
+    },
+    welcomeTitle: {
+      fontSize: FontSize.xl,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    welcomeText: {
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      marginTop: Spacing.sm,
+      lineHeight: 22,
+    },
+    bubble: {
+      maxWidth: '92%',
+      borderRadius: BorderRadius.lg,
+      padding: Spacing.md,
+    },
+    userBubble: {
+      alignSelf: 'flex-end',
+      backgroundColor: colors.primary,
+    },
+    aiBubble: {
+      alignSelf: 'flex-start',
+      backgroundColor: colors.surface,
+    },
+    bubbleText: {
+      fontSize: FontSize.md,
+      lineHeight: 22,
+    },
+    userBubbleText: {
+      color: colors.textInverse,
+    },
+    aiBubbleText: {
+      color: colors.text,
+    },
+    assistantRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: Spacing.xs,
+      alignSelf: 'stretch',
+      maxWidth: '100%',
+    },
+    assistantAvatar: {
+      width: 28,
+      height: 28,
+      borderRadius: BorderRadius.sm,
+      marginTop: 2,
+      backgroundColor: colors.surface,
+    },
+    assistantBubble: {
+      flex: 1,
+      minWidth: 0,
+      maxWidth: '100%',
+    },
+    bubbleTextSm: {
+      fontSize: FontSize.sm,
+      lineHeight: 19,
+    },
+    inputRow: {
+      flexDirection: 'row',
+      padding: Spacing.md,
+      gap: Spacing.sm,
+      backgroundColor: colors.surface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    input: {
+      flex: 1,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.full,
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+    },
+    sendButton: {
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.full,
+      paddingHorizontal: Spacing.lg,
+      justifyContent: 'center',
+    },
+    sendButtonDisabled: {
+      opacity: 0.5,
+    },
+    sendButtonText: {
+      color: colors.textInverse,
+      fontWeight: '600',
+      fontSize: FontSize.md,
+    },
+    inputSm: {
+      fontSize: FontSize.sm,
+      paddingVertical: Spacing.xs + 2,
+    },
+    sendButtonTextSm: {
+      fontSize: FontSize.sm,
+    },
+  });
+}
 
 export default function GuideChat({
   getContext,
@@ -38,11 +204,16 @@ export default function GuideChat({
   welcomeTitle = variant === 'modal' ? MODAL_TITLE : DEFAULT_TITLE,
   welcomeSubtitle = variant === 'modal' ? MODAL_SUBTITLE : DEFAULT_SUBTITLE,
   contentTopPadding = 0,
+  listHeaderComponent,
+  refreshControl,
+  useAssistantAvatar = false,
 }: GuideChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -115,42 +286,65 @@ export default function GuideChat({
           variant === 'full' && styles.messagesContentFabClearance,
         ]}
         keyboardShouldPersistTaps="handled"
+        refreshControl={refreshControl}
       >
-        <View style={styles.welcomeCard}>
-          <Text style={styles.welcomeTitle}>{welcomeTitle}</Text>
-          <Text style={styles.welcomeText}>{welcomeSubtitle}</Text>
-        </View>
-
-        {messages.map((msg) => (
-          <View
-            key={msg.id}
-            style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
-          >
-            <Text
-              style={[
-                styles.bubbleText,
-                msg.role === 'user' ? styles.userBubbleText : styles.aiBubbleText,
-              ]}
-            >
-              {msg.text}
-            </Text>
-          </View>
-        ))}
-
-        {loading && (
-          <View style={[styles.bubble, styles.aiBubble]}>
-            <Text style={styles.aiBubbleText}>Thinking...</Text>
+        {listHeaderComponent}
+        {!listHeaderComponent && (
+          <View style={styles.welcomeCard}>
+            <Text style={styles.welcomeTitle}>{welcomeTitle}</Text>
+            <Text style={styles.welcomeText}>{welcomeSubtitle}</Text>
           </View>
         )}
+
+        {messages.map((msg) =>
+          msg.role === 'user' ? (
+            <View key={msg.id} style={[styles.bubble, styles.userBubble]}>
+              <Text
+                style={[
+                  styles.bubbleText,
+                  styles.userBubbleText,
+                  useAssistantAvatar && styles.bubbleTextSm,
+                ]}
+              >
+                {msg.text}
+              </Text>
+            </View>
+          ) : useAssistantAvatar ? (
+            <View key={msg.id} style={styles.assistantRow}>
+              <Image source={DRIFTGUIDE_LOGO} style={styles.assistantAvatar} accessibilityLabel="DriftGuide" />
+              <View style={[styles.bubble, styles.aiBubble, styles.assistantBubble]}>
+                <Text style={[styles.bubbleText, styles.aiBubbleText, styles.bubbleTextSm]}>{msg.text}</Text>
+              </View>
+            </View>
+          ) : (
+            <View key={msg.id} style={[styles.bubble, styles.aiBubble]}>
+              <Text style={[styles.bubbleText, styles.aiBubbleText]}>{msg.text}</Text>
+            </View>
+          ),
+        )}
+
+        {loading &&
+          (useAssistantAvatar ? (
+            <View style={styles.assistantRow}>
+              <Image source={DRIFTGUIDE_LOGO} style={styles.assistantAvatar} accessibilityLabel="DriftGuide" />
+              <View style={[styles.bubble, styles.aiBubble, styles.assistantBubble]}>
+                <Text style={[styles.aiBubbleText, styles.bubbleTextSm]}>Thinking...</Text>
+              </View>
+            </View>
+          ) : (
+            <View style={[styles.bubble, styles.aiBubble]}>
+              <Text style={styles.aiBubbleText}>Thinking...</Text>
+            </View>
+          ))}
       </ScrollView>
 
       <View style={styles.inputRow}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, useAssistantAvatar && styles.inputSm]}
           value={input}
           onChangeText={setInput}
           placeholder="Ask about fishing..."
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
         />
@@ -159,123 +353,9 @@ export default function GuideChat({
           onPress={sendMessage}
           disabled={!input.trim() || loading}
         >
-          <Text style={styles.sendButtonText}>Ask</Text>
+          <Text style={[styles.sendButtonText, useAssistantAvatar && styles.sendButtonTextSm]}>Ask</Text>
         </Pressable>
       </View>
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-    backgroundColor: Colors.surface,
-  },
-  modalHeaderTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  modalCloseButton: {
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-  },
-  modalCloseText: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: Colors.primary,
-  },
-  messages: {
-    flex: 1,
-  },
-  messagesContent: {
-    padding: Spacing.xl,
-    paddingBottom: Spacing.xxl,
-    gap: Spacing.sm,
-  },
-  /** Room so the last bubbles are not covered by the tab-level plan-trip FAB (bottom-right). */
-  messagesContentFabClearance: {
-    paddingBottom: Spacing.xxl + 88,
-  },
-  welcomeCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
-  welcomeTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  welcomeText: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    marginTop: Spacing.sm,
-    lineHeight: 22,
-  },
-  bubble: {
-    maxWidth: '85%',
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.md,
-  },
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: Colors.primary,
-  },
-  aiBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: Colors.surface,
-  },
-  bubbleText: {
-    fontSize: FontSize.md,
-    lineHeight: 22,
-  },
-  userBubbleText: {
-    color: Colors.textInverse,
-  },
-  aiBubbleText: {
-    color: Colors.text,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    padding: Spacing.md,
-    gap: Spacing.sm,
-    backgroundColor: Colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.md,
-    color: Colors.text,
-  },
-  sendButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.lg,
-    justifyContent: 'center',
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  sendButtonText: {
-    color: Colors.textInverse,
-    fontWeight: '600',
-    fontSize: FontSize.md,
-  },
-});

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useTripStore } from '@/src/stores/tripStore';
 import { CLARITY_LABELS } from '@/src/services/waterFlow';
 import { WaterClarity } from '@/src/types';
@@ -17,6 +18,8 @@ const CLARITY_OPTIONS: Exclude<WaterClarity, 'unknown'>[] = [
 ];
 
 export default function TripSurveyScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createSurveyStyles(colors), [colors]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -113,7 +116,7 @@ export default function TripSurveyScreen() {
               <MaterialIcons
                 name={rating !== null && star <= rating ? 'star' : 'star-border'}
                 size={40}
-                color={rating !== null && star <= rating ? Colors.warning : Colors.border}
+                color={rating !== null && star <= rating ? colors.warning : colors.border}
               />
             </Pressable>
           ))}
@@ -146,7 +149,7 @@ export default function TripSurveyScreen() {
         <TextInput
           style={styles.notesInput}
           placeholder="Anything else about conditions or the day?"
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           value={notes}
           onChangeText={setNotes}
           multiline
@@ -163,7 +166,7 @@ export default function TripSurveyScreen() {
           disabled={!canSubmit || busy}
         >
           {pendingAction === 'submit' ? (
-            <ActivityIndicator color={Colors.textInverse} />
+            <ActivityIndicator color={colors.textInverse} />
           ) : (
             <Text style={styles.primaryButtonText}>Done</Text>
           )}
@@ -177,7 +180,7 @@ export default function TripSurveyScreen() {
           accessibilityLabel="Skip survey"
         >
           {pendingAction === 'skip' ? (
-            <ActivityIndicator color={Colors.textSecondary} />
+            <ActivityIndicator color={colors.textSecondary} />
           ) : (
             <Text style={styles.skipButtonText}>Skip</Text>
           )}
@@ -187,122 +190,124 @@ export default function TripSurveyScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    padding: Spacing.xl,
-    paddingBottom: Spacing.xxl,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.xl,
-  },
-  message: {
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.lg,
-    textAlign: 'center',
-  },
-  title: {
-    fontSize: FontSize.xxl,
-    fontWeight: '700',
-    color: Colors.text,
-    marginBottom: Spacing.xs,
-  },
-  subtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.xl,
-  },
-  label: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.md,
-  },
-  starRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  starButton: {
-    padding: Spacing.xs,
-  },
-  clarityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.xs,
-    marginBottom: Spacing.md,
-  },
-  clarityPill: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  clarityPillSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primary + '15',
-  },
-  clarityPillText: {
-    fontSize: FontSize.sm,
-    color: Colors.text,
-  },
-  clarityPillTextSelected: {
-    fontWeight: '600',
-    color: Colors.primary,
-  },
-  notesInput: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    minHeight: 88,
-    textAlignVertical: 'top',
-  },
-  primaryButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.xl,
-  },
-  primaryButtonDisabled: {
-    opacity: 0.6,
-  },
-  submitButton: {
-    marginBottom: Spacing.sm,
-  },
-  skipButton: {
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-  },
-  skipButtonDisabled: {
-    opacity: 0.5,
-  },
-  skipButtonText: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  primaryButtonText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: '600',
-  },
-});
+function createSurveyStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    scroll: {
+      flex: 1,
+    },
+    content: {
+      padding: Spacing.xl,
+      paddingBottom: Spacing.xxl,
+    },
+    centered: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: Spacing.xl,
+    },
+    message: {
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      marginBottom: Spacing.lg,
+      textAlign: 'center',
+    },
+    title: {
+      fontSize: FontSize.xxl,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: Spacing.xs,
+    },
+    subtitle: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: Spacing.xl,
+    },
+    label: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.sm,
+      marginTop: Spacing.md,
+    },
+    starRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: Spacing.sm,
+      marginBottom: Spacing.md,
+    },
+    starButton: {
+      padding: Spacing.xs,
+    },
+    clarityRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: Spacing.xs,
+      marginBottom: Spacing.md,
+    },
+    clarityPill: {
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderRadius: BorderRadius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    clarityPillSelected: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '15',
+    },
+    clarityPillText: {
+      fontSize: FontSize.sm,
+      color: colors.text,
+    },
+    clarityPillTextSelected: {
+      fontWeight: '600',
+      color: colors.primary,
+    },
+    notesInput: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.text,
+      minHeight: 88,
+      textAlignVertical: 'top',
+    },
+    primaryButton: {
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      alignItems: 'center',
+      marginTop: Spacing.xl,
+    },
+    primaryButtonDisabled: {
+      opacity: 0.6,
+    },
+    submitButton: {
+      marginBottom: Spacing.sm,
+    },
+    skipButton: {
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+    },
+    skipButtonDisabled: {
+      opacity: 0.5,
+    },
+    skipButtonText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    primaryButtonText: {
+      color: colors.textInverse,
+      fontSize: FontSize.md,
+      fontWeight: '600',
+    },
+  });
+}

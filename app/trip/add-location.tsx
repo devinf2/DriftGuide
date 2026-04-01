@@ -20,7 +20,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -71,6 +72,9 @@ function formatProximityKm(km: number): string {
 }
 
 export default function AddLocationScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createAddLocationStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
@@ -252,7 +256,7 @@ export default function AddLocationScreen() {
     onPress: () => void,
   ) => (
     <Pressable key={key} style={styles.suggestionRow} onPress={onPress}>
-      <Ionicons name="location-outline" size={20} color={Colors.primary} />
+      <Ionicons name="location-outline" size={20} color={colors.primary} />
       <View style={styles.suggestionTextBlock}>
         <Text style={styles.suggestionTitle} numberOfLines={2}>
           {title}
@@ -268,10 +272,26 @@ export default function AddLocationScreen() {
 
   const catalogMarkers = useMemo(
     () =>
-      buildCatalogMapboxMarkers(locations, (loc) => {
-        handleSelectExisting(loc.id);
-      }),
-    [locations, handleSelectExisting],
+      buildCatalogMapboxMarkers(
+        locations,
+        (loc) => {
+          handleSelectExisting(loc.id);
+        },
+        {
+          primary: colors.primary,
+          surface: colors.surface,
+          surfaceElevated: colors.surfaceElevated,
+          colorScheme: resolvedScheme,
+        },
+      ),
+    [
+      locations,
+      handleSelectExisting,
+      colors.primary,
+      colors.surface,
+      colors.surfaceElevated,
+      resolvedScheme,
+    ],
   );
 
   const commitNewLocation = useCallback(
@@ -385,7 +405,7 @@ export default function AddLocationScreen() {
           <TextInput
             style={styles.searchInput}
             placeholder="Search map & DriftGuide…"
-            placeholderTextColor={Colors.textTertiary}
+            placeholderTextColor={colors.textTertiary}
             value={searchText}
             onChangeText={handleSearchChange}
             onFocus={() => setSearchInputFocused(true)}
@@ -413,7 +433,7 @@ export default function AddLocationScreen() {
                 ) : null}
                 {mapSuggestionsLoading ? (
                   <View style={styles.suggestionsLoadingRow}>
-                    <ActivityIndicator size="small" color={Colors.primary} />
+                    <ActivityIndicator size="small" color={colors.primary} />
                     <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
                   </View>
                 ) : null}
@@ -447,7 +467,7 @@ export default function AddLocationScreen() {
             onZoomLevelChange={setMapZoom}
           />
           <View style={styles.centerPinWrap} pointerEvents="none">
-            <Ionicons name="location-sharp" size={44} color={Colors.primary} style={styles.centerPinIcon} />
+            <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
           </View>
         </View>
 
@@ -464,7 +484,7 @@ export default function AddLocationScreen() {
                 <TextInput
                   style={styles.nameFieldInput}
                   placeholder="Saved name"
-                  placeholderTextColor={Colors.textTertiary}
+                  placeholderTextColor={colors.textTertiary}
                   value={name}
                   onChangeText={(t) => {
                     nameUserEditedRef.current = true;
@@ -496,11 +516,11 @@ export default function AddLocationScreen() {
                 <Switch
                   value={isPublic}
                   onValueChange={setIsPublic}
-                  trackColor={{ false: Colors.border, true: Colors.primary + '99' }}
+                  trackColor={{ false: colors.border, true: colors.primary + '99' }}
                   thumbColor={
-                    Platform.OS === 'android' ? (isPublic ? Colors.primary : Colors.textTertiary) : undefined
+                    Platform.OS === 'android' ? (isPublic ? colors.primary : colors.textTertiary) : undefined
                   }
-                  ios_backgroundColor={Colors.border}
+                  ios_backgroundColor={colors.border}
                   accessibilityLabel={isPublic ? 'Public location on' : 'Public location off'}
                 />
               </View>
@@ -512,7 +532,7 @@ export default function AddLocationScreen() {
               disabled={addLocationBlocked}
             >
               {parentPickerPhase === 'loading' ? (
-                <ActivityIndicator color={Colors.textInverse} />
+                <ActivityIndicator color={colors.textInverse} />
               ) : (
                 <Text style={styles.saveButtonText}>Add location</Text>
               )}
@@ -570,7 +590,7 @@ export default function AddLocationScreen() {
         <Text style={styles.parentPickerTitle}>Part of an existing place?</Text>
         {parentPickerPhase === 'loading' && !parentLinkSaving ? (
           <View style={styles.parentLinkSavingWrap}>
-            <ActivityIndicator color={Colors.primary} size="large" />
+            <ActivityIndicator color={colors.primary} size="large" />
             <Text style={styles.parentLinkModalSubtitle}>
               Checking your pin against main locations in DriftGuide…
             </Text>
@@ -599,7 +619,7 @@ export default function AddLocationScreen() {
                     </Text>
                     <Text style={styles.parentLinkOptionMeta}>{formatProximityKm(c.distance_km)}</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
+                  <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
                 </Pressable>
               ))
             ) : (
@@ -617,7 +637,7 @@ export default function AddLocationScreen() {
         ) : null}
         {parentLinkSaving ? (
           <View style={styles.parentPickerSavingOverlay}>
-            <ActivityIndicator color={Colors.primary} size="large" />
+            <ActivityIndicator color={colors.primary} size="large" />
             <Text style={styles.parentLinkModalSubtitle}>Saving your location…</Text>
           </View>
         ) : null}
@@ -627,40 +647,41 @@ export default function AddLocationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createAddLocationStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   body: {
     flex: 1,
   },
   inputSection: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
     zIndex: 2,
   },
   searchInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   suggestionsPanel: {
     marginTop: Spacing.sm,
     maxHeight: 220,
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   suggestionsScroll: {
@@ -669,7 +690,7 @@ const styles = StyleSheet.create({
   suggestionsSectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     paddingHorizontal: Spacing.md,
@@ -685,7 +706,7 @@ const styles = StyleSheet.create({
   },
   suggestionsLoadingText: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   suggestionRow: {
     flexDirection: 'row',
@@ -694,19 +715,19 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   suggestionTextBlock: {
     flex: 1,
   },
   suggestionTitle: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '500',
   },
   suggestionSubtitle: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 2,
   },
   mapContainer: {
@@ -725,9 +746,9 @@ const styles = StyleSheet.create({
     marginBottom: 26,
   },
   formPanel: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
     paddingBottom: Spacing.md,
@@ -752,24 +773,24 @@ const styles = StyleSheet.create({
   fieldLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: Spacing.xs,
   },
   fieldLabelCompact: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: 4,
   },
   nameFieldInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   dropdownCompact: {
     flexDirection: 'row',
@@ -778,25 +799,25 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: Spacing.sm,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     minHeight: 34,
   },
   dropdownTextCompact: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
     marginRight: 2,
   },
   dropdownPlaceholderCompact: {
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontWeight: '500',
   },
   dropdownChevronCompact: {
     fontSize: 11,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   publicLocationRow: {
     flexDirection: 'row',
@@ -808,7 +829,7 @@ const styles = StyleSheet.create({
   publicLocationLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     flex: 1,
     marginRight: Spacing.sm,
   },
@@ -822,14 +843,14 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
   },
   modalContent: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
   },
   modalTitle: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.sm,
   },
   modalOption: {
@@ -838,40 +859,40 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.sm,
   },
   modalOptionActive: {
-    backgroundColor: Colors.primary + '18',
+    backgroundColor: colors.primary + '18',
   },
   modalOptionText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   modalOptionTextActive: {
     fontWeight: '700',
-    color: Colors.primary,
+    color: colors.primary,
   },
   saveButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     alignItems: 'center',
     marginTop: Spacing.md,
   },
   saveButtonDisabled: {
-    backgroundColor: Colors.textTertiary,
+    backgroundColor: colors.textTertiary,
   },
   saveButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
   },
   parentLinkModalCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     maxHeight: '88%',
   },
   parentLinkModalSubtitle: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     lineHeight: 20,
     marginBottom: Spacing.md,
   },
@@ -881,9 +902,9 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.sm,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.sm,
   },
   parentLinkOptionText: {
@@ -893,11 +914,11 @@ const styles = StyleSheet.create({
   parentLinkOptionName: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   parentLinkOptionMeta: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 2,
   },
   parentLinkDecline: {
@@ -906,16 +927,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: BorderRadius.sm,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   parentLinkDeclineText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   parentLinkContinue: {
     marginTop: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     alignItems: 'center',
@@ -923,7 +944,7 @@ const styles = StyleSheet.create({
   parentLinkContinueText: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   parentLinkCancel: {
     marginTop: Spacing.md,
@@ -933,7 +954,7 @@ const styles = StyleSheet.create({
   parentLinkCancelText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   parentLinkSavingWrap: {
     alignItems: 'center',
@@ -942,13 +963,13 @@ const styles = StyleSheet.create({
   },
   parentPickerFullScreen: {
     flex: 1,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     paddingHorizontal: Spacing.lg,
   },
   parentPickerTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.md,
   },
   parentPickerScroll: {
@@ -956,15 +977,17 @@ const styles = StyleSheet.create({
   },
   parentPickerEmptyNote: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     lineHeight: 20,
     marginBottom: Spacing.md,
   },
   parentPickerSavingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     gap: Spacing.md,
   },
-});
+  });
+}
+

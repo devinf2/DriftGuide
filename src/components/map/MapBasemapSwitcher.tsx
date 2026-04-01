@@ -1,9 +1,17 @@
-import { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { MAPBOX_BASEMAP_OPTIONS } from '@/src/constants/mapbox';
-import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 
 const FAB_SIZE = 44;
@@ -15,12 +23,26 @@ export type MapBasemapSwitcherProps = {
   compact?: boolean;
   /** Optional offset when the map already reserves bottom space (rare). */
   containerStyle?: StyleProp<ViewStyle>;
+  /** Default: bottom-left. `bottomRight` aligns the stack to the right margin (e.g. Map tab). */
+  anchor?: 'bottomLeft' | 'bottomRight';
+  /**
+   * When set, used as the FAB anchor’s distance from the map bottom (px).
+   * Overrides `Spacing.lg + safe area bottom` for that anchor.
+   */
+  anchorBottom?: number;
 };
 
 /**
  * Layers FAB (bottom-left) opens a short menu: terrain / satellite / hybrid. Persisted via {@link useMapBasemapStore}.
  */
-export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitcherProps) {
+export function MapBasemapSwitcher({
+  compact,
+  containerStyle,
+  anchor = 'bottomLeft',
+  anchorBottom,
+}: MapBasemapSwitcherProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createBasemapSwitcherStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const setBasemapId = useMapBasemapStore((s) => s.setBasemapId);
@@ -29,6 +51,12 @@ export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitch
   const fabSize = compact ? FAB_SIZE_COMPACT : FAB_SIZE;
   const iconSize = compact ? 20 : 22;
 
+  const resolvedBottom = anchorBottom ?? Spacing.lg + insets.bottom;
+  const anchorSideStyle: ViewStyle =
+    anchor === 'bottomRight'
+      ? { right: Spacing.md, alignItems: 'flex-end' }
+      : { left: Spacing.md, alignItems: 'flex-start' };
+
   const pick = useCallback(
     (id: (typeof MAPBOX_BASEMAP_OPTIONS)[number]['id']) => {
       setBasemapId(id);
@@ -36,8 +64,6 @@ export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitch
     },
     [setBasemapId],
   );
-
-  const bottom = Spacing.lg + insets.bottom;
 
   return (
     <>
@@ -53,9 +79,9 @@ export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitch
         pointerEvents="box-none"
         style={[
           styles.anchor,
+          anchorSideStyle,
           {
-            bottom,
-            left: Spacing.md,
+            bottom: resolvedBottom,
             zIndex: menuOpen ? 6 : 5,
           },
           containerStyle,
@@ -79,7 +105,7 @@ export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitch
                     {opt.label}
                   </Text>
                   {selected ? (
-                    <MaterialIcons name="check" size={20} color={Colors.primary} />
+                    <MaterialIcons name="check" size={20} color={colors.primary} />
                   ) : (
                     <View style={styles.checkPlaceholder} />
                   )}
@@ -100,85 +126,87 @@ export function MapBasemapSwitcher({ compact, containerStyle }: MapBasemapSwitch
           accessibilityLabel="Map layers"
           accessibilityState={{ expanded: menuOpen }}
         >
-          <MaterialIcons name="layers" size={iconSize} color={Colors.text} />
+          <MaterialIcons name="layers" size={iconSize} color={colors.text} />
         </Pressable>
       </View>
     </>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 4,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-  },
-  anchor: {
-    position: 'absolute',
-    alignItems: 'flex-start',
-  },
-  menu: {
-    minWidth: 208,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    paddingVertical: Spacing.xs,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-  },
-  menuTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: Colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    paddingHorizontal: Spacing.md,
-    paddingBottom: Spacing.xs,
-    paddingTop: 2,
-  },
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    paddingHorizontal: Spacing.md,
-    gap: Spacing.md,
-  },
-  menuRowPressed: {
-    backgroundColor: Colors.borderLight,
-  },
-  menuRowLabel: {
-    flex: 1,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    fontWeight: '500',
-  },
-  menuRowLabelSelected: {
-    color: Colors.primary,
-    fontWeight: '700',
-  },
-  checkPlaceholder: {
-    width: 20,
-    height: 20,
-  },
-  fab: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
-  fabPressed: {
-    opacity: 0.9,
-    backgroundColor: Colors.surfaceElevated,
-  },
-});
+function createBasemapSwitcherStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    backdrop: {
+      ...StyleSheet.absoluteFillObject,
+      zIndex: 4,
+      backgroundColor: 'rgba(0,0,0,0.25)',
+    },
+    anchor: {
+      position: 'absolute',
+      alignItems: 'flex-start',
+    },
+    menu: {
+      minWidth: 208,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      paddingVertical: Spacing.xs,
+      elevation: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+    },
+    menuTitle: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.textTertiary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.xs,
+      paddingTop: 2,
+    },
+    menuRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      paddingHorizontal: Spacing.md,
+      gap: Spacing.md,
+    },
+    menuRowPressed: {
+      backgroundColor: colors.borderLight,
+    },
+    menuRowLabel: {
+      flex: 1,
+      fontSize: FontSize.md,
+      color: colors.text,
+      fontWeight: '500',
+    },
+    menuRowLabelSelected: {
+      color: colors.primary,
+      fontWeight: '700',
+    },
+    checkPlaceholder: {
+      width: 20,
+      height: 20,
+    },
+    fab: {
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      elevation: 3,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.15,
+      shadowRadius: 2,
+    },
+    fabPressed: {
+      opacity: 0.9,
+      backgroundColor: colors.surfaceElevated,
+    },
+  });
+}

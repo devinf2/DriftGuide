@@ -1,7 +1,8 @@
-import { useState, useEffect, ReactNode } from 'react';
+import { useState, useEffect, useMemo, ReactNode } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { getWeatherIconName, formatSkyLabel } from '@/src/services/conditions';
 import { getHourlyForecast } from '@/src/services/weather';
 import {
@@ -48,6 +49,8 @@ export function ConditionsTab({
   emptyMessage,
   children,
 }: ConditionsTabProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createConditionsTabStyles(colors), [colors]);
   const hasData = !!(weatherData || waterFlowData || children);
   const baselineCfs = (location?.metadata as Record<string, unknown> | null)?.baseline_flow_cfs as number | undefined;
   const flowStatus = waterFlowData ? getFlowStatus(waterFlowData.flow_cfs, baselineCfs) : null;
@@ -84,14 +87,14 @@ export function ConditionsTab({
 
       {conditionsLoading && !weatherData && !waterFlowData && (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Fetching conditions...</Text>
         </View>
       )}
 
       {!hasData && emptyMessage != null && (
         <View style={styles.conditionCardEmpty}>
-          <MaterialIcons name="cloud-off" size={32} color={Colors.textTertiary} />
+          <MaterialIcons name="cloud-off" size={32} color={colors.textTertiary} />
           <Text style={styles.conditionEmptyText}>{emptyMessage}</Text>
           <Text style={styles.conditionEmptyHint}>Conditions are captured when you start a trip with location data.</Text>
         </View>
@@ -100,7 +103,7 @@ export function ConditionsTab({
       {hasData && (weatherData || waterFlowData) && (
         <View style={styles.summaryCard}>
           <View style={styles.summaryCardHeader}>
-            <MaterialIcons name="auto-awesome" size={18} color={Colors.accent} />
+            <MaterialIcons name="auto-awesome" size={18} color={colors.accent} />
             <Text style={styles.summaryCardTitle}>What This Means</Text>
           </View>
           <Text style={styles.summaryCardText}>{summary}</Text>
@@ -113,14 +116,14 @@ export function ConditionsTab({
       {weatherData ? (
         <View style={styles.conditionCard}>
           <View style={styles.conditionCardHeader}>
-            <MaterialIcons name="cloud" size={20} color={Colors.secondary} />
+            <MaterialIcons name="cloud" size={20} color={colors.secondary} />
             <Text style={styles.conditionCardTitle}>Weather</Text>
           </View>
           <View style={styles.weatherHeroRow}>
             <Ionicons
               name={getWeatherIconName(weatherData.condition) as keyof typeof Ionicons.glyphMap}
               size={36}
-              color={Colors.secondary}
+              color={colors.secondary}
               style={styles.weatherHeroIcon}
             />
             <View style={styles.weatherHeroMain}>
@@ -162,7 +165,7 @@ export function ConditionsTab({
         </View>
       ) : !conditionsLoading && emptyMessage == null ? (
         <View style={styles.conditionCardEmpty}>
-          <MaterialIcons name="cloud-off" size={32} color={Colors.textTertiary} />
+          <MaterialIcons name="cloud-off" size={32} color={colors.textTertiary} />
           <Text style={styles.conditionEmptyText}>Weather data unavailable</Text>
           <Text style={styles.conditionEmptyHint}>Location may not have coordinates set</Text>
         </View>
@@ -171,12 +174,12 @@ export function ConditionsTab({
       {showHourly && location?.latitude != null && location?.longitude != null && (
         <View style={styles.conditionCard}>
           <View style={styles.conditionCardHeader}>
-            <MaterialIcons name="schedule" size={20} color={Colors.secondary} />
+            <MaterialIcons name="schedule" size={20} color={colors.secondary} />
             <Text style={styles.conditionCardTitle}>Today&apos;s forecast</Text>
           </View>
           {hourlyLoading ? (
             <View style={styles.hourlyLoadingRow}>
-              <ActivityIndicator size="small" color={Colors.primary} />
+              <ActivityIndicator size="small" color={colors.primary} />
               <Text style={styles.hourlyLoadingText}>Loading hourly...</Text>
             </View>
           ) : hourlyForecast.length > 0 ? (
@@ -187,7 +190,7 @@ export function ConditionsTab({
                   <Ionicons
                     name={getWeatherIconName(slot.condition) as keyof typeof Ionicons.glyphMap}
                     size={28}
-                    color={Colors.secondary}
+                    color={colors.secondary}
                     style={styles.hourlySlotIcon}
                   />
                   <Text style={styles.hourlySlotTemp}>{slot.temp_f}°</Text>
@@ -218,7 +221,7 @@ export function ConditionsTab({
       {waterFlowData ? (
         <View style={styles.conditionCard}>
           <View style={styles.conditionCardHeader}>
-            <MaterialIcons name="waves" size={20} color={Colors.water} />
+            <MaterialIcons name="waves" size={20} color={colors.water} />
             <Text style={styles.conditionCardTitle}>Water Conditions</Text>
           </View>
           <View style={styles.conditionMainStat}>
@@ -285,7 +288,7 @@ export function ConditionsTab({
         </View>
       ) : !conditionsLoading && emptyMessage == null ? (
         <View style={styles.conditionCardEmpty}>
-          <MaterialIcons name="waves" size={32} color={Colors.textTertiary} />
+          <MaterialIcons name="waves" size={32} color={colors.textTertiary} />
           <Text style={styles.conditionEmptyText}>Water flow data unavailable</Text>
           <Text style={styles.conditionEmptyHint}>No USGS station linked to this location</Text>
         </View>
@@ -296,7 +299,8 @@ export function ConditionsTab({
   );
 }
 
-const styles = StyleSheet.create({
+function createConditionsTabStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   conditionsContainer: {
     flex: 1,
   },
@@ -312,25 +316,25 @@ const styles = StyleSheet.create({
   conditionsSectionTitle: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   conditionsNote: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: Spacing.sm,
   },
   refreshButton: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs + 2,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   refreshButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   loadingContainer: {
     alignItems: 'center',
@@ -339,15 +343,15 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   summaryCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-    shadowColor: Colors.shadow,
+    borderLeftColor: colors.accent,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -362,20 +366,20 @@ const styles = StyleSheet.create({
   summaryCardTitle: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   summaryCardText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     lineHeight: 24,
   },
   conditionCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
-    shadowColor: Colors.shadow,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -390,7 +394,7 @@ const styles = StyleSheet.create({
   conditionCardTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   conditionMainStat: {
     alignItems: 'center',
@@ -399,11 +403,11 @@ const styles = StyleSheet.create({
   conditionMainValue: {
     fontSize: FontSize.xxxl,
     fontWeight: '700',
-    color: Colors.primary,
+    color: colors.primary,
   },
   conditionMainLabel: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
     textTransform: 'capitalize',
   },
@@ -421,13 +425,13 @@ const styles = StyleSheet.create({
   },
   weatherHeroCondition: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'capitalize',
   },
   weatherHeroTemp: {
     fontSize: FontSize.xxl,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginTop: 2,
   },
   weatherHeroWind: {
@@ -435,12 +439,12 @@ const styles = StyleSheet.create({
   },
   weatherHeroWindLabel: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     fontWeight: '600',
   },
   weatherHeroWindValue: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
     marginTop: 2,
   },
   conditionGageClarityRow: {
@@ -457,21 +461,21 @@ const styles = StyleSheet.create({
   },
   conditionGridItem: {
     width: '47%',
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
   },
   conditionGridLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   conditionGridValue: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     marginTop: 4,
   },
   moonPhaseRow: {
@@ -489,31 +493,31 @@ const styles = StyleSheet.create({
   clarityBadgeLabel: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   clarityBadgeDesc: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 4,
     lineHeight: 20,
   },
   conditionCardEmpty: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.xl,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderStyle: 'dashed',
   },
   conditionEmptyText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   conditionEmptyHint: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 4,
   },
   hourlyLoadingRow: {
@@ -524,7 +528,7 @@ const styles = StyleSheet.create({
   },
   hourlyLoadingText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   hourlyScroll: {
     marginHorizontal: -Spacing.md,
@@ -534,14 +538,14 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.sm,
     marginRight: Spacing.xs,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.sm,
     alignItems: 'center',
   },
   hourlySlotTime: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: 2,
   },
   hourlySlotIcon: {
@@ -550,22 +554,23 @@ const styles = StyleSheet.create({
   hourlySlotTemp: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   hourlySlotCondition: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
     marginTop: 2,
   },
   hourlySlotWind: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   hourlySlotPop: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 2,
   },
-});
+  });
+}

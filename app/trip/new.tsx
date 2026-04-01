@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Platform, Modal, KeyboardAvoidingView, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -34,14 +35,27 @@ const SUGGESTED_SPOTS_MAX_DRIVE_KM = 193;
 const PLANNED_WEATHER_UNAVAILABLE_NOTE =
   "Weather data isn't available for your selected date (forecast only reaches about 5 days out). River flow below is still current.";
 
-const CONDITION_COLORS: Record<ConditionRating, string> = {
-  good: Colors.success,
-  fair: Colors.warning,
-  poor: Colors.error,
-};
+function ratingColor(colors: ThemeColors, rating: ConditionRating) {
+  switch (rating) {
+    case 'good':
+      return colors.success;
+    case 'fair':
+      return colors.warning;
+    case 'poor':
+      return colors.error;
+  }
+}
 
-function ConditionDot({ rating }: { rating: ConditionRating }) {
-  return <View style={[styles.conditionDot, { backgroundColor: CONDITION_COLORS[rating] }]} />;
+function ConditionDot({
+  rating,
+  colors,
+  styles,
+}: {
+  rating: ConditionRating;
+  colors: ThemeColors;
+  styles: any;
+}) {
+  return <View style={[styles.conditionDot, { backgroundColor: ratingColor(colors, rating) }]} />;
 }
 
 function ConditionIcon({
@@ -50,18 +64,26 @@ function ConditionIcon({
   rating,
   compact,
   muted,
+  colors,
+  styles,
 }: {
   label: string;
   value: string;
   rating: ConditionRating;
   compact?: boolean;
   muted?: boolean;
+  colors: ThemeColors;
+  styles: any;
 }) {
-  const valueColor = muted ? Colors.textTertiary : CONDITION_COLORS[rating];
+  const valueColor = muted ? colors.textTertiary : ratingColor(colors, rating);
   return (
     <View style={styles.conditionItem}>
       <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
-        {!muted ? <ConditionDot rating={rating} /> : <View style={[styles.conditionDot, { backgroundColor: Colors.textTertiary }]} />}
+        {!muted ? (
+          <ConditionDot rating={rating} colors={colors} styles={styles} />
+        ) : (
+          <View style={[styles.conditionDot, { backgroundColor: colors.textTertiary }]} />
+        )}
         <Text style={[styles.conditionValue, { color: valueColor }]} numberOfLines={1}>
           {value}
         </Text>
@@ -71,10 +93,20 @@ function ConditionIcon({
   );
 }
 
-function SkyIcon({ conditions, compact }: { conditions: LocationConditions; compact?: boolean }) {
+function SkyIcon({
+  conditions,
+  compact,
+  colors,
+  styles,
+}: {
+  conditions: LocationConditions;
+  compact?: boolean;
+  colors: ThemeColors;
+  styles: any;
+}) {
   const unavailable = conditions.plannedTimeWeatherUnavailable;
   const iconName = getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap;
-  const color = unavailable ? Colors.textTertiary : CONDITION_COLORS[conditions.sky.rating];
+  const color = unavailable ? colors.textTertiary : ratingColor(colors, conditions.sky.rating);
   return (
     <View style={styles.conditionItem}>
       <View style={[styles.conditionValueRow, compact && styles.conditionValueRowCompact]}>
@@ -90,7 +122,15 @@ function SkyIcon({ conditions, compact }: { conditions: LocationConditions; comp
   );
 }
 
-function ConditionsRow({ conditions }: { conditions: LocationConditions }) {
+function ConditionsRow({
+  conditions,
+  colors,
+  styles,
+}: {
+  conditions: LocationConditions;
+  colors: ThemeColors;
+  styles: any;
+}) {
   const u = conditions.plannedTimeWeatherUnavailable;
   return (
     <View style={styles.conditionsRow}>
@@ -99,17 +139,23 @@ function ConditionsRow({ conditions }: { conditions: LocationConditions }) {
         value={u ? '\u2014' : `${conditions.wind.speed_mph}mph`}
         rating={conditions.wind.rating}
         muted={u}
+        colors={colors}
+        styles={styles}
       />
       <ConditionIcon
         label="Temp"
         value={u ? '\u2014' : `${conditions.temperature.temp_f}\u00B0`}
         rating={conditions.temperature.rating}
         muted={u}
+        colors={colors}
+        styles={styles}
       />
       <ConditionIcon
         label="Water"
         value={conditions.water.flow_cfs !== null ? `${conditions.water.flow_cfs}` : '\u2014'}
         rating={conditions.water.rating}
+        colors={colors}
+        styles={styles}
       />
     </View>
   );
@@ -142,6 +188,9 @@ function getNextFifteenMinutes(): Date {
 }
 
 export default function NewTripScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createNewTripStyles(colors), [colors]);
+  const pickerThemeVariant = resolvedScheme === 'dark' ? 'dark' : 'light';
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ locationId?: string }>();
@@ -446,7 +495,7 @@ export default function NewTripScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      <StatusBar style="light" />
+      <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />
       <View style={[styles.planTripHeaderBar, { paddingTop: insets.top }]}>
         <View style={[styles.planTripHeaderSide, styles.planTripHeaderSideStart]}>
           <Pressable
@@ -536,7 +585,7 @@ export default function NewTripScreen() {
               display={Platform.OS === 'ios' ? 'inline' : 'default'}
               onChange={handleDateChange}
               minimumDate={new Date()}
-              themeVariant="light"
+              themeVariant={pickerThemeVariant}
             />
           </View>
         </Pressable>
@@ -557,7 +606,7 @@ export default function NewTripScreen() {
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
               onChange={handleTimeChange}
               minuteInterval={15}
-              themeVariant="light"
+              themeVariant={pickerThemeVariant}
             />
           </View>
         </Pressable>
@@ -568,7 +617,7 @@ export default function NewTripScreen() {
           if (c.plannedTimeWeatherUnavailable) {
             return (
               <View style={styles.plannedWeatherNote}>
-                <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
+                <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
                 <Text style={styles.plannedWeatherNoteText}>{PLANNED_WEATHER_UNAVAILABLE_NOTE}</Text>
               </View>
             );
@@ -585,7 +634,7 @@ export default function NewTripScreen() {
             onPress={() => router.push('/trip/pick-location-map')}
             hitSlop={8}
           >
-            <Ionicons name="map-outline" size={16} color={Colors.primary} />
+            <Ionicons name="map-outline" size={16} color={colors.primary} />
             <Text style={styles.useMapButtonText}>Use map</Text>
           </Pressable>
         ) : null}
@@ -617,7 +666,7 @@ export default function NewTripScreen() {
               return conditions ? (
                 <View style={styles.selectedConditionsRow}>
                   <View style={styles.selectedConditionItem}>
-                    <SkyIcon conditions={conditions} compact />
+                    <SkyIcon conditions={conditions} compact colors={colors} styles={styles} />
                   </View>
                   <View style={styles.selectedConditionItem}>
                     <ConditionIcon
@@ -626,6 +675,8 @@ export default function NewTripScreen() {
                       rating={conditions.wind.rating}
                       compact
                       muted={u}
+                      colors={colors}
+                      styles={styles}
                     />
                   </View>
                   <View style={styles.selectedConditionItem}>
@@ -635,6 +686,8 @@ export default function NewTripScreen() {
                       rating={conditions.temperature.rating}
                       compact
                       muted={u}
+                      colors={colors}
+                      styles={styles}
                     />
                   </View>
                   <View style={styles.selectedConditionItem}>
@@ -643,6 +696,8 @@ export default function NewTripScreen() {
                       value={formatWaterLabel(conditions)}
                       rating={conditions.water.rating}
                       compact
+                      colors={colors}
+                      styles={styles}
                     />
                   </View>
                 </View>
@@ -655,7 +710,7 @@ export default function NewTripScreen() {
           <TextInput
             style={styles.searchInput}
             placeholder="Search locations…"
-            placeholderTextColor={Colors.textTertiary}
+            placeholderTextColor={colors.textTertiary}
             value={searchQuery}
             onChangeText={(text) => {
               setSearchQuery(text);
@@ -671,7 +726,7 @@ export default function NewTripScreen() {
             <View style={styles.locationList}>
               {conditionsLoading && (
                 <View style={styles.conditionsLoadingRow}>
-                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <ActivityIndicator size="small" color={colors.primary} />
                   <Text style={styles.conditionsLoadingText}>Loading conditions...</Text>
                 </View>
               )}
@@ -708,13 +763,13 @@ export default function NewTripScreen() {
                             <Text style={styles.sectionSubtitle}>Section of {parentName}</Text>
                           ) : null}
                         </View>
-                        {conditions ? <ConditionsRow conditions={conditions} /> : null}
+                        {conditions ? <ConditionsRow conditions={conditions} colors={colors} styles={styles} /> : null}
                       </View>
                       {isConnected ? (
                         <Ionicons
                           name="chevron-forward"
                           size={22}
-                          color={Colors.textTertiary}
+                          color={colors.textTertiary}
                           style={styles.locationListItemChevron}
                         />
                       ) : null}
@@ -726,7 +781,7 @@ export default function NewTripScreen() {
                     <Text style={styles.mapSuggestionsHeader}>Map suggestions</Text>
                     {mapSuggestionsLoading ? (
                       <View style={styles.mapSuggestionsLoadingRow}>
-                        <ActivityIndicator size="small" color={Colors.primary} />
+                        <ActivityIndicator size="small" color={colors.primary} />
                         <Text style={styles.conditionsLoadingText}>Searching near you…</Text>
                       </View>
                     ) : (
@@ -746,7 +801,7 @@ export default function NewTripScreen() {
                             });
                           }}
                         >
-                          <Ionicons name="map-outline" size={20} color={Colors.primary} />
+                          <Ionicons name="map-outline" size={20} color={colors.primary} />
                           <Text style={styles.mapSuggestionText} numberOfLines={3}>
                             {f.place_name}
                           </Text>
@@ -790,13 +845,13 @@ export default function NewTripScreen() {
           style={styles.askGuideButton}
           onPress={() => setShowGuideModal(true)}
         >
-          <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.primary} />
+          <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.primary} />
           <Text style={styles.askGuideButtonText}>Ask DriftGuide</Text>
         </Pressable>
       </View>
       {suggestionsLoading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color={Colors.primary} />
+          <ActivityIndicator color={colors.primary} />
           <Text style={styles.loadingLabel}>
             {conditionsLoading ? 'Checking weather & conditions...' : 'Getting suggestions...'}
           </Text>
@@ -820,16 +875,16 @@ export default function NewTripScreen() {
                         <Ionicons
                           name={getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap}
                           size={13}
-                          color={CONDITION_COLORS[conditions.sky.rating]}
+                          color={ratingColor(colors, conditions.sky.rating)}
                         />
-                        <Text style={[styles.suggestionSkyText, { color: CONDITION_COLORS[conditions.sky.rating] }]}>
+                        <Text style={[styles.suggestionSkyText, { color: ratingColor(colors, conditions.sky.rating) }]}>
                           {conditions.sky.label}
                         </Text>
                       </View>
                     )}
                   </View>
                   <Text style={styles.suggestionReason}>{suggestion.reason}</Text>
-                  {conditions && <ConditionsRow conditions={conditions} />}
+                  {conditions && <ConditionsRow conditions={conditions} colors={colors} styles={styles} />}
                 </View>
               </Pressable>
             );
@@ -865,7 +920,7 @@ export default function NewTripScreen() {
           disabled={!selectedLocation || !sessionType || saving}
         >
           {saving ? (
-            <ActivityIndicator color={Colors.textInverse} />
+            <ActivityIndicator color={colors.textInverse} />
           ) : (
             <Text style={styles.planButtonText}>Create Trip</Text>
           )}
@@ -875,10 +930,11 @@ export default function NewTripScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createNewTripStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   scrollView: {
     flex: 1,
@@ -900,28 +956,28 @@ const styles = StyleSheet.create({
   plannedWeatherNoteText: {
     flex: 1,
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     lineHeight: 20,
   },
   offlineBanner: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
-    backgroundColor: Colors.warning + '20',
+    backgroundColor: colors.warning + '20',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
   },
   offlineBannerText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   pinnedButtonContainer: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.lg,
     paddingTop: Spacing.md,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
     gap: Spacing.sm,
   },
   suggestedSpotsHeaderRow: {
@@ -935,7 +991,7 @@ const styles = StyleSheet.create({
   sectionHeader: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     flex: 1,
@@ -946,15 +1002,15 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: Spacing.xs,
     paddingHorizontal: Spacing.sm,
-    backgroundColor: Colors.primaryLight + '40',
+    backgroundColor: colors.primaryLight + '40',
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.primary + '60',
+    borderColor: colors.primary + '60',
   },
   askGuideButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   planTripHeaderBar: {
     flexDirection: 'row',
@@ -997,7 +1053,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     flexShrink: 1,
   },
   useMapButton: {
@@ -1013,23 +1069,23 @@ const styles = StyleSheet.create({
   useMapButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   sectionSubtitle: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 2,
   },
   mapSuggestionsBlock: {
     borderTopWidth: 1,
-    borderTopColor: Colors.borderLight,
+    borderTopColor: colors.borderLight,
     paddingTop: Spacing.sm,
     marginTop: Spacing.xs,
   },
   mapSuggestionsHeader: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     paddingHorizontal: Spacing.md,
@@ -1049,25 +1105,25 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   mapSuggestionText: {
     flex: 1,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '500',
   },
   locationListItem: {
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
     paddingLeft: Spacing.md,
     paddingVertical: Spacing.sm,
     paddingRight: Spacing.sm,
   },
   locationListItemPressed: {
-    backgroundColor: Colors.borderLight + '40',
+    backgroundColor: colors.borderLight + '40',
   },
   locationListItemBody: {
     flex: 1,
@@ -1087,22 +1143,22 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     alignItems: 'center',
   },
   sessionPillSelected: {
-    backgroundColor: Colors.primary + '20',
-    borderColor: Colors.primary,
+    backgroundColor: colors.primary + '20',
+    borderColor: colors.primary,
   },
   sessionPillText: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
   },
   sessionPillTextSelected: {
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
 
   loadingContainer: {
@@ -1114,21 +1170,21 @@ const styles = StyleSheet.create({
   },
   loadingLabel: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
 
   suggestionsContainer: {
     marginBottom: Spacing.md,
   },
   suggestionCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     marginBottom: Spacing.sm,
     flexDirection: 'row',
     alignItems: 'flex-start',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   suggestionContent: {
     flex: 1,
@@ -1142,7 +1198,7 @@ const styles = StyleSheet.create({
   suggestionName: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     flexShrink: 1,
   },
   suggestionSkyBadge: {
@@ -1156,26 +1212,26 @@ const styles = StyleSheet.create({
   },
   suggestionReason: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
 
   searchInput: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   locationList: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     marginTop: Spacing.sm,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     maxHeight: 280,
   },
   locationListScroll: {
@@ -1188,16 +1244,16 @@ const styles = StyleSheet.create({
     padding: Spacing.sm,
     gap: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   conditionsLoadingText: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   locationItem: {
     padding: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   locationMain: {
     flexDirection: 'column',
@@ -1206,12 +1262,12 @@ const styles = StyleSheet.create({
   },
   locationName: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '500',
   },
   locationType: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textTransform: 'capitalize',
   },
   conditionsRow: {
@@ -1244,7 +1300,7 @@ const styles = StyleSheet.create({
   },
   conditionLabel: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   noResultsContainer: {
     padding: Spacing.lg,
@@ -1253,27 +1309,27 @@ const styles = StyleSheet.create({
   },
   noResults: {
     textAlign: 'center',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontSize: FontSize.md,
   },
   addLocationButton: {
-    backgroundColor: Colors.primaryLight,
+    backgroundColor: colors.primaryLight,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm + 2,
   },
   addLocationButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '600',
   },
   selectedLocation: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     borderWidth: 1,
-    borderColor: Colors.primary,
+    borderColor: colors.primary,
   },
   selectedLocationContent: {
     flex: 1,
@@ -1287,7 +1343,7 @@ const styles = StyleSheet.create({
   selectedLocationName: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   selectedConditionsRow: {
@@ -1303,7 +1359,7 @@ const styles = StyleSheet.create({
   },
   changeText: {
     fontSize: FontSize.sm,
-    color: Colors.primary,
+    color: colors.primary,
     fontWeight: '600',
   },
   modalOverlay: {
@@ -1312,7 +1368,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.xl,
     borderTopRightRadius: BorderRadius.xl,
     paddingBottom: Spacing.xxl,
@@ -1327,12 +1383,12 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   modalDone: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   dateTimeRow: {
     flexDirection: 'row',
@@ -1344,15 +1400,15 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dateTimeButton: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   dateTimeLabel: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -1360,28 +1416,28 @@ const styles = StyleSheet.create({
   },
   dateTimeValue: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '600',
   },
   planButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     alignItems: 'center',
-    shadowColor: Colors.primaryDark,
+    shadowColor: colors.primaryDark,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 6,
   },
   planButtonDisabled: {
-    backgroundColor: Colors.textTertiary,
+    backgroundColor: colors.textTertiary,
     shadowOpacity: 0,
     elevation: 0,
   },
   planButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
   },
@@ -1391,13 +1447,14 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   planButtonSecondaryText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
-});
+  });
+}

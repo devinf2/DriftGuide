@@ -1,9 +1,10 @@
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { fetchProfileStats, ProfileStats } from '@/src/services/profileStats';
 import { useAuthStore } from '@/src/stores/authStore';
 import { endOfMonth, startOfMonth, subMonths } from 'date-fns';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -30,7 +31,7 @@ const CHART_VISIBLE_MONTHS = 6;
 const CHART_HEIGHT = 150;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({ label, value, styles }: { label: string; value: number; styles: any }) {
   return (
     <View style={styles.statCard}>
       <Text style={styles.statValue}>{value}</Text>
@@ -40,6 +41,8 @@ function StatCard({ label, value }: { label: string; value: number }) {
 }
 
 export default function ProfileStatsScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStatsStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const [rangeIdx, setRangeIdx] = useState(1);
@@ -123,16 +126,16 @@ export default function ProfileStatsScreen() {
         </Modal>
 
         {loading ? (
-          <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: Spacing.xxl }} />
+          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: Spacing.xxl }} />
         ) : stats ? (
           <View style={styles.statsGrid}>
             <View style={styles.statsRow}>
-              <StatCard label="Trips" value={stats.tripCount} />
-              <StatCard label="Fish Caught" value={stats.totalFish} />
+              <StatCard label="Trips" value={stats.tripCount} styles={styles} />
+              <StatCard label="Fish Caught" value={stats.totalFish} styles={styles} />
             </View>
             <View style={styles.statsRow}>
-              <StatCard label="Catches" value={stats.totalCatches} />
-              <StatCard label="Species" value={stats.speciesCount} />
+              <StatCard label="Catches" value={stats.totalCatches} styles={styles} />
+              <StatCard label="Species" value={stats.speciesCount} styles={styles} />
             </View>
           </View>
         ) : null}
@@ -223,119 +226,121 @@ export default function ProfileStatsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.xl },
-  section: { marginTop: Spacing.lg },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  sectionTitleStandalone: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: Spacing.sm,
-  },
-  dropdown: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  dropdownText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text },
-  dropdownChevron: { fontSize: 12, color: Colors.textSecondary },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: Spacing.lg,
-  },
-  modalContent: { backgroundColor: Colors.surface, borderRadius: BorderRadius.md, padding: Spacing.md },
-  modalTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-  },
-  modalOption: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm, borderRadius: BorderRadius.sm },
-  modalOptionActive: { backgroundColor: `${Colors.primary}18` },
-  modalOptionText: { fontSize: FontSize.md, color: Colors.text },
-  modalOptionTextActive: { fontWeight: '600', color: Colors.primary },
-  statsGrid: { gap: Spacing.sm },
-  statsRow: { flexDirection: 'row', gap: Spacing.sm },
-  statCard: {
-    flex: 1,
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.sm,
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.md,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.text },
-  statLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.xs },
-  chartCard: { minHeight: CHART_HEIGHT + 60 },
-  chartScroll: {},
-  barCol: {
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    height: CHART_HEIGHT + 32,
-  },
-  barVal: { fontSize: 10, fontWeight: '600', color: Colors.primary, marginBottom: 2 },
-  bar: {
-    width: '55%',
-    backgroundColor: Colors.primary,
-    borderTopLeftRadius: 4,
-    borderTopRightRadius: 4,
-  },
-  barEmpty: { backgroundColor: Colors.borderLight },
-  barLbl: { fontSize: 9, color: Colors.textTertiary, marginTop: 4 },
-  emptyText: {
-    fontSize: FontSize.sm,
-    color: Colors.textTertiary,
-    textAlign: 'center',
-    paddingVertical: Spacing.xl,
-  },
-  fliesCol: { gap: Spacing.sm },
-  flyBlock: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.sm,
-    padding: Spacing.md,
-  },
-  flyBlockLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: Spacing.xs,
-  },
-  flyName: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
-  flyMeta: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-});
+function createStatsStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    content: { padding: Spacing.xl },
+    section: { marginTop: Spacing.lg },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.lg,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+        android: { elevation: 2 },
+      }),
+    },
+    cardHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: Spacing.sm,
+    },
+    sectionTitle: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    sectionTitleStandalone: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+      marginBottom: Spacing.sm,
+    },
+    dropdown: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    dropdownText: { fontSize: FontSize.sm, fontWeight: '600', color: colors.text },
+    dropdownChevron: { fontSize: 12, color: colors.textSecondary },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      padding: Spacing.lg,
+    },
+    modalContent: { backgroundColor: colors.surface, borderRadius: BorderRadius.md, padding: Spacing.md },
+    modalTitle: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.sm,
+      paddingHorizontal: Spacing.xs,
+    },
+    modalOption: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm, borderRadius: BorderRadius.sm },
+    modalOptionActive: { backgroundColor: `${colors.primary}18` },
+    modalOptionText: { fontSize: FontSize.md, color: colors.text },
+    modalOptionTextActive: { fontWeight: '600', color: colors.primary },
+    statsGrid: { gap: Spacing.sm },
+    statsRow: { flexDirection: 'row', gap: Spacing.sm },
+    statCard: {
+      flex: 1,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.md,
+      alignItems: 'center',
+    },
+    statValue: { fontSize: FontSize.xxl, fontWeight: '700', color: colors.text },
+    statLabel: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs },
+    chartCard: { minHeight: CHART_HEIGHT + 60 },
+    chartScroll: {},
+    barCol: {
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      height: CHART_HEIGHT + 32,
+    },
+    barVal: { fontSize: 10, fontWeight: '600', color: colors.primary, marginBottom: 2 },
+    bar: {
+      width: '55%',
+      backgroundColor: colors.primary,
+      borderTopLeftRadius: 4,
+      borderTopRightRadius: 4,
+    },
+    barEmpty: { backgroundColor: colors.borderLight },
+    barLbl: { fontSize: 9, color: colors.textTertiary, marginTop: 4 },
+    emptyText: {
+      fontSize: FontSize.sm,
+      color: colors.textTertiary,
+      textAlign: 'center',
+      paddingVertical: Spacing.xl,
+    },
+    fliesCol: { gap: Spacing.sm },
+    flyBlock: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      padding: Spacing.md,
+    },
+    flyBlockLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: Spacing.xs,
+    },
+    flyName: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
+    flyMeta: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },
+  });
+}

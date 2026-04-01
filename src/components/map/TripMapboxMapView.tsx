@@ -3,7 +3,8 @@ import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
-import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import type { BoundingBox } from '@/src/types/boundingBox';
 import { boundingBoxFromLngLatPair } from '@/src/types/boundingBox';
@@ -22,7 +23,15 @@ import {
     type ReactElement,
     type ReactNode,
 } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 export type MapboxMapMarker = {
   id: string;
@@ -86,9 +95,13 @@ function runMarkerPressOnce(coordinate: [number, number], handler: () => void) {
 function TripMapboxMarkerViewItem({
   m,
   MarkerView,
+  styles,
+  colors,
 }: {
   m: MapboxMapMarker;
   MarkerView: ComponentType<Record<string, unknown>>;
+  styles: any;
+  colors: ThemeColors;
 }) {
   return (
     <MarkerView
@@ -104,7 +117,7 @@ function TripMapboxMarkerViewItem({
         accessibilityLabel={m.title ?? 'Location'}
         style={styles.markerViewPressable}
       >
-        {m.children ?? <MaterialIcons name="place" size={16} color={Colors.primaryLight} />}
+        {m.children ?? <MaterialIcons name="place" size={16} color={colors.primaryLight} />}
       </Pressable>
     </MarkerView>
   );
@@ -113,9 +126,11 @@ function TripMapboxMarkerViewItem({
 function TripMapboxMarkerItem({
   m,
   PointAnnotation,
+  colors,
 }: {
   m: MapboxMapMarker;
   PointAnnotation: ComponentType<Record<string, unknown>>;
+  colors: ThemeColors;
 }) {
   const annotRef = useRef<{ refresh?: () => void } | null>(null);
   const isCatchPin = m.catchPhotoUrl !== undefined;
@@ -125,7 +140,7 @@ function TripMapboxMarkerItem({
       onImageLoaded={() => annotRef.current?.refresh?.()}
     />
   ) : (
-    m.children ?? <MaterialIcons name="place" size={34} color={Colors.primaryLight} />
+    m.children ?? <MaterialIcons name="place" size={34} color={colors.primaryLight} />
   );
   return (
     <PointAnnotation
@@ -151,6 +166,20 @@ const ZOOM_BUTTON_WIDTH = 44;
 const TRAILING_FAB_SIZE = 44;
 
 const ZOOM_CLUSTER_GAP = Spacing.sm;
+
+/**
+ * Map tab: approximate ornament widths for centering attribution (i) left of the Mapbox wordmark.
+ * (Native sizes vary slightly by platform.)
+ */
+const MAP_TAB_ATTRIBUTION_BLOCK = 32;
+const MAP_TAB_LOGO_BLOCK = 90;
+/** Tight space between attribution (i) and Mapbox wordmark. */
+const MAP_TAB_ORNAMENT_GAP = 6;
+/**
+ * Shared bottom inset for (i) + wordmark + zoom baseline (map tab).
+ * Same value for both ornaments so the info button lines up with the wordmark on native Mapbox.
+ */
+const MAP_TAB_MAPBOX_ROW_BOTTOM = Spacing.xs;
 
 /**
  * Mapbox attribution (i): to the left of zoom stack, or to the left of a trailing FAB on the bottom row.
@@ -210,6 +239,10 @@ type TripMapboxMapViewProps = {
   trailingFab?: ReactElement | null;
   /** Extra bottom inset so controls sit above the tab-level plan-trip FAB. */
   reservePlanTripFabSpacing?: boolean;
+  /**
+   * Map tab only: zoom +/- bottom-left; (i) immediately left of centered Mapbox logo; layers above trailing (+).
+   */
+  mapTabControlLayout?: boolean;
 };
 
 /**
@@ -235,9 +268,13 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       showZoomControls = true,
       trailingFab = null,
       reservePlanTripFabSpacing = false,
+      mapTabControlLayout = false,
     },
     ref,
   ) {
+    const { colors } = useAppTheme();
+    const { width: windowWidth } = useWindowDimensions();
+    const styles = useMemo(() => createTripMapboxMapStyles(colors), [colors]);
     const basemapId = useMapBasemapStore((s) => s.basemapId);
     const rawMod = useMemo(() => loadMapbox(), []);
     const tokenApplied = useRef(false);
@@ -321,10 +358,21 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       [liveZoom, reportZoom],
     );
 
+    const mapTabOrnaments = useMemo(() => {
+      if (!mapTabControlLayout) return null;
+      const pairWidth = MAP_TAB_ATTRIBUTION_BLOCK + MAP_TAB_ORNAMENT_GAP + MAP_TAB_LOGO_BLOCK;
+      const leftAttr = Math.max(Spacing.md, (windowWidth - pairWidth) / 2);
+      const leftLogo = leftAttr + MAP_TAB_ATTRIBUTION_BLOCK + MAP_TAB_ORNAMENT_GAP;
+      return {
+        attributionPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: leftAttr } as const,
+        logoPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: leftLogo } as const,
+      };
+    }, [mapTabControlLayout, windowWidth]);
+
     if (!rawMod || !mod) {
       return (
         <View style={[styles.placeholder, containerStyle]}>
-          <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+          <MaterialIcons name="map" size={48} color={colors.textTertiary} />
           <Text style={styles.placeholderText}>
             Mapbox needs a dev build with native Mapbox (Expo Go does not include it). Prebuild and run on a
             device/simulator, or use EAS Build.
@@ -336,7 +384,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     if (!MAPBOX_ACCESS_TOKEN) {
       return (
         <View style={[styles.placeholder, containerStyle]}>
-          <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+          <MaterialIcons name="map" size={48} color={colors.textTertiary} />
           <Text style={styles.placeholderText}>
             Set EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in `.env` for Mapbox (public pk. token).
           </Text>
@@ -348,7 +396,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     if (!MapView || !Camera || !PointAnnotation || !UserLocation) {
       return (
         <View style={[styles.placeholder, containerStyle]}>
-          <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+          <MaterialIcons name="map" size={48} color={colors.textTertiary} />
           <Text style={styles.placeholderText}>Map components failed to load.</Text>
         </View>
       );
@@ -367,6 +415,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
         : Spacing.lg + planTripFabClearance;
 
+    /** Map tab: layers sit above the add-location (+) FAB only, not above zoom. */
+    const layersFabBottom =
+      mapTabControlLayout && showBasemapSwitcher && mapStyle == null
+        ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
+        : undefined;
+
     const resolvedStyleURL = mapStyle ?? mapboxStyleURLForBasemap(basemapId);
     const showBasemap = showBasemapSwitcher && mapStyle == null;
 
@@ -380,11 +434,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           scaleBarEnabled={false}
           logoEnabled
           attributionEnabled
-          attributionPosition={resolveAttributionPosition(
-            showZoomControls,
-            hasTrailingFab,
-            planTripFabClearance,
-          )}
+          attributionPosition={
+            mapTabOrnaments
+              ? mapTabOrnaments.attributionPosition
+              : resolveAttributionPosition(showZoomControls, hasTrailingFab, planTripFabClearance)
+          }
+          logoPosition={mapTabOrnaments?.logoPosition}
           onCameraChanged={
             onCameraChanged
               ? (state: unknown) => handleCameraChanged(state as MapCameraStatePayload)
@@ -401,17 +456,33 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           />
           {markers.map((m) =>
             m.useMarkerView && MarkerView ? (
-              <TripMapboxMarkerViewItem key={m.id} m={m} MarkerView={MarkerView} />
+              <TripMapboxMarkerViewItem key={m.id} m={m} MarkerView={MarkerView} styles={styles} colors={colors} />
             ) : (
-              <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} />
+              <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} colors={colors} />
             ),
           )}
           {showUserLocation ? <UserLocation visible /> : null}
         </MapView>
-        {showBasemap ? <MapBasemapSwitcher /> : null}
+        {showBasemap ? (
+          <MapBasemapSwitcher
+            anchor={mapTabControlLayout ? 'bottomRight' : 'bottomLeft'}
+            anchorBottom={layersFabBottom}
+          />
+        ) : null}
         {showZoomControls ? (
           <View
-            style={[styles.zoomCluster, { bottom: zoomClusterBottom }]}
+            style={[
+              styles.zoomCluster,
+              mapTabControlLayout
+                ? {
+                    bottom: MAP_TAB_MAPBOX_ROW_BOTTOM,
+                    left: Spacing.md,
+                  }
+                : {
+                    bottom: zoomClusterBottom,
+                    right: Spacing.md,
+                  },
+            ]}
             pointerEvents="box-none"
           >
             <Pressable
@@ -421,7 +492,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
               onPress={() => zoomBy(zoomStep)}
               disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
             >
-              <MaterialIcons name="add" size={22} color={Colors.text} />
+              <MaterialIcons name="add" size={22} color={colors.text} />
             </Pressable>
             <View style={styles.zoomDivider} />
             <Pressable
@@ -431,7 +502,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
               onPress={() => zoomBy(-zoomStep)}
               disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
             >
-              <MaterialIcons name="remove" size={22} color={Colors.text} />
+              <MaterialIcons name="remove" size={22} color={colors.text} />
             </Pressable>
           </View>
         ) : null}
@@ -448,57 +519,58 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
   },
 );
 
-const styles = StyleSheet.create({
-  fill: { flex: 1 },
-  map: { flex: 1 },
-  markerViewPressable: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  trailingFabAnchor: {
-    position: 'absolute',
-    right: Spacing.md,
-  },
-  zoomCluster: {
-    position: 'absolute',
-    right: Spacing.md,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: Colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
-  zoomButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-  },
-  zoomButtonPressed: {
-    opacity: 0.85,
-    backgroundColor: Colors.surfaceElevated,
-  },
-  zoomDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-  },
-  placeholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.xl,
-    backgroundColor: Colors.surface,
-  },
-  placeholderText: {
-    marginTop: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-});
+function createTripMapboxMapStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    fill: { flex: 1 },
+    map: { flex: 1 },
+    markerViewPressable: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    trailingFabAnchor: {
+      position: 'absolute',
+      right: Spacing.md,
+    },
+    zoomCluster: {
+      position: 'absolute',
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      elevation: 3,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.15,
+      shadowRadius: 2,
+    },
+    zoomButton: {
+      width: 44,
+      height: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+    },
+    zoomButtonPressed: {
+      opacity: 0.85,
+      backgroundColor: colors.surfaceElevated,
+    },
+    zoomDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    placeholder: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: Spacing.xl,
+      backgroundColor: colors.surface,
+    },
+    placeholderText: {
+      marginTop: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+  });
+}

@@ -1,4 +1,15 @@
-import { TripEvent, WeatherData, WaterFlowData, Location, FishingType, FlyChangeData, CatchData, NextFlyRecommendation, Fly } from '@/src/types';
+import {
+  TripEvent,
+  WeatherData,
+  WaterFlowData,
+  Location,
+  LocationConditions,
+  FishingType,
+  FlyChangeData,
+  CatchData,
+  NextFlyRecommendation,
+  Fly,
+} from '@/src/types';
 import { CLARITY_LABELS, CLARITY_DESCRIPTIONS } from '@/src/services/waterFlow';
 import { flyPatternsMatch, nextFlyRecommendationConflictsCurrent, normalizeFlyPatternKey } from '@/src/utils/flyPatternCompare';
 
@@ -27,7 +38,7 @@ export interface AIContext {
   guideLocationCatchSummary?: string | null;
 }
 
-function getSeason(date: Date): string {
+export function getSeason(date: Date): string {
   const month = date.getMonth();
   if (month >= 2 && month <= 4) return 'spring';
   if (month >= 5 && month <= 7) return 'summer';
@@ -35,7 +46,7 @@ function getSeason(date: Date): string {
   return 'winter';
 }
 
-function getTimeOfDay(date: Date): string {
+export function getTimeOfDay(date: Date): string {
   const hour = date.getHours();
   if (hour < 6) return 'pre-dawn';
   if (hour < 9) return 'early morning';
@@ -748,6 +759,144 @@ export async function getSpotFishingSummary(
   }
 }
 
+function locationConditionsOneLine(c: LocationConditions): string {
+  const parts: string[] = [
+    `${c.sky.label}, ${c.temperature.temp_f}°F`,
+    `Wind ${c.wind.speed_mph}mph`,
+  ];
+  if (c.water.flow_cfs != null) parts.push(`Flow ${c.water.flow_cfs} CFS`);
+  parts.push(`Water ${c.water.clarity}`);
+  return parts.join('; ');
+}
+
+export type RegionalHatchWaterInput = {
+  name: string;
+  conditions: LocationConditions;
+};
+
+export type HatchBriefRow = {
+  insect: string;
+  sizes: string;
+  status: string;
+  /** Drives status dot color: active=teal/green, starting=orange, waning=muted */
+  tier: 'active' | 'starting' | 'waning' | 'other';
+};
+
+export type RegionalHatchBriefingResult = {
+  rows: HatchBriefRow[];
+};
+
+function normalizeHatchTier(raw: unknown): HatchBriefRow['tier'] {
+  const s = String(raw ?? '').toLowerCase();
+  if (s === 'active') return 'active';
+  if (s === 'starting') return 'starting';
+  if (s === 'waning') return 'waning';
+  return 'other';
+}
+
+function staticHatchRows(season: string): HatchBriefRow[] {
+  if (season === 'spring') {
+    return [
+      { insect: 'Blue-Winged Olive', sizes: '#18–20', status: 'Active', tier: 'active' },
+      { insect: 'Midge', sizes: '#20–22', status: 'Starting', tier: 'starting' },
+    ];
+  }
+  if (season === 'summer') {
+    return [
+      { insect: 'Pale Morning Dun', sizes: '#16–18', status: 'Active', tier: 'active' },
+      { insect: 'Caddis', sizes: '#14–16', status: 'Starting', tier: 'starting' },
+    ];
+  }
+  if (season === 'fall') {
+    return [
+      { insect: 'Blue-Winged Olive', sizes: '#18–20', status: 'Active', tier: 'active' },
+      { insect: 'October Caddis', sizes: '#8–10', status: 'Waning', tier: 'waning' },
+    ];
+  }
+  return [
+    { insect: 'Midge', sizes: '#18–22', status: 'Active', tier: 'active' },
+    { insect: 'Small BWO', sizes: '#20–22', status: 'Starting', tier: 'starting' },
+  ];
+}
+
+/**
+ * Single regional call: structured hatch rows for the home briefing UI.
+ */
+export async function getRegionalHatchBriefing(
+  waters: RegionalHatchWaterInput[],
+  contextDate: Date = new Date(),
+): Promise<RegionalHatchBriefingResult> {
+  const season = getSeason(contextDate);
+  const timeOfDay = getTimeOfDay(contextDate);
+
+  if (waters.length === 0) {
+    return { rows: [] };
+  }
+
+  if (!OPENAI_API_KEY) {
+    return { rows: staticHatchRows(season) };
+  }
+
+  const lines = waters.slice(0, 8).map((w) => `- ${w.name}: ${locationConditionsOneLine(w.conditions)}`);
+  const userPrompt = [
+    'You are an expert fly fishing guide for the Intermountain West (Utah and similar).',
+    `Season: ${season}. Time of day now: ${timeOfDay}.`,
+    'Waters and current conditions:',
+    ...lines,
+    '',
+    'Respond with ONLY valid JSON in this exact format, no other text:',
+    '{"rows":[{"insect":"Blue-Winged Olive","sizes":"#18-20","status":"Active","tier":"active"},{"insect":"Pale Morning Dun","sizes":"#16-18","status":"Starting","tier":"starting"}]}',
+    'Provide 2 to 4 rows. insect = common hatch name (not Latin). sizes = fly sizes like #18-20. status = short label: Active, Starting, or Waning. tier must be exactly one of: active, starting, waning, other — match status (Active->active, Starting->starting, Waning->waning).',
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          { role: 'system', content: 'You are an expert fly fishing guide. Respond with ONLY valid JSON.' },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 320,
+        temperature: 0.55,
+      }),
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content?.trim();
+    if (!content) return { rows: staticHatchRows(season) };
+
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { rows: staticHatchRows(season) };
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const raw = Array.isArray(parsed.rows) ? parsed.rows : [];
+    const rows: HatchBriefRow[] = [];
+    for (const r of raw.slice(0, 6)) {
+      if (!r || typeof r !== 'object') continue;
+      const o = r as Record<string, unknown>;
+      const insect = typeof o.insect === 'string' ? o.insect.trim() : '';
+      const sizes = typeof o.sizes === 'string' ? o.sizes.trim() : '';
+      const status = typeof o.status === 'string' ? o.status.trim() : '';
+      if (!insect) continue;
+      rows.push({
+        insect,
+        sizes: sizes || '—',
+        status: status || '—',
+        tier: normalizeHatchTier(o.tier),
+      });
+    }
+    return rows.length >= 1 ? { rows } : { rows: staticHatchRows(season) };
+  } catch {
+    return { rows: staticHatchRows(season) };
+  }
+}
+
 function buildDetailedReportPrompt(
   locationName: string,
   conditionsSummary: string,
@@ -1022,5 +1171,3 @@ export async function getFlyOfTheDay(
     return fallback;
   }
 }
-
-export { getSeason, getTimeOfDay };

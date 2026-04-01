@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type ReactNode } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -36,7 +36,8 @@ import { prefetchCatchesForBounds } from '@/src/services/mapCatchPrefetch';
 import { fetchCatchesInBounds, upsertCatchEventToCloud } from '@/src/services/sync';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
@@ -80,6 +81,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 type TabKey = 'fish' | 'photos' | 'conditions' | 'ai' | 'map';
 
 export default function TripDashboardScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createTripDashboardStyles(colors), [colors]);
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -635,7 +639,7 @@ export default function TripDashboardScreen() {
             <TextInput
               style={styles.tripPhotoModalInput}
               placeholder="Add a caption"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               value={tripPhotoCaption}
               onChangeText={setTripPhotoCaption}
             />
@@ -643,7 +647,7 @@ export default function TripDashboardScreen() {
             <TextInput
               style={styles.tripPhotoModalInput}
               placeholder="e.g. Brown Trout"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               value={tripPhotoSpecies}
               onChangeText={setTripPhotoSpecies}
             />
@@ -657,7 +661,7 @@ export default function TripDashboardScreen() {
                 disabled={tripPhotoUploading}
               >
                 {tripPhotoUploading ? (
-                  <ActivityIndicator size="small" color={Colors.textInverse} />
+                  <ActivityIndicator size="small" color={colors.textInverse} />
                 ) : (
                   <Text style={styles.tripPhotoModalSaveText}>Save</Text>
                 )}
@@ -680,7 +684,7 @@ export default function TripDashboardScreen() {
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
           >
-            <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+            <MaterialCommunityIcons name="close" size={28} color={colors.textInverse} />
           </Pressable>
           {fullScreenPhoto && (
             <ScrollView
@@ -696,22 +700,22 @@ export default function TripDashboardScreen() {
               <View style={styles.fullScreenPhotoInfo}>
                 {fullScreenPhoto.location ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} /> {fullScreenPhoto.location}
+                    <MaterialCommunityIcons name="map-marker" size={16} color={colors.textInverse} /> {fullScreenPhoto.location}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.fly ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} /> {fullScreenPhoto.fly}
+                    <MaterialCommunityIcons name="hook" size={16} color={colors.textInverse} /> {fullScreenPhoto.fly}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.date ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialIcons name="calendar-today" size={16} color={Colors.textInverse} /> {fullScreenPhoto.date}
+                    <MaterialIcons name="calendar-today" size={16} color={colors.textInverse} /> {fullScreenPhoto.date}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.species ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} /> {fullScreenPhoto.species}
+                    <MaterialCommunityIcons name="fish" size={16} color={colors.textInverse} /> {fullScreenPhoto.species}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.caption ? (
@@ -763,7 +767,7 @@ export default function TripDashboardScreen() {
           { key: 'ai' as TabKey, label: 'AI Guide' },
           { key: 'map' as TabKey, label: 'Map' },
         ]).map((tab) => {
-          const color = activeTab === tab.key ? Colors.primary : Colors.textTertiary;
+          const color = activeTab === tab.key ? colors.primary : colors.textTertiary;
           return (
             <Pressable
               key={tab.key}
@@ -807,6 +811,8 @@ export default function TripDashboardScreen() {
             userFlies={userFlies}
             onCatchPhotoPress={handleCatchPhotoPress}
             tripPaused={isTripPaused}
+            styles={styles}
+            colors={colors}
           />
           <CatchDetailsModal
             visible={catchUIMode != null}
@@ -846,6 +852,8 @@ export default function TripDashboardScreen() {
           uploading={tripPhotoUploading}
           onAddPhoto={handlePickTripPhoto}
           onPhotoPress={handleTripPhotoPress}
+          styles={styles}
+          colors={colors}
         />
       )}
 
@@ -879,7 +887,7 @@ export default function TripDashboardScreen() {
                 <Text style={[styles.strategySectionLabel, styles.strategySectionLabelFirst]}>Best time to fish</Text>
                 <View style={styles.strategyCard}>
                   {strategyLoading ? (
-                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
                   ) : strategyBestTime ? (
                     <Text style={styles.strategyBestTime}>{strategyBestTime}</Text>
                   ) : (
@@ -889,7 +897,7 @@ export default function TripDashboardScreen() {
                 <Text style={styles.strategySectionLabel}>Top flies</Text>
                 <View style={styles.strategyCard}>
                   {strategyLoading ? (
-                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
                   ) : strategyTopFlies.length > 0 ? (
                     <View style={styles.strategyFliesColumns}>
                       <View style={styles.strategyFliesColumn}>
@@ -924,7 +932,7 @@ export default function TripDashboardScreen() {
                 <Text style={styles.strategySectionLabel}>How to fish it</Text>
                 <View style={styles.strategyCard}>
                   {strategyLoading ? (
-                    <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
                   ) : strategyHowToFish ? (
                     <Text style={styles.strategyHowToFishText}>{strategyHowToFish}</Text>
                   ) : (
@@ -939,6 +947,8 @@ export default function TripDashboardScreen() {
             loading={aiLoading}
             onSend={handleAskAI}
             scrollRef={aiScrollRef}
+            styles={styles}
+            colors={colors}
           />
         </>
       )}
@@ -952,6 +962,9 @@ export default function TripDashboardScreen() {
           mapLocation={mapLocation}
           mapLocationLoading={mapLocationLoading}
           mapLocationError={mapLocationError}
+          colors={colors}
+          mapColorScheme={resolvedScheme}
+          styles={styles}
           onSelectCatch={(ev) => setCatchUIMode(ev)}
           onRequestLocation={async () => {
             setMapLocationLoading(true);
@@ -995,6 +1008,8 @@ function FishingTab({
   userFlies: _userFlies = [],
   onCatchPhotoPress,
   tripPaused = false,
+  styles,
+  colors,
 }: any) {
   const sortedEvents = useMemo(() => sortEventsByTime(events), [events]);
   const [rowActions, setRowActions] = useState<{ event: TripEvent; index: number } | null>(null);
@@ -1185,7 +1200,7 @@ function FishingTab({
     <View style={{ flex: 1 }}>
       {tripPaused ? (
         <View style={styles.fishingPausedNotice}>
-          <MaterialCommunityIcons name="pause-circle-outline" size={22} color={Colors.textSecondary} />
+          <MaterialCommunityIcons name="pause-circle-outline" size={22} color={colors.textSecondary} />
           <Text style={styles.fishingPausedNoticeText}>
             Trip is paused. Tap Resume in the header to log catches, flies, and notes.
           </Text>
@@ -1270,22 +1285,22 @@ function FishingTab({
       {/* Quick log: Bite / Fish On */}
       <View style={[styles.actionRow, styles.actionRowTight]}>
         <Pressable style={styles.actionButton} onPress={() => addBite?.()}>
-          <MaterialCommunityIcons name="fish" size={20} color={Colors.accent} />
+          <MaterialCommunityIcons name="fish" size={20} color={colors.accent} />
           <Text style={styles.actionLabel}>Bite</Text>
         </Pressable>
         <Pressable style={styles.actionButton} onPress={() => addFishOn?.()}>
-          <MaterialIcons name="highlight-off" size={20} color={Colors.textSecondary} />
+          <MaterialIcons name="highlight-off" size={20} color={colors.textSecondary} />
           <Text style={styles.actionLabel}>Fish On</Text>
         </Pressable>
       </View>
       {/* Change Fly / Add Note */}
       <View style={styles.actionRow}>
         <Pressable style={styles.actionButton} onPress={openFlyPicker}>
-          <MaterialCommunityIcons name="hook" size={20} color={Colors.accent} />
+          <MaterialCommunityIcons name="hook" size={20} color={colors.accent} />
           <Text style={styles.actionLabel}>Change Fly</Text>
         </Pressable>
         <Pressable style={styles.actionButton} onPress={() => setShowNoteInput(!showNoteInput)}>
-          <MaterialIcons name="edit-note" size={20} color={Colors.textSecondary} />
+          <MaterialIcons name="edit-note" size={20} color={colors.textSecondary} />
           <Text style={styles.actionLabel}>Add Note</Text>
         </Pressable>
       </View>
@@ -1296,7 +1311,7 @@ function FishingTab({
           <TextInput
             style={styles.noteInput}
             placeholder="Write a note..."
-            placeholderTextColor={Colors.textTertiary}
+            placeholderTextColor={colors.textTertiary}
             value={noteText}
             onChangeText={setNoteText}
             onSubmitEditing={handleAddNote}
@@ -1323,19 +1338,19 @@ function FishingTab({
               <View style={styles.timelineContent}>
                 <View style={styles.timelineDot}>
                   {event.event_type === 'catch' ? (
-                    <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
+                    <MaterialCommunityIcons name="fish" size={14} color={colors.primary} />
                   ) : event.event_type === 'fly_change' ? (
-                    <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
+                    <MaterialCommunityIcons name="hook" size={14} color={colors.accent} />
                   ) : event.event_type === 'ai_query' ? (
-                    <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
+                    <MaterialIcons name="smart-toy" size={14} color={colors.info} />
                   ) : event.event_type === 'bite' ? (
-                    <MaterialCommunityIcons name="fish" size={14} color={Colors.accent} />
+                    <MaterialCommunityIcons name="fish" size={14} color={colors.accent} />
                   ) : event.event_type === 'fish_on' ? (
-                    <MaterialIcons name="touch-app" size={14} color={Colors.primary} />
+                    <MaterialIcons name="touch-app" size={14} color={colors.primary} />
                   ) : event.event_type === 'got_off' ? (
-                    <MaterialIcons name="highlight-off" size={14} color={Colors.textSecondary} />
+                    <MaterialIcons name="highlight-off" size={14} color={colors.textSecondary} />
                   ) : (
-                    <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
+                    <MaterialIcons name="edit-note" size={14} color={colors.textSecondary} />
                   )}
                 </View>
                 <View style={styles.timelineTextBlock}>
@@ -1343,7 +1358,7 @@ function FishingTab({
                     {getEventDescription(event)}
                   </Text>
                   {event.event_type === 'catch' ? (
-                    <CatchDetailsBlock data={event.data as CatchData} />
+                    <CatchDetailsBlock data={event.data as CatchData} styles={styles} />
                   ) : null}
                   {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
                     <Pressable onPress={() => onCatchPhotoPress?.(event)}>
@@ -1360,7 +1375,7 @@ function FishingTab({
                   hitSlop={12}
                   accessibilityLabel="Timeline row actions"
                 >
-                  <MaterialIcons name="more-vert" size={22} color={Colors.textSecondary} />
+                  <MaterialIcons name="more-vert" size={22} color={colors.textSecondary} />
                 </Pressable>
               </View>
             </View>
@@ -1421,12 +1436,16 @@ function PhotosTab({
   uploading,
   onAddPhoto,
   onPhotoPress,
+  styles,
+  colors,
 }: {
   tripPhotos: Photo[];
   loading: boolean;
   uploading: boolean;
   onAddPhoto: () => void;
   onPhotoPress?: (photo: Photo) => void;
+  styles: any;
+  colors: ThemeColors;
 }) {
   return (
     <ScrollView style={styles.photosTabScroll} contentContainerStyle={styles.photosTabContent}>
@@ -1434,10 +1453,10 @@ function PhotosTab({
         <Text style={styles.photosTabTitle}>Trip photos</Text>
         <Pressable style={styles.addTripPhotoButton} onPress={onAddPhoto} disabled={uploading}>
           {uploading ? (
-            <ActivityIndicator size="small" color={Colors.primary} />
+            <ActivityIndicator size="small" color={colors.primary} />
           ) : (
             <>
-              <MaterialIcons name="add-a-photo" size={18} color={Colors.primary} />
+              <MaterialIcons name="add-a-photo" size={18} color={colors.primary} />
               <Text style={styles.addTripPhotoButtonText}>Add</Text>
             </>
           )}
@@ -1445,11 +1464,11 @@ function PhotosTab({
       </View>
       {loading ? (
         <View style={styles.photosTabPlaceholder}>
-          <ActivityIndicator color={Colors.primary} />
+          <ActivityIndicator color={colors.primary} />
         </View>
       ) : tripPhotos.length === 0 ? (
         <Pressable style={styles.photosTabEmpty} onPress={onAddPhoto}>
-          <MaterialIcons name="photo-library" size={48} color={Colors.textTertiary} />
+          <MaterialIcons name="photo-library" size={48} color={colors.textTertiary} />
           <Text style={styles.photosTabEmptyText}>No photos yet</Text>
           <Text style={styles.photosTabEmptyHint}>Add photos from this trip</Text>
         </Pressable>
@@ -1461,7 +1480,7 @@ function PhotosTab({
             </Pressable>
           ))}
           <Pressable style={styles.tripPhotoAddSlot} onPress={onAddPhoto} disabled={uploading}>
-            <MaterialIcons name="add" size={32} color={Colors.primary} />
+            <MaterialIcons name="add" size={32} color={colors.primary} />
           </Pressable>
         </View>
       )}
@@ -1484,7 +1503,7 @@ type TripMapMarker = {
   catchPhotoUrl?: string | null;
 };
 
-function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker[] {
+function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[], themeColors: ThemeColors): TripMapMarker[] {
   const markers: TripMapMarker[] = [];
 
   const startLat = trip.start_latitude ?? null;
@@ -1495,7 +1514,7 @@ function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker
       lon: startLon,
       lat: startLat,
       title: 'Start',
-      color: Colors.primary,
+      color: themeColors.primary,
       endpointLabel: 'Start',
       endpointIcon: 'place',
     });
@@ -1509,7 +1528,7 @@ function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker
       lon: endLon,
       lat: endLat,
       title: 'End',
-      color: Colors.secondary,
+      color: themeColors.secondary,
       endpointLabel: 'End',
       endpointIcon: 'flag',
     });
@@ -1525,7 +1544,7 @@ function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[]): TripMapMarker
       lon: e.longitude,
       lat: e.latitude,
       title: speciesLabel ? `Catch · ${speciesLabel}` : 'Catch',
-      color: Colors.primaryLight,
+      color: themeColors.primaryLight,
       catchEventId: e.id,
       catchPhotoUrl: catchData.photo_url ?? null,
     });
@@ -1544,6 +1563,9 @@ function TripMapTab({
   mapLocationError,
   onRequestLocation,
   onSelectCatch,
+  colors,
+  mapColorScheme,
+  styles,
 }: {
   trip: Trip;
   events: TripEvent[];
@@ -1554,6 +1576,9 @@ function TripMapTab({
   mapLocationError: string | null;
   onRequestLocation: () => Promise<void>;
   onSelectCatch: (event: TripEvent) => void;
+  colors: ThemeColors;
+  mapColorScheme: 'light' | 'dark';
+  styles: any;
 }) {
   const addCatch = useTripStore((s) => s.addCatch);
   const locations = useLocationStore((s) => s.locations);
@@ -1621,7 +1646,7 @@ function TripMapTab({
         lon: c.longitude,
         lat: c.latitude,
         title: c.species?.trim() ? `Catch · ${c.species.trim()}` : 'Saved catch',
-        color: Colors.secondary,
+        color: colors.secondary,
         catchEventId: c.id,
         catchPhotoUrl: null as string | null,
       }));
@@ -1629,14 +1654,20 @@ function TripMapTab({
 
   const catalogMarkersForViewport = useMemo(
     () =>
-      catalogLocationMarkersInViewport(locations, dataViewport, trip.location_id ?? undefined),
-    [locations, dataViewport, trip.location_id],
+      catalogLocationMarkersInViewport(
+        locations,
+        dataViewport,
+        trip.location_id ?? undefined,
+        colors.textTertiary,
+        mapColorScheme,
+      ),
+    [locations, dataViewport, trip.location_id, colors.textTertiary, mapColorScheme],
   );
 
   const allMarkers = useMemo(() => {
-    const tripMarkers = buildTripMapMarkers(trip, tripEvents);
+    const tripMarkers = buildTripMapMarkers(trip, tripEvents, colors);
     return [...catalogMarkersForViewport, ...tripMarkers, ...cacheMarkersForViewport];
-  }, [trip, tripEvents, catalogMarkersForViewport, cacheMarkersForViewport]);
+  }, [trip, tripEvents, colors, catalogMarkersForViewport, cacheMarkersForViewport]);
 
   const markersForMap = useMemo(() => {
     if (!dataViewport) {
@@ -1759,7 +1790,7 @@ function TripMapTab({
   if (Platform.OS === 'web') {
     return (
       <View style={styles.mapTabPlaceholder}>
-        <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+        <MaterialIcons name="map" size={48} color={colors.textTertiary} />
         <Text style={styles.mapTabPlaceholderText}>Map is available in the iOS and Android app.</Text>
       </View>
     );
@@ -1769,7 +1800,7 @@ function TripMapTab({
     <View style={styles.mapTabContainer}>
       {mapLocationError ? (
         <View style={styles.mapTabBanner}>
-          <MaterialIcons name="location-off" size={18} color={Colors.warning} />
+          <MaterialIcons name="location-off" size={18} color={colors.warning} />
           <Text style={styles.mapTabBannerText} numberOfLines={2}>
             {mapLocationError}
           </Text>
@@ -1796,7 +1827,7 @@ function TripMapTab({
           style={({ pressed }) => [styles.mapTabFishFab, pressed && styles.mapTabFabPressed]}
           onPress={() => void handleAddFish()}
         >
-          <MaterialIcons name="add" size={26} color={Colors.textInverse} />
+          <MaterialIcons name="add" size={26} color={colors.textInverse} />
           <Text style={styles.mapTabFishFabLabel}>Fish</Text>
         </Pressable>
         <Pressable
@@ -1808,7 +1839,7 @@ function TripMapTab({
           onPress={() => void handleDownloadOffline()}
           disabled={offlineBusy}
         >
-          <MaterialIcons name="download" size={22} color={Colors.textInverse} />
+          <MaterialIcons name="download" size={22} color={colors.textInverse} />
           <Text style={styles.mapTabOfflineFabLabel}>{offlineBusy ? '…' : 'Area'}</Text>
         </Pressable>
       </View>
@@ -1819,9 +1850,26 @@ function TripMapTab({
 /* ─── AI Guide Tab ─── */
 
 function AIGuideTab({
-  messages, input, setInput, loading, onSend, scrollRef,
+  messages,
+  input,
+  setInput,
+  loading,
+  onSend,
+  scrollRef,
   strategySlot,
-}: any) {
+  styles,
+  colors,
+}: {
+  messages: any[];
+  input: string;
+  setInput: (v: string) => void;
+  loading: boolean;
+  onSend: () => void;
+  scrollRef: RefObject<ScrollView | null>;
+  strategySlot?: ReactNode;
+  styles: any;
+  colors: ThemeColors;
+}) {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -1855,7 +1903,7 @@ function AIGuideTab({
 
         {loading && (
           <View style={[styles.bubble, styles.aiBubble]}>
-            <ActivityIndicator size="small" color={Colors.primary} style={{ marginRight: 8 }} />
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 8 }} />
             <Text style={styles.aiBubbleText}>Thinking...</Text>
           </View>
         )}
@@ -1868,7 +1916,7 @@ function AIGuideTab({
           value={input}
           onChangeText={setInput}
           placeholder="Ask about this trip..."
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={onSend}
         />
@@ -1890,7 +1938,7 @@ function formatLabel(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function CatchDetailsBlock({ data }: { data: CatchData }) {
+function CatchDetailsBlock({ data, styles }: { data: CatchData; styles: any }) {
   const lines: string[] = [];
   if (data.note?.trim()) lines.push(data.note.trim());
   if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
@@ -1985,6 +2033,8 @@ function TripTimelineNoteModal({
   onClose: () => void;
   onApply: (nextEvents: TripEvent[]) => void;
 }) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createTripDashboardStyles(colors), [colors]);
   const [text, setText] = useState('');
   useEffect(() => {
     if (event) setText((event.data as NoteData).text ?? '');
@@ -2020,7 +2070,7 @@ function TripTimelineNoteModal({
           value={text}
           onChangeText={setText}
           placeholder="Write a note…"
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={colors.textTertiary}
           multiline
         />
       </KeyboardAvoidingView>
@@ -2041,6 +2091,8 @@ function TripTimelineAiModal({
   onClose: () => void;
   onApply: (nextEvents: TripEvent[]) => void;
 }) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createTripDashboardStyles(colors), [colors]);
   const [q, setQ] = useState('');
   const [r, setR] = useState('');
   useEffect(() => {
@@ -2093,10 +2145,11 @@ function TripTimelineAiModal({
 
 /* ─── Styles ─── */
 
-const styles = StyleSheet.create({
+function createTripDashboardStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   centered: {
     flex: 1,
@@ -2105,17 +2158,17 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: FontSize.lg,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   backButton: {
     marginTop: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.md,
   },
   backButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontWeight: '600',
   },
 
@@ -2126,12 +2179,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   locationName: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   timerText: {
     fontSize: FontSize.md,
@@ -2148,7 +2201,7 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   offlineBadge: {
-    backgroundColor: Colors.warning,
+    backgroundColor: colors.warning,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 2,
@@ -2156,16 +2209,16 @@ const styles = StyleSheet.create({
   offlineBadgeText: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   cachedDataBanner: {
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.lg,
-    backgroundColor: Colors.warning + '18',
+    backgroundColor: colors.warning + '18',
   },
   cachedDataBannerText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   pauseResumeButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -2174,7 +2227,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   pauseResumeButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontWeight: '600',
     fontSize: FontSize.sm,
   },
@@ -2185,7 +2238,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   endButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontWeight: '600',
     fontSize: FontSize.md,
   },
@@ -2193,9 +2246,9 @@ const styles = StyleSheet.create({
   // Tab Bar
   tabBar: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   tab: {
     flex: 1,
@@ -2208,16 +2261,16 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomColor: Colors.primary,
+    borderBottomColor: colors.primary,
   },
   // tabIcon intentionally removed — using Material Icons
   tabLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   tabLabelActive: {
-    color: Colors.primary,
+    color: colors.primary,
   },
   tabScroll: {
     flex: 1,
@@ -2229,7 +2282,7 @@ const styles = StyleSheet.create({
   strategySectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: Spacing.xs,
@@ -2239,12 +2292,12 @@ const styles = StyleSheet.create({
     marginTop: 0,
   },
   strategyCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
     marginBottom: Spacing.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   strategyLoader: {
     marginVertical: Spacing.xs,
@@ -2252,11 +2305,11 @@ const styles = StyleSheet.create({
   strategyBestTime: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   strategyPlaceholder: {
     fontSize: FontSize.md,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontStyle: 'italic',
   },
   strategyFliesColumns: {
@@ -2279,16 +2332,16 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: Colors.secondary,
+    backgroundColor: colors.secondary,
   },
   strategyFlyName: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   strategyHowToFishText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     lineHeight: 24,
   },
 
@@ -2308,7 +2361,7 @@ const styles = StyleSheet.create({
   photosTabTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   addTripPhotoButton: {
     flexDirection: 'row',
@@ -2320,7 +2373,7 @@ const styles = StyleSheet.create({
   addTripPhotoButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   photosTabPlaceholder: {
     minHeight: 200,
@@ -2329,10 +2382,10 @@ const styles = StyleSheet.create({
   },
   photosTabEmpty: {
     minHeight: 200,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderStyle: 'dashed',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2340,12 +2393,12 @@ const styles = StyleSheet.create({
   photosTabEmptyText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: Spacing.sm,
   },
   photosTabEmptyHint: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: 4,
   },
   photosTabGrid: {
@@ -2357,14 +2410,14 @@ const styles = StyleSheet.create({
     width: PHOTO_SIZE,
     height: PHOTO_SIZE,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.borderLight,
+    backgroundColor: colors.borderLight,
   },
   tripPhotoAddSlot: {
     width: PHOTO_SIZE,
     height: PHOTO_SIZE,
     borderRadius: BorderRadius.md,
     borderWidth: 2,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderStyle: 'dashed',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2377,18 +2430,18 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    backgroundColor: Colors.borderLight,
+    backgroundColor: colors.borderLight,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   fishingPausedNoticeText: {
     flex: 1,
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     lineHeight: 20,
   },
   nextFlyBanner: {
-    backgroundColor: Colors.accent,
+    backgroundColor: colors.accent,
     paddingVertical: Spacing.sm + 2,
     paddingHorizontal: Spacing.lg,
     flexDirection: 'row',
@@ -2401,13 +2454,13 @@ const styles = StyleSheet.create({
   nextFlyLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
     textTransform: 'uppercase',
   },
   nextFlyName: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   nextFlyReason: {
     fontSize: FontSize.xs,
@@ -2424,20 +2477,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
     zIndex: 1,
     elevation: 1,
   },
   currentFlyLabel: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   currentFlyName: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   fishCounterSection: {
     flexDirection: 'row',
@@ -2450,20 +2503,20 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   fishPlusButton: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: Colors.primaryDark,
+    shadowColor: colors.primaryDark,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -2472,12 +2525,12 @@ const styles = StyleSheet.create({
   fishButtonText: {
     fontSize: 32,
     fontWeight: '300',
-    color: Colors.text,
+    color: colors.text,
   },
   fishPlusButtonText: {
     fontSize: 32,
     fontWeight: '300',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   fishCountDisplay: {
     alignItems: 'center',
@@ -2486,11 +2539,11 @@ const styles = StyleSheet.create({
   fishCountNumber: {
     fontSize: FontSize.hero,
     fontWeight: '700',
-    color: Colors.primary,
+    color: colors.primary,
   },
   fishCountLabel: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   actionRow: {
     flexDirection: 'row',
@@ -2507,17 +2560,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.sm,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   // actionEmoji intentionally removed — using Material Icons
   actionLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   noteInputRow: {
     flexDirection: 'row',
@@ -2527,29 +2580,29 @@ const styles = StyleSheet.create({
   },
   noteInput: {
     flex: 1,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   noteSubmit: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.lg,
     justifyContent: 'center',
   },
   noteSubmitText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontWeight: '600',
   },
   flyFieldLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: Spacing.sm,
@@ -2575,15 +2628,15 @@ const styles = StyleSheet.create({
     height: '88%',
     maxHeight: '88%',
     maxWidth: 400,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
   },
   catchModalHeader: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
   },
   catchModalScroll: {
     flex: 1,
@@ -2595,7 +2648,7 @@ const styles = StyleSheet.create({
   catchModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   catchFlyDropdownRowWrap: {
     flexDirection: 'row',
@@ -2609,10 +2662,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: Spacing.xs,
     paddingHorizontal: Spacing.xs,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.sm,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   catchFlyDropdownRow: {
     flexDirection: 'row',
@@ -2621,18 +2674,18 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.md,
     marginBottom: Spacing.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   catchFlyDropdownValue: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   catchFlyDropdownPlaceholder: {
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   catchFlyPickerOverlay: {
     flex: 1,
@@ -2641,7 +2694,7 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
   },
   catchFlyPickerSheet: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     maxHeight: '60%',
   },
@@ -2652,17 +2705,17 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   catchFlyPickerOptionActive: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   catchFlyPickerOptionText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   catchFlyPickerOptionTextActive: {
-    color: Colors.primary,
+    color: colors.primary,
     fontWeight: '600',
   },
   catchFlyRadioRow: {
@@ -2677,10 +2730,10 @@ const styles = StyleSheet.create({
   },
   catchFlyRadioLabel: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   catchFlyRadioLabelActive: {
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '600',
   },
   modalOverlay: {
@@ -2691,7 +2744,7 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
   },
   tripPhotoModal: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     width: '100%',
@@ -2700,23 +2753,23 @@ const styles = StyleSheet.create({
   tripPhotoModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.xs,
   },
   tripPhotoModalHint: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginBottom: Spacing.md,
   },
   tripPhotoModalInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.sm,
   },
   tripPhotoModalButtons: {
@@ -2729,13 +2782,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     alignItems: 'center',
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   tripPhotoModalCancelText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   tripPhotoModalSave: {
     flex: 1,
@@ -2743,7 +2796,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     minHeight: 40,
   },
   tripPhotoModalSaveDisabled: {
@@ -2752,7 +2805,7 @@ const styles = StyleSheet.create({
   tripPhotoModalSaveText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   fullScreenPhotoWrap: {
     flex: 1,
@@ -2781,23 +2834,23 @@ const styles = StyleSheet.create({
   },
   fullScreenPhotoInfoRow: {
     fontSize: FontSize.md,
-    color: Colors.textInverse,
+    color: colors.textInverse,
     marginBottom: Spacing.xs,
   },
   fullScreenPhotoCaption: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: Spacing.xs,
   },
   catchModalInput: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.sm,
   },
   catchModalNoteInput: {
@@ -2814,16 +2867,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   catchPhotoButtonLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   catchPhotoPreviewWrap: {
     position: 'relative',
@@ -2856,21 +2909,21 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
   quantityBtnText: {
     fontSize: FontSize.lg,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '600',
   },
   quantityValue: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     minWidth: 24,
     textAlign: 'center',
   },
@@ -2882,8 +2935,8 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
   },
   catchModalCancel: {
     paddingVertical: Spacing.sm,
@@ -2891,7 +2944,7 @@ const styles = StyleSheet.create({
   },
   catchModalCancelText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     fontWeight: '600',
   },
   timeline: {
@@ -2901,7 +2954,7 @@ const styles = StyleSheet.create({
   timelineTitle: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: Spacing.xs,
@@ -2909,7 +2962,7 @@ const styles = StyleSheet.create({
   },
   timelineEditHint: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginBottom: Spacing.md,
   },
   timelineRowMenuBtn: {
@@ -2921,7 +2974,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   tripTimelineActionSheet: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     paddingBottom: Spacing.xl,
@@ -2930,24 +2983,24 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   tripTimelineActionLabel: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   tripTimelineActionDestructive: {
-    color: Colors.error,
+    color: colors.error,
   },
   tripTimelineActionCancel: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
     textAlign: 'center',
   },
   tripTimelineModalRoot: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   tripTimelineModalHeader: {
     flexDirection: 'row',
@@ -2956,21 +3009,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   tripTimelineModalTitle: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   tripTimelineModalCancel: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   tripTimelineModalSave: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   tripTimelineModalScroll: {
     flex: 1,
@@ -2979,18 +3032,18 @@ const styles = StyleSheet.create({
   tripTimelineFieldLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: Spacing.xs,
     marginTop: Spacing.sm,
   },
   tripTimelineInput: {
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.text,
-    backgroundColor: Colors.surface,
+    color: colors.text,
+    backgroundColor: colors.surface,
   },
   tripTimelineTallInput: {
     minHeight: 80,
@@ -3000,11 +3053,11 @@ const styles = StyleSheet.create({
     flex: 1,
     margin: Spacing.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     textAlignVertical: 'top',
   },
   timelineItem: {
@@ -3015,7 +3068,7 @@ const styles = StyleSheet.create({
   },
   timelineTime: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     width: 65,
     paddingTop: 2,
   },
@@ -3036,7 +3089,7 @@ const styles = StyleSheet.create({
   },
   timelineText: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
   },
   timelineCatchDetails: {
     marginTop: Spacing.xs,
@@ -3044,13 +3097,13 @@ const styles = StyleSheet.create({
   },
   timelineCatchDetailLine: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   timelineCatchThumb: {
     width: 72,
     height: 72,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
   },
 
   mapTabContainer: {
@@ -3067,26 +3120,26 @@ const styles = StyleSheet.create({
     minHeight: 280,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     padding: Spacing.xl,
     gap: Spacing.md,
   },
   mapTabPlaceholderText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   mapTabRetryButton: {
     marginTop: Spacing.sm,
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.lg,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
   },
   mapTabRetryButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.textInverse,
   },
   mapTabBanner: {
     flexDirection: 'row',
@@ -3094,19 +3147,19 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   mapTabBannerText: {
     flex: 1,
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   mapTabBannerRetry: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   mapTabFabColumn: {
     position: 'absolute',
@@ -3123,7 +3176,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.lg,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -3137,7 +3190,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.lg,
-    backgroundColor: Colors.info,
+    backgroundColor: colors.info,
     elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -3153,12 +3206,12 @@ const styles = StyleSheet.create({
   mapTabFishFabLabel: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   mapTabOfflineFabLabel: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
 
   // AI Guide Tab
@@ -3176,23 +3229,23 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   aiGetRecButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   smartRecCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-    shadowColor: Colors.shadow,
+    borderLeftColor: colors.accent,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -3209,7 +3262,7 @@ const styles = StyleSheet.create({
   smartRecTitle: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -3220,21 +3273,21 @@ const styles = StyleSheet.create({
   smartRecRefreshText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   smartRecFly: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   smartRecColor: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   smartRecReason: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: Spacing.sm,
     lineHeight: 22,
   },
@@ -3245,7 +3298,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
   confidenceBadge: {
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.sm + 2,
     paddingVertical: Spacing.xs,
@@ -3253,10 +3306,10 @@ const styles = StyleSheet.create({
   confidenceText: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   switchFlyButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
@@ -3264,7 +3317,7 @@ const styles = StyleSheet.create({
   switchFlyButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   smartRecLoadingOverlay: {
     position: 'absolute',
@@ -3279,7 +3332,7 @@ const styles = StyleSheet.create({
   },
   aiContextNote: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     textAlign: 'center',
     paddingHorizontal: Spacing.lg,
     marginVertical: Spacing.xs,
@@ -3293,11 +3346,11 @@ const styles = StyleSheet.create({
   },
   userBubble: {
     alignSelf: 'flex-end',
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   aiBubble: {
     alignSelf: 'flex-start',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
   },
   bubbleText: {
     fontSize: FontSize.md,
@@ -3305,30 +3358,30 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   userBubbleText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   aiBubbleText: {
-    color: Colors.text,
+    color: colors.text,
   },
   aiInputRow: {
     flexDirection: 'row',
     padding: Spacing.md,
     gap: Spacing.sm,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
   },
   aiInput: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   aiSendButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.lg,
     justifyContent: 'center',
@@ -3337,8 +3390,11 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   aiSendButtonText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontWeight: '600',
     fontSize: FontSize.md,
   },
-});
+
+  });
+}
+

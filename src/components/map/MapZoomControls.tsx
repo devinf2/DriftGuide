@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { View, Pressable, StyleSheet, Text } from 'react-native';
-import { Colors, Spacing, BorderRadius } from '@/src/constants/theme';
+import { Spacing, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 
 type Props = {
   onZoomIn: () => void;
@@ -7,6 +9,8 @@ type Props = {
 };
 
 export function MapZoomControls({ onZoomIn, onZoomOut }: Props) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createMapZoomStyles(colors), [colors]);
   return (
     <View style={styles.stack} pointerEvents="box-none">
       <Pressable
@@ -30,40 +34,42 @@ export function MapZoomControls({ onZoomIn, onZoomOut }: Props) {
 
 const BTN_SIZE = 44;
 
-const styles = StyleSheet.create({
-  stack: {
-    position: 'absolute',
-    right: Spacing.md,
-    bottom: Spacing.xl + 24,
-    borderRadius: BorderRadius.md,
-    overflow: 'hidden',
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  button: {
-    width: BTN_SIZE,
-    height: BTN_SIZE,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.surface,
-  },
-  buttonPressed: {
-    backgroundColor: Colors.background,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-  },
-  symbol: {
-    fontSize: 26,
-    fontWeight: '500',
-    color: Colors.text,
-    lineHeight: 28,
-  },
-});
+function createMapZoomStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    stack: {
+      position: 'absolute',
+      right: Spacing.md,
+      bottom: Spacing.xl + 24,
+      borderRadius: BorderRadius.md,
+      overflow: 'hidden',
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.12,
+      shadowRadius: 3,
+      elevation: 3,
+    },
+    button: {
+      width: BTN_SIZE,
+      height: BTN_SIZE,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+    },
+    buttonPressed: {
+      backgroundColor: colors.background,
+    },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    symbol: {
+      fontSize: 26,
+      fontWeight: '500',
+      color: colors.text,
+      lineHeight: 28,
+    },
+  });
+}

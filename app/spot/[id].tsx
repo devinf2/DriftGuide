@@ -7,7 +7,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
@@ -50,17 +51,50 @@ function SpotModalHeader({
   onBack: () => void;
   onOpenMenu: () => void;
 }) {
+  const { colors } = useAppTheme();
+  const headerStyles = useMemo(
+    () =>
+      StyleSheet.create({
+        spotModalHeader: {
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.primary,
+          paddingBottom: Spacing.sm,
+          paddingHorizontal: Spacing.xs,
+        },
+        spotModalHeaderSide: {
+          width: 44,
+          justifyContent: 'center',
+        },
+        spotModalHeaderSideEnd: {
+          alignItems: 'flex-end',
+        },
+        spotModalHeaderTitle: {
+          flex: 1,
+          color: colors.textInverse,
+          fontSize: FontSize.xl,
+          fontWeight: '700',
+          textAlign: 'center',
+        },
+        spotModalHeaderIconSlot: {
+          width: 24,
+          height: 24,
+        },
+      }),
+    [colors],
+  );
+
   return (
-    <View style={[styles.spotModalHeader, { paddingTop: topInset }]}>
-      <View style={styles.spotModalHeaderSide}>
+    <View style={[headerStyles.spotModalHeader, { paddingTop: topInset }]}>
+      <View style={headerStyles.spotModalHeaderSide}>
         <Pressable onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Go back">
-          <Ionicons name="chevron-back" size={28} color="#FFFFFF" />
+          <Ionicons name="chevron-back" size={28} color={colors.textInverse} />
         </Pressable>
       </View>
-      <Text style={styles.spotModalHeaderTitle} numberOfLines={1}>
+      <Text style={headerStyles.spotModalHeaderTitle} numberOfLines={1}>
         {title}
       </Text>
-      <View style={[styles.spotModalHeaderSide, styles.spotModalHeaderSideEnd]}>
+      <View style={[headerStyles.spotModalHeaderSide, headerStyles.spotModalHeaderSideEnd]}>
         {showMenu ? (
           <Pressable
             onPress={onOpenMenu}
@@ -68,10 +102,10 @@ function SpotModalHeader({
             accessibilityRole="button"
             accessibilityLabel="Location options"
           >
-            <MaterialIcons name="more-vert" size={24} color="#FFFFFF" />
+            <MaterialIcons name="more-vert" size={24} color={colors.textInverse} />
           </Pressable>
         ) : (
-          <View style={styles.spotModalHeaderIconSlot} />
+          <View style={headerStyles.spotModalHeaderIconSlot} />
         )}
       </View>
     </View>
@@ -79,6 +113,9 @@ function SpotModalHeader({
 }
 
 export default function SpotFishingTripScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createSpotStyles(colors), [colors]);
+
   const { id, planTripPicker, fromPlanTrip } = useLocalSearchParams<{
     id: string;
     planTripPicker?: string;
@@ -209,9 +246,18 @@ export default function SpotFishingTripScreen() {
   }, [location, locations]);
 
   const spotMapboxMarkers = useMemo(() => {
-    const catalog = buildCatalogMapboxMarkers(spotMapLocations, (loc) => {
-      if (loc.id !== id) router.push(`/spot/${loc.id}`);
-    });
+    const catalog = buildCatalogMapboxMarkers(
+      spotMapLocations,
+      (loc) => {
+        if (loc.id !== id) router.push(`/spot/${loc.id}`);
+      },
+      {
+        primary: colors.primary,
+        surface: colors.surface,
+        surfaceElevated: colors.surfaceElevated,
+        colorScheme: resolvedScheme,
+      },
+    );
     const access = approvedAccessPoints.map((ap) => ({
       id: `ap-${ap.id}`,
       coordinate: [ap.longitude, ap.latitude] as [number, number],
@@ -219,12 +265,23 @@ export default function SpotFishingTripScreen() {
       useMarkerView: true,
       children: (
         <View style={styles.accessPointMapBubble}>
-          <MaterialIcons name="directions-walk" size={18} color={Colors.success} />
+          <MaterialIcons name="directions-walk" size={18} color={colors.success} />
         </View>
       ),
     }));
     return [...catalog, ...access];
-  }, [spotMapLocations, approvedAccessPoints, id, router]);
+  }, [
+    spotMapLocations,
+    approvedAccessPoints,
+    id,
+    router,
+    colors.primary,
+    colors.surface,
+    colors.surfaceElevated,
+    colors.success,
+    resolvedScheme,
+    styles,
+  ]);
 
   useEffect(() => {
     if (activeTab !== 'conditions' || !location) return;
@@ -448,7 +505,7 @@ export default function SpotFishingTripScreen() {
           onOpenMenu={() => setManageMenuOpen(true)}
         />
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={Colors.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingLabel}>Loading conditions…</Text>
         </View>
       </View>
@@ -499,29 +556,29 @@ export default function SpotFishingTripScreen() {
                   const isFull = i < fullStars;
                   const isPartial = i === fullStars && partial > 0.05;
                   if (isFull) {
-                    return <Ionicons key={i} name="star" size={22} color={Colors.textInverse} />;
+                    return <Ionicons key={i} name="star" size={22} color={colors.textInverse} />;
                   }
                   if (isPartial) {
                     return (
                       <View key={i} style={styles.starPartialWrap}>
-                        <Ionicons name="star-outline" size={22} color={Colors.textInverse} style={styles.starOutlineBg} />
+                        <Ionicons name="star-outline" size={22} color={colors.textInverse} style={styles.starOutlineBg} />
                         <View style={[styles.starPartialFill, { width: 22 * partial }]}>
-                          <Ionicons name="star" size={22} color={Colors.textInverse} />
+                          <Ionicons name="star" size={22} color={colors.textInverse} />
                         </View>
                       </View>
                     );
                   }
-                  return <Ionicons key={i} name="star-outline" size={22} color={Colors.textInverse} />;
+                  return <Ionicons key={i} name="star-outline" size={22} color={colors.textInverse} />;
                 })}
                 {score.showFire && (
-                  <Ionicons name="flame" size={20} color={Colors.warning} style={styles.fireIcon} />
+                  <Ionicons name="flame" size={20} color={colors.warning} style={styles.fireIcon} />
                 )}
               </View>
             </View>
           )}
           <View style={[styles.tile, styles.bestTimeTile]}>
             {summaryLoading ? (
-              <ActivityIndicator size="small" color={Colors.primary} style={styles.tileLoader} />
+              <ActivityIndicator size="small" color={colors.primary} style={styles.tileLoader} />
             ) : bestTime ? (
               <Text style={styles.bestTimeValue} numberOfLines={1}>{bestTime}</Text>
             ) : (
@@ -537,7 +594,7 @@ export default function SpotFishingTripScreen() {
             <View style={styles.conditionsCard}>
             <View style={styles.conditionsBlocksRow}>
               <View style={styles.conditionCloudWrap}>
-                <Ionicons name={getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap} size={28} color={Colors.secondary} />
+                <Ionicons name={getWeatherIconName(conditions.sky.condition) as keyof typeof Ionicons.glyphMap} size={28} color={colors.secondary} />
               </View>
               <View style={styles.conditionBlock}>
                 <View style={styles.conditionBlockValueWrap}>
@@ -568,7 +625,7 @@ export default function SpotFishingTripScreen() {
         <Text style={styles.sectionTitleAbove}>Report</Text>
         <View style={styles.reportCard}>
           {summaryLoading ? (
-            <ActivityIndicator size="small" color={Colors.primary} style={styles.reportLoader} />
+            <ActivityIndicator size="small" color={colors.primary} style={styles.reportLoader} />
           ) : report ? (
             <Text style={styles.reportText}>{report}</Text>
           ) : (
@@ -577,12 +634,12 @@ export default function SpotFishingTripScreen() {
           {report && conditions && !detailedReport && !detailedReportLoading && (
             <Pressable style={styles.moreInfoButton} onPress={handleMoreInfo}>
               <Text style={styles.moreInfoButtonText}>More info</Text>
-              <Ionicons name="chevron-down" size={16} color={Colors.primary} />
+              <Ionicons name="chevron-down" size={16} color={colors.primary} />
             </Pressable>
           )}
           {detailedReportLoading && (
             <View style={styles.detailedReportLoader}>
-              <ActivityIndicator size="small" color={Colors.primary} />
+              <ActivityIndicator size="small" color={colors.primary} />
               <Text style={styles.detailedReportLoaderText}>Getting detailed report…</Text>
             </View>
           )}
@@ -597,7 +654,7 @@ export default function SpotFishingTripScreen() {
         <Text style={styles.sectionTitleAbove}>Top Flies</Text>
         <View style={styles.fliesCard}>
           {summaryLoading ? (
-            <ActivityIndicator size="small" color={Colors.primary} style={styles.fliesLoader} />
+            <ActivityIndicator size="small" color={colors.primary} style={styles.fliesLoader} />
           ) : topFlies.length > 0 ? (
             <View style={styles.fliesTwoCol}>
               <View style={styles.fliesColumn}>
@@ -642,7 +699,7 @@ export default function SpotFishingTripScreen() {
             <Text style={[styles.guideSectionLabel, styles.guideSectionLabelFirst]}>Best time to fish</Text>
             <View style={styles.guideCard}>
               {summaryLoading ? (
-                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
               ) : bestTime ? (
                 <Text style={styles.strategyBestTime}>{bestTime}</Text>
               ) : (
@@ -654,7 +711,7 @@ export default function SpotFishingTripScreen() {
             <Text style={styles.guideSectionLabel}>Top flies</Text>
             <View style={styles.guideCard}>
               {summaryLoading ? (
-                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
               ) : topFlies.length > 0 ? (
                 <View style={styles.fliesTwoCol}>
                   <View style={styles.fliesColumn}>
@@ -683,7 +740,7 @@ export default function SpotFishingTripScreen() {
             <Text style={styles.guideSectionLabel}>How to fish it</Text>
             <View style={styles.guideCard}>
               {howToFishLoading ? (
-                <ActivityIndicator size="small" color={Colors.primary} style={styles.strategyLoader} />
+                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
               ) : howToFish ? (
                 <Text style={styles.howToFishText}>{howToFish}</Text>
               ) : (
@@ -697,13 +754,13 @@ export default function SpotFishingTripScreen() {
                 <Text style={[styles.bubbleText, msg.role === 'user' && styles.bubbleTextUser]}>{msg.text}</Text>
               </View>
             ))}
-            {aiLoading && <ActivityIndicator size="small" color={Colors.primary} style={{ marginVertical: Spacing.sm }} />}
+            {aiLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: Spacing.sm }} />}
           </ScrollView>
           <View style={styles.aiInputRow}>
             <TextInput
               style={styles.aiInput}
               placeholder="Ask about this spot…"
-              placeholderTextColor={Colors.textTertiary}
+              placeholderTextColor={colors.textTertiary}
               value={aiInput}
               onChangeText={setAiInput}
               editable={!aiLoading}
@@ -711,7 +768,7 @@ export default function SpotFishingTripScreen() {
               maxLength={500}
             />
             <Pressable style={styles.aiSendButton} onPress={handleAskAI} disabled={!aiInput.trim() || aiLoading}>
-              <Ionicons name="send" size={20} color={Colors.textInverse} />
+              <Ionicons name="send" size={20} color={colors.textInverse} />
             </Pressable>
           </View>
         </KeyboardAvoidingView>
@@ -722,7 +779,7 @@ export default function SpotFishingTripScreen() {
           if (lat == null || lng == null) {
             return (
               <View style={styles.mapTabPlaceholder}>
-                <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+                <MaterialIcons name="map" size={48} color={colors.textTertiary} />
                 <Text style={styles.mapTabPlaceholderText}>No coordinates for this location.</Text>
               </View>
             );
@@ -771,7 +828,7 @@ export default function SpotFishingTripScreen() {
               ]}
               onPress={handleEditPin}
             >
-              <MaterialIcons name="edit-location-alt" size={22} color={Colors.primary} />
+              <MaterialIcons name="edit-location-alt" size={22} color={colors.primary} />
               <Text style={styles.manageMenuRowText}>Edit pin location</Text>
             </Pressable>
             <Pressable
@@ -784,7 +841,7 @@ export default function SpotFishingTripScreen() {
               <MaterialIcons
                 name={location?.is_public !== false ? 'visibility-off' : 'visibility'}
                 size={22}
-                color={Colors.primary}
+                color={colors.primary}
               />
               <Text style={styles.manageMenuRowText}>
                 {location?.is_public !== false ? 'Make private' : 'Make public'}
@@ -797,7 +854,7 @@ export default function SpotFishingTripScreen() {
               ]}
               onPress={handleDeleteLocation}
             >
-              <MaterialIcons name="delete-outline" size={22} color={Colors.error} />
+              <MaterialIcons name="delete-outline" size={22} color={colors.error} />
               <Text style={[styles.manageMenuRowText, styles.manageMenuRowDestructive]}>Delete spot</Text>
             </Pressable>
             <Pressable style={styles.manageMenuCancel} onPress={() => setManageMenuOpen(false)}>
@@ -810,35 +867,11 @@ export default function SpotFishingTripScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  spotModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#2C4670',
-    paddingBottom: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-  },
-  spotModalHeaderSide: {
-    width: 44,
-    justifyContent: 'center',
-  },
-  spotModalHeaderSideEnd: {
-    alignItems: 'flex-end',
-  },
-  spotModalHeaderTitle: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  spotModalHeaderIconSlot: {
-    width: 24,
-    height: 24,
-  },
+function createSpotStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   scrollView: {
     flex: 1,
@@ -852,11 +885,11 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingBottom: Spacing.lg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.background,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
   },
   selectButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     alignItems: 'center',
@@ -864,7 +897,7 @@ const styles = StyleSheet.create({
   selectButtonText: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   centered: {
     flex: 1,
@@ -875,11 +908,11 @@ const styles = StyleSheet.create({
   loadingLabel: {
     marginTop: Spacing.md,
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   errorText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   tileLabelsRow: {
     flexDirection: 'row',
@@ -890,7 +923,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
@@ -898,7 +931,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     textAlign: 'left',
@@ -916,7 +949,7 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   scoreTile: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     alignItems: 'center',
   },
   starsRow: {
@@ -944,9 +977,9 @@ const styles = StyleSheet.create({
     marginLeft: Spacing.sm,
   },
   bestTimeTile: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   tileLoader: {
     marginVertical: Spacing.xs,
@@ -954,24 +987,24 @@ const styles = StyleSheet.create({
   bestTimeValue: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   bestTimePlaceholder: {
     fontSize: FontSize.md,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   conditionsCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   sectionTitle: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: Spacing.sm,
@@ -979,7 +1012,7 @@ const styles = StyleSheet.create({
   sectionTitleAbove: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: Spacing.xs,
@@ -1005,37 +1038,37 @@ const styles = StyleSheet.create({
   },
   conditionBlockLabel: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   conditionBlockTemp: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.primary,
+    color: colors.primary,
   },
   conditionBlockValue: {
     fontSize: FontSize.md,
     fontWeight: '500',
-    color: Colors.text,
+    color: colors.text,
   },
   reportCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   reportLoader: {
     marginVertical: Spacing.sm,
   },
   reportText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     lineHeight: 22,
   },
   reportPlaceholder: {
     fontSize: FontSize.md,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontStyle: 'italic',
   },
   moreInfoButton: {
@@ -1049,7 +1082,7 @@ const styles = StyleSheet.create({
   moreInfoButtonText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   detailedReportLoader: {
     flexDirection: 'row',
@@ -1059,26 +1092,26 @@ const styles = StyleSheet.create({
   },
   detailedReportLoaderText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   detailedReportBlock: {
     marginTop: Spacing.sm,
     paddingTop: Spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
   },
   detailedReportText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     lineHeight: 24,
   },
   fliesCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   fliesLoader: {
     marginVertical: Spacing.sm,
@@ -1100,16 +1133,16 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: Colors.secondary,
+    backgroundColor: colors.secondary,
   },
   flyName: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   fliesPlaceholder: {
     fontSize: FontSize.md,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     fontStyle: 'italic',
   },
   strategyContent: {
@@ -1117,17 +1150,17 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.lg,
   },
   strategyCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   guideSectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginTop: Spacing.sm,
@@ -1137,12 +1170,12 @@ const styles = StyleSheet.create({
     marginTop: 0,
   },
   guideCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
     marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   strategyLoader: {
     marginVertical: Spacing.sm,
@@ -1150,11 +1183,11 @@ const styles = StyleSheet.create({
   strategyBestTime: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   howToFishText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     lineHeight: 24,
   },
   guideStrategyFirstLabel: {
@@ -1163,9 +1196,9 @@ const styles = StyleSheet.create({
 
   tabBar: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   tab: {
     flex: 1,
@@ -1176,15 +1209,15 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomColor: Colors.primary,
+    borderBottomColor: colors.primary,
   },
   tabLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   tabLabelActive: {
-    color: Colors.primary,
+    color: colors.primary,
   },
   tabScroll: {
     flex: 1,
@@ -1199,24 +1232,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.sm,
     padding: Spacing.lg,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginBottom: Spacing.md,
   },
   aiGetRecButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   smartRecCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   smartRecHeader: {
     flexDirection: 'row',
@@ -1227,37 +1260,37 @@ const styles = StyleSheet.create({
   smartRecTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   smartRecRefreshText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   smartRecFly: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   smartRecColor: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   smartRecReason: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     marginTop: Spacing.sm,
     lineHeight: 22,
   },
   confidenceText: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: Spacing.sm,
   },
   aiContextNote: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginBottom: Spacing.md,
   },
   bubble: {
@@ -1268,46 +1301,46 @@ const styles = StyleSheet.create({
   },
   userBubble: {
     alignSelf: 'flex-end',
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   aiBubble: {
     alignSelf: 'flex-start',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   bubbleText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   bubbleTextUser: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   aiInputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     padding: Spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.background,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
   },
   aiInput: {
     flex: 1,
     minHeight: 40,
     maxHeight: 100,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   aiSendButton: {
     marginLeft: Spacing.sm,
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1319,9 +1352,9 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderWidth: 1.5,
-    borderColor: Colors.success,
+    borderColor: colors.success,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -1340,13 +1373,13 @@ const styles = StyleSheet.create({
     minHeight: 280,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     padding: Spacing.xl,
     gap: Spacing.md,
   },
   mapTabPlaceholderText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   manageMenuBackdrop: {
@@ -1359,12 +1392,12 @@ const styles = StyleSheet.create({
   },
   manageMenuCard: {
     minWidth: 260,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.xs,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 8,
@@ -1373,7 +1406,7 @@ const styles = StyleSheet.create({
   manageMenuTitle: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     paddingHorizontal: Spacing.md,
@@ -1382,7 +1415,7 @@ const styles = StyleSheet.create({
   },
   manageMenuHint: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     lineHeight: 18,
     paddingHorizontal: Spacing.md,
     paddingBottom: Spacing.sm,
@@ -1400,23 +1433,25 @@ const styles = StyleSheet.create({
   },
   manageMenuRowText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '600',
     flex: 1,
   },
   manageMenuRowDestructive: {
-    color: Colors.error,
+    color: colors.error,
   },
   manageMenuCancel: {
     paddingVertical: Spacing.md,
     alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: colors.border,
     marginTop: Spacing.xs,
   },
   manageMenuCancelText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
-});
+  });
+}
+

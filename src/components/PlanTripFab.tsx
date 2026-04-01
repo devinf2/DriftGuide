@@ -1,7 +1,8 @@
-import { BorderRadius, Colors, Spacing } from '@/src/constants/theme';
+import { BorderRadius, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Keyboard, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -17,11 +18,41 @@ export const PLAN_TRIP_FAB_MAP_CLEARANCE = FAB_SIZE + FAB_GAP_ABOVE_TAB + Spacin
 /** AI Guide: lift FAB above the message composer (input row + padding). */
 const GUIDE_COMPOSER_LIFT = 72;
 
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    wrap: {
+      position: 'absolute',
+      right: Spacing.lg,
+      zIndex: 50,
+      pointerEvents: 'box-none',
+    },
+    fab: {
+      width: FAB_SIZE,
+      height: FAB_SIZE,
+      borderRadius: BorderRadius.full,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: colors.primaryDark,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.35,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    fabPressed: {
+      opacity: 0.92,
+      transform: [{ scale: 0.97 }],
+    },
+  });
+}
+
 export function PlanTripFab() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -34,31 +65,26 @@ export function PlanTripFab() {
     };
   }, []);
 
-  const hideOnProfile =
-    pathname === '/profile' ||
-    pathname.startsWith('/profile/');
+  const hideOnProfile = pathname === '/profile' || pathname.startsWith('/profile/');
 
-  const isGuideTab = pathname === '/guide';
+  const homeWithChatComposer = pathname === '/home' || pathname === '/guide';
 
   if (hideOnProfile) {
     return null;
   }
 
-  if (isGuideTab && keyboardOpen) {
+  if (homeWithChatComposer && keyboardOpen) {
     return null;
   }
 
   const tabBarBottomPad = Math.max(insets.bottom, 8);
   let bottom = tabBarBottomPad + TAB_BAR_EXTRA + FAB_GAP_ABOVE_TAB;
-  if (isGuideTab) {
+  if (homeWithChatComposer) {
     bottom += GUIDE_COMPOSER_LIFT;
   }
 
   return (
-    <View
-      style={[styles.wrap, { bottom }]}
-      pointerEvents="box-none"
-    >
+    <View style={[styles.wrap, { bottom }]} pointerEvents="box-none">
       <Pressable
         style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
         onPress={() => router.push('/trip/new')}
@@ -66,34 +92,8 @@ export function PlanTripFab() {
         accessibilityRole="button"
         accessibilityLabel="Plan a trip"
       >
-        <MaterialCommunityIcons name="fish" size={ICON_SIZE} color={Colors.textInverse} />
+        <MaterialCommunityIcons name="fish" size={ICON_SIZE} color={colors.textInverse} />
       </Pressable>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: {
-    position: 'absolute',
-    right: Spacing.lg,
-    zIndex: 50,
-    pointerEvents: 'box-none',
-  },
-  fab: {
-    width: FAB_SIZE,
-    height: FAB_SIZE,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.primaryDark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  fabPressed: {
-    opacity: 0.92,
-    transform: [{ scale: 0.97 }],
-  },
-});

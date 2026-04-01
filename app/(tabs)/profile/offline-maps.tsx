@@ -1,4 +1,5 @@
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   formatOfflineDownloadSummary,
   offlineWaterwayLabel,
@@ -12,7 +13,7 @@ import {
 import { useAuthStore } from '@/src/stores/authStore';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -30,6 +31,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function OfflineMapsScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createOfflineMapsStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuthStore();
@@ -101,7 +104,7 @@ export default function OfflineMapsScreen() {
                       accessibilityRole="button"
                       accessibilityLabel="View cached offline data"
                     >
-                      <MaterialCommunityIcons name="database-outline" size={22} color={Colors.primary} />
+                      <MaterialCommunityIcons name="database-outline" size={22} color={colors.primary} />
                     </Pressable>
                     <Pressable
                       style={styles.textBtn}
@@ -109,7 +112,7 @@ export default function OfflineMapsScreen() {
                       disabled={isRefreshing}
                     >
                       {isRefreshing ? (
-                        <ActivityIndicator size="small" color={Colors.primary} />
+                        <ActivityIndicator size="small" color={colors.primary} />
                       ) : (
                         <Text style={styles.textBtnLabel}>Refresh</Text>
                       )}
@@ -172,97 +175,99 @@ export default function OfflineMapsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.xl },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
-  },
-  sectionTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: Spacing.sm,
-  },
-  helpText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.md,
-  },
-  emptyText: {
-    fontSize: FontSize.sm,
-    color: Colors.textTertiary,
-    textAlign: 'center',
-    paddingVertical: Spacing.xl,
-  },
-  waterwayRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-  },
-  waterwayName: { flex: 1, fontSize: FontSize.md, color: Colors.text },
-  waterwayActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  iconBtn: {
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.xs,
-    minWidth: 40,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  textBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm, minWidth: 56, alignItems: 'center' },
-  textBtnLabel: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
-  removeBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm },
-  removeBtnText: { fontSize: FontSize.sm, color: Colors.error, fontWeight: '600' },
-  addBtn: {
-    marginTop: Spacing.md,
-    backgroundColor: Colors.background,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    borderRadius: BorderRadius.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  addBtnText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.primary },
-  detailRoot: { flex: 1 },
-  detailBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  detailForeground: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    padding: Spacing.lg,
-    zIndex: 1,
-  },
-  detailCard: {
-    maxHeight: '85%' as const,
-    width: '100%',
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-  },
-  detailTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.text },
-  detailSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.xs, marginBottom: Spacing.md },
-  detailScroll: {},
-  detailScrollContent: { paddingBottom: Spacing.sm },
-  detailBody: {
-    fontSize: FontSize.sm,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: undefined }),
-    color: Colors.text,
-    lineHeight: 20,
-  },
-  detailClose: { marginTop: Spacing.md, paddingVertical: Spacing.sm, alignItems: 'center' },
-  detailCloseText: { fontSize: FontSize.md, fontWeight: '600', color: Colors.primary },
-});
+function createOfflineMapsStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    content: { padding: Spacing.xl },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.lg,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+        android: { elevation: 2 },
+      }),
+    },
+    sectionTitle: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+      marginBottom: Spacing.sm,
+    },
+    helpText: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: Spacing.md,
+    },
+    emptyText: {
+      fontSize: FontSize.sm,
+      color: colors.textTertiary,
+      textAlign: 'center',
+      paddingVertical: Spacing.xl,
+    },
+    waterwayRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: Spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderLight,
+    },
+    waterwayName: { flex: 1, fontSize: FontSize.md, color: colors.text },
+    waterwayActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+    iconBtn: {
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: Spacing.xs,
+      minWidth: 40,
+      minHeight: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    textBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm, minWidth: 56, alignItems: 'center' },
+    textBtnLabel: { fontSize: FontSize.sm, color: colors.primary, fontWeight: '600' },
+    removeBtn: { paddingVertical: Spacing.xs, paddingHorizontal: Spacing.sm },
+    removeBtnText: { fontSize: FontSize.sm, color: colors.error, fontWeight: '600' },
+    addBtn: {
+      marginTop: Spacing.md,
+      backgroundColor: colors.background,
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.lg,
+      borderRadius: BorderRadius.sm,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    addBtnText: { fontSize: FontSize.md, fontWeight: '600', color: colors.primary },
+    detailRoot: { flex: 1 },
+    detailBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+    detailForeground: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: 'center',
+      padding: Spacing.lg,
+      zIndex: 1,
+    },
+    detailCard: {
+      maxHeight: '85%' as const,
+      width: '100%',
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.lg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    detailTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
+    detailSubtitle: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs, marginBottom: Spacing.md },
+    detailScroll: {},
+    detailScrollContent: { paddingBottom: Spacing.sm },
+    detailBody: {
+      fontSize: FontSize.sm,
+      fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: undefined }),
+      color: colors.text,
+      lineHeight: 20,
+    },
+    detailClose: { marginTop: Spacing.md, paddingVertical: Spacing.sm, alignItems: 'center' },
+    detailCloseText: { fontSize: FontSize.md, fontWeight: '600', color: colors.primary },
+  });
+}

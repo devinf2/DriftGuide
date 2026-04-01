@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/src/stores/authStore';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   FLY_TYPE_LABELS,
   FLY_SIZES as FLY_SIZES_LIST,
@@ -42,10 +43,14 @@ function FlyRow({
   fly,
   onEdit,
   onDelete,
+  colors,
+  styles,
 }: {
   fly: Fly;
   onEdit: () => void;
   onDelete: () => void;
+  colors: ThemeColors;
+  styles: any;
 }) {
   const detail = [fly.size ? `#${fly.size}` : null, fly.color].filter(Boolean).join(' · ') || null;
   const presentationLabel =
@@ -57,7 +62,7 @@ function FlyRow({
         <Image source={{ uri: fly.photo_url }} style={styles.flyRowImage} />
       ) : (
         <View style={styles.flyRowImagePlaceholder}>
-          <Ionicons name="fish-outline" size={24} color={Colors.textTertiary} />
+          <Ionicons name="fish-outline" size={24} color={colors.textTertiary} />
         </View>
       )}
       <View style={styles.flyRowMain}>
@@ -77,10 +82,10 @@ function FlyRow({
       </View>
       <View style={styles.flyRowActions}>
         <Pressable style={styles.iconButton} onPress={onEdit} hitSlop={8}>
-          <Ionicons name="pencil" size={20} color={Colors.primary} />
+          <Ionicons name="pencil" size={20} color={colors.primary} />
         </Pressable>
         <Pressable style={styles.iconButton} onPress={onDelete} hitSlop={8}>
-          <Ionicons name="trash-outline" size={20} color={Colors.error} />
+          <Ionicons name="trash-outline" size={20} color={colors.error} />
         </Pressable>
       </View>
     </View>
@@ -88,6 +93,8 @@ function FlyRow({
 }
 
 export default function FlyBoxScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createFlyBoxStyles(colors), [colors]);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
@@ -192,6 +199,7 @@ export default function FlyBoxScreen() {
     const nameVal = name.trim();
     const hasPattern = selectedCatalogFly || (nameVal && (editingFly || presentation != null));
     if (!hasPattern || size === '' || !color.trim()) return;
+    const sizeNum = Number(size);
     setSaving(true);
     try {
       let photoUrl: string | null = null;
@@ -201,7 +209,7 @@ export default function FlyBoxScreen() {
       if (editingFly) {
         await updateFly(editingFly.id, {
           name: nameVal,
-          size: size === '' ? null : Number(size),
+          size: sizeNum,
           color: color.trim() || null,
           presentation,
           quantity,
@@ -212,7 +220,7 @@ export default function FlyBoxScreen() {
           ...(selectedCatalogFly
             ? { fly_id: selectedCatalogFly.id, ...(photoUrl != null && { photo_url: photoUrl }) }
             : { name: nameVal, type: 'fly', presentation: presentation ?? undefined, photo_url: photoUrl }),
-          size: size === '' ? null : Number(size),
+          size: sizeNum,
           color: color.trim() || null,
           quantity,
         });
@@ -262,10 +270,10 @@ export default function FlyBoxScreen() {
         </Text>
 
         {loading ? (
-          <ActivityIndicator size="large" color={Colors.primary} style={styles.loader} />
+          <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
         ) : flies.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="fish-outline" size={48} color={Colors.textTertiary} />
+            <Ionicons name="fish-outline" size={48} color={colors.textTertiary} />
             <Text style={styles.emptyText}>No flies yet</Text>
             <Text style={styles.emptySubtext}>Tap Add Fly to build your tackle box</Text>
           </View>
@@ -277,6 +285,8 @@ export default function FlyBoxScreen() {
                 fly={fly}
                 onEdit={() => openEdit(fly)}
                 onDelete={() => handleDelete(fly)}
+                colors={colors}
+                styles={styles}
               />
             ))}
           </View>
@@ -284,7 +294,7 @@ export default function FlyBoxScreen() {
       </ScrollView>
 
       <Pressable style={[styles.fab, { bottom: insets.bottom + Spacing.lg }]} onPress={openAdd}>
-        <Ionicons name="add" size={28} color={Colors.textInverse} />
+        <Ionicons name="add" size={28} color={colors.textInverse} />
         <Text style={styles.fabLabel}>Add Fly</Text>
       </Pressable>
 
@@ -310,7 +320,7 @@ export default function FlyBoxScreen() {
               <Text style={[styles.dropdownTriggerText, !selectedCatalogFly && !trimmedName && styles.dropdownPlaceholder]} numberOfLines={1}>
                 {selectedCatalogFly ? selectedCatalogFly.name : trimmedName || 'Select fly'}
               </Text>
-              <Ionicons name="chevron-down" size={20} color={Colors.textSecondary} />
+              <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
             </Pressable>
 
             {isOtherPattern && (
@@ -321,7 +331,7 @@ export default function FlyBoxScreen() {
                   value={name}
                   onChangeText={setName}
                   placeholder="e.g. Pheasant Tail Nymph"
-                  placeholderTextColor={Colors.textTertiary}
+                  placeholderTextColor={colors.textTertiary}
                   autoCapitalize="words"
                 />
                 <Text style={styles.label}>Presentation (how it fishes)</Text>
@@ -346,7 +356,7 @@ export default function FlyBoxScreen() {
               <Text style={[styles.dropdownTriggerText, size === '' && styles.dropdownPlaceholder]} numberOfLines={1}>
                 {size === '' ? 'Select size' : `#${size}`}
               </Text>
-              <Ionicons name="chevron-down" size={20} color={Colors.textSecondary} />
+              <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
             </Pressable>
 
             <Text style={styles.label}>Color</Text>
@@ -354,7 +364,7 @@ export default function FlyBoxScreen() {
               <Text style={[styles.dropdownTriggerText, !color.trim() && styles.dropdownPlaceholder]} numberOfLines={1}>
                 {color.trim() || 'Select color'}
               </Text>
-              <Ionicons name="chevron-down" size={20} color={Colors.textSecondary} />
+              <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
             </Pressable>
 
             <Text style={styles.label}>Quantity</Text>
@@ -364,14 +374,14 @@ export default function FlyBoxScreen() {
                 onPress={() => setQuantity((q) => Math.max(1, q - 1))}
                 disabled={quantity <= 1}
               >
-                <Ionicons name="remove" size={20} color={quantity <= 1 ? Colors.textTertiary : Colors.primary} />
+                <Ionicons name="remove" size={20} color={quantity <= 1 ? colors.textTertiary : colors.primary} />
               </Pressable>
               <Text style={styles.quantityValue}>×{quantity}</Text>
               <Pressable
                 style={styles.quantityBtn}
                 onPress={() => setQuantity((q) => q + 1)}
               >
-                <Ionicons name="add" size={20} color={Colors.primary} />
+                <Ionicons name="add" size={20} color={colors.primary} />
               </Pressable>
             </View>
 
@@ -457,13 +467,13 @@ export default function FlyBoxScreen() {
                       style={styles.photoRemove}
                       onPress={() => (photoUri ? setPhotoUri(null) : setClearPhoto(true))}
                     >
-                      <Ionicons name="close-circle" size={24} color={Colors.error} />
+                      <Ionicons name="close-circle" size={24} color={colors.error} />
                     </Pressable>
                   ) : null}
                 </View>
               ) : null}
               <Pressable style={styles.addPhotoButton} onPress={pickImage}>
-                <Ionicons name="camera-outline" size={22} color={Colors.primary} />
+                <Ionicons name="camera-outline" size={22} color={colors.primary} />
                 <Text style={styles.addPhotoButtonText}>
                   {photoUri || (editingFly?.photo_url && !clearPhoto) || selectedCatalogFly?.photo_url ? 'Change photo' : 'Add photo'}
                 </Text>
@@ -480,7 +490,7 @@ export default function FlyBoxScreen() {
                 disabled={!canSave}
               >
                 {saving ? (
-                  <ActivityIndicator size="small" color={Colors.textInverse} />
+                  <ActivityIndicator size="small" color={colors.textInverse} />
                 ) : (
                   <Text style={styles.saveButtonText}>{editingFly ? 'Save' : 'Add'}</Text>
                 )}
@@ -493,10 +503,11 @@ export default function FlyBoxScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createFlyBoxStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   scroll: { flex: 1 },
   scrollContent: {
@@ -505,7 +516,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: Spacing.lg,
     lineHeight: 20,
   },
@@ -517,12 +528,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     marginTop: Spacing.md,
   },
   emptySubtext: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
     marginTop: Spacing.xs,
   },
   list: {
@@ -531,7 +542,7 @@ const styles = StyleSheet.create({
   flyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.sm,
     padding: Spacing.md,
     ...Platform.select({
@@ -544,14 +555,14 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: BorderRadius.sm,
     marginRight: Spacing.md,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   flyRowImagePlaceholder: {
     width: 48,
     height: 48,
     borderRadius: BorderRadius.sm,
     marginRight: Spacing.md,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -567,12 +578,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   flyRowQuantity: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   flyRowMeta: {
     flexDirection: 'row',
@@ -583,20 +594,20 @@ const styles = StyleSheet.create({
   },
   flyRowType: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   flyRowPresentation: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     fontStyle: 'italic',
   },
   flyRowDetail: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   flyRowUses: {
     fontSize: FontSize.xs,
-    color: Colors.primary,
+    color: colors.primary,
   },
   flyRowActions: {
     flexDirection: 'row',
@@ -612,7 +623,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     borderRadius: BorderRadius.full,
@@ -624,7 +635,7 @@ const styles = StyleSheet.create({
   fabLabel: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   modalBackdrop: {
     flex: 1,
@@ -632,7 +643,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     padding: Spacing.lg,
@@ -641,7 +652,7 @@ const styles = StyleSheet.create({
   modalHandle: {
     width: 40,
     height: 4,
-    backgroundColor: Colors.border,
+    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: 'center',
     marginBottom: Spacing.md,
@@ -649,23 +660,23 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.lg,
   },
   label: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginBottom: Spacing.xs,
   },
   input: {
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderRadius: BorderRadius.sm,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     marginBottom: Spacing.md,
   },
   dropdownTrigger: {
@@ -673,7 +684,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     borderRadius: BorderRadius.sm,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
@@ -681,11 +692,11 @@ const styles = StyleSheet.create({
   },
   dropdownTriggerText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   dropdownPlaceholder: {
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   dropdownBackdrop: {
     flex: 1,
@@ -693,7 +704,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   dropdownSheet: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     maxHeight: '60%',
@@ -705,18 +716,18 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: colors.border,
   },
   dropdownOptionActive: {
-    backgroundColor: Colors.borderLight,
+    backgroundColor: colors.borderLight,
   },
   dropdownOptionText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
   },
   dropdownOptionTextActive: {
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   quantityRow: {
     flexDirection: 'row',
@@ -728,9 +739,9 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -740,7 +751,7 @@ const styles = StyleSheet.create({
   quantityValue: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     minWidth: 36,
     textAlign: 'center',
   },
@@ -753,21 +764,21 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   typeChipActive: {
-    backgroundColor: `${Colors.primary}18`,
-    borderColor: Colors.primary,
+    backgroundColor: `${colors.primary}18`,
+    borderColor: colors.primary,
   },
   typeChipText: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
   },
   typeChipTextActive: {
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   sizeScroll: {
     marginBottom: Spacing.md,
@@ -778,22 +789,22 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
     marginRight: Spacing.sm,
   },
   sizeChipActive: {
-    backgroundColor: `${Colors.primary}18`,
-    borderColor: Colors.primary,
+    backgroundColor: `${colors.primary}18`,
+    borderColor: colors.primary,
   },
   sizeChipText: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
   },
   sizeChipTextActive: {
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   presentationRow: {
     flexDirection: 'row',
@@ -805,21 +816,21 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.sm,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   presChipActive: {
-    backgroundColor: `${Colors.primary}18`,
-    borderColor: Colors.primary,
+    backgroundColor: `${colors.primary}18`,
+    borderColor: colors.primary,
   },
   presChipText: {
     fontSize: FontSize.sm,
-    color: Colors.text,
+    color: colors.text,
   },
   presChipTextActive: {
     fontWeight: '600',
-    color: Colors.primary,
+    color: colors.primary,
   },
   photoRow: {
     flexDirection: 'row',
@@ -834,7 +845,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   photoRemove: {
     position: 'absolute',
@@ -848,13 +859,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: colors.border,
   },
   addPhotoButtonText: {
     fontSize: FontSize.sm,
-    color: Colors.primary,
+    color: colors.primary,
     fontWeight: '500',
   },
   modalActions: {
@@ -867,19 +878,19 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     alignItems: 'center',
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   cancelButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   saveButton: {
     flex: 1,
     paddingVertical: Spacing.md,
     alignItems: 'center',
     borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   saveButtonDisabled: {
     opacity: 0.6,
@@ -887,6 +898,7 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
-});
+  });
+}

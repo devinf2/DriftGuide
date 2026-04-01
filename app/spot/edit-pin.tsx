@@ -1,7 +1,8 @@
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
-import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   fetchLocationCreatorManageState,
   updateLocationPin,
@@ -26,6 +27,9 @@ import {
 } from 'react-native';
 
 export default function EditSpotPinScreen() {
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createEditPinStyles(colors), [colors]);
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const navigation = useNavigation();
@@ -118,8 +122,14 @@ export default function EditSpotPinScreen() {
   );
 
   const catalogMarkers = useMemo(
-    () => buildCatalogMapboxMarkers(mapCatalogLocations, () => {}),
-    [mapCatalogLocations],
+    () =>
+      buildCatalogMapboxMarkers(mapCatalogLocations, () => {}, {
+        primary: colors.primary,
+        surface: colors.surface,
+        surfaceElevated: colors.surfaceElevated,
+        colorScheme: resolvedScheme,
+      }),
+    [mapCatalogLocations, colors.primary, colors.surface, colors.surfaceElevated, resolvedScheme],
   );
 
   const handleMapIdle = useCallback((state: MapCameraStatePayload) => {
@@ -160,7 +170,7 @@ export default function EditSpotPinScreen() {
             style={[styles.headerActionBtn, { marginRight: Spacing.sm }]}
           >
             {saving ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
+              <ActivityIndicator color={colors.textInverse} size="small" />
             ) : (
               <Text style={styles.headerSave}>Save</Text>
             )}
@@ -192,7 +202,7 @@ export default function EditSpotPinScreen() {
   ) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingLabel}>Loading map…</Text>
       </View>
     );
@@ -201,7 +211,7 @@ export default function EditSpotPinScreen() {
   if (allowed === true && location && !locationsLoading && !coordsReady) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -209,7 +219,7 @@ export default function EditSpotPinScreen() {
   if (!allowed) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -219,7 +229,7 @@ export default function EditSpotPinScreen() {
       <View style={styles.mapContainer}>
         {Platform.OS === 'web' ? (
           <View style={styles.webPlaceholder}>
-            <Ionicons name="map" size={48} color={Colors.textTertiary} />
+            <Ionicons name="map" size={48} color={colors.textTertiary} />
             <Text style={styles.webPlaceholderText}>Edit pin is available in the iOS and Android app with Mapbox.</Text>
           </View>
         ) : (
@@ -235,7 +245,7 @@ export default function EditSpotPinScreen() {
               onZoomLevelChange={setMapZoom}
             />
             <View style={styles.centerPinWrap} pointerEvents="none">
-              <Ionicons name="location-sharp" size={44} color={Colors.primary} style={styles.centerPinIcon} />
+              <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
             </View>
           </>
         )}
@@ -244,7 +254,8 @@ export default function EditSpotPinScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createEditPinStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   headerActionBtn: {
     paddingHorizontal: 4,
     paddingVertical: 4,
@@ -256,26 +267,26 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: Spacing.lg,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   loadingLabel: {
     marginTop: Spacing.md,
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   errorText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   headerSave: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
   },
@@ -295,7 +306,7 @@ const styles = StyleSheet.create({
   webPlaceholderText: {
     marginTop: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   centerPinWrap: {
@@ -306,4 +317,6 @@ const styles = StyleSheet.create({
   centerPinIcon: {
     marginBottom: 26,
   },
-});
+  });
+}
+

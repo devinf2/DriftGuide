@@ -10,7 +10,8 @@ import {
 } from '@/src/utils/offlineDownloadRegion';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { SAMPLE_OFFLINE_MAX_ZOOM, SAMPLE_OFFLINE_MIN_ZOOM } from '@/src/constants/offlineSampleRegion';
-import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { BoundingBox } from '@/src/types/boundingBox';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
@@ -92,6 +93,8 @@ export function OfflineRegionPickerMap({
   frameFullRegionOnMount = true,
   onRegionBboxChange,
 }: OfflineRegionPickerMapProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createOfflineRegionPickerMapStyles(colors), [colors]);
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
   const cameraRef = useRef<CameraRef | null>(null);
@@ -133,36 +136,6 @@ export function OfflineRegionPickerMap({
   const onBboxRef = useRef(onRegionBboxChange);
   onBboxRef.current = onRegionBboxChange;
 
-  const handleMapIdle = useCallback(
-    (e: unknown) => {
-      if (tryFrameInitialRegion()) {
-        return;
-      }
-      const state = e as MapCameraStatePayload;
-      const center = state?.properties?.center;
-      const z = state?.properties?.zoom;
-      if (!center || center.length < 2) return;
-      const [lng, lat] = center;
-      const bbox = boundingBoxRectAroundCenter(lng, lat, halfWidthKm, halfHeightKm);
-      setLiveBbox(bbox);
-      onBboxRef.current(bbox, [lng, lat]);
-      if (typeof z === 'number') setLiveZoom(roundZoom(z));
-    },
-    [halfWidthKm, halfHeightKm, tryFrameInitialRegion],
-  );
-
-  useEffect(() => {
-    hasFramedInitialRef.current = false;
-    const bbox = boundingBoxRectAroundCenter(
-      initialCenter[0],
-      initialCenter[1],
-      halfWidthKm,
-      halfHeightKm,
-    );
-    setLiveBbox(bbox);
-    onBboxRef.current(bbox, initialCenter);
-  }, [initialCenter, halfWidthKm, halfHeightKm]);
-
   const fitCameraToBbox = useCallback((bbox: BoundingBox) => {
     const fit = cameraRef.current?.fitBounds;
     if (!fit) return;
@@ -194,6 +167,36 @@ export function OfflineRegionPickerMap({
     fitCameraToBbox,
   ]);
 
+  const handleMapIdle = useCallback(
+    (e: unknown) => {
+      if (tryFrameInitialRegion()) {
+        return;
+      }
+      const state = e as MapCameraStatePayload;
+      const center = state?.properties?.center;
+      const z = state?.properties?.zoom;
+      if (!center || center.length < 2) return;
+      const [lng, lat] = center;
+      const bbox = boundingBoxRectAroundCenter(lng, lat, halfWidthKm, halfHeightKm);
+      setLiveBbox(bbox);
+      onBboxRef.current(bbox, [lng, lat]);
+      if (typeof z === 'number') setLiveZoom(roundZoom(z));
+    },
+    [halfWidthKm, halfHeightKm, tryFrameInitialRegion],
+  );
+
+  useEffect(() => {
+    hasFramedInitialRef.current = false;
+    const bbox = boundingBoxRectAroundCenter(
+      initialCenter[0],
+      initialCenter[1],
+      halfWidthKm,
+      halfHeightKm,
+    );
+    setLiveBbox(bbox);
+    onBboxRef.current(bbox, initialCenter);
+  }, [initialCenter, halfWidthKm, halfHeightKm]);
+
   const handleDidFinishLoadingStyle = useCallback(() => {
     tryFrameInitialRegion();
   }, [tryFrameInitialRegion]);
@@ -210,7 +213,7 @@ export function OfflineRegionPickerMap({
   if (!rawMod || !mod) {
     return (
       <View style={styles.placeholder}>
-        <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+        <MaterialIcons name="map" size={48} color={colors.textTertiary} />
         <Text style={styles.placeholderText}>
           Mapbox needs a dev build with native Mapbox (Expo Go does not include it).
         </Text>
@@ -221,7 +224,7 @@ export function OfflineRegionPickerMap({
   if (!MAPBOX_ACCESS_TOKEN) {
     return (
       <View style={styles.placeholder}>
-        <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+        <MaterialIcons name="map" size={48} color={colors.textTertiary} />
         <Text style={styles.placeholderText}>Set EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in `.env`.</Text>
       </View>
     );
@@ -265,14 +268,14 @@ export function OfflineRegionPickerMap({
           <FillLayer
             id="offlineRegionFill"
             style={{
-              fillColor: Colors.primary,
+              fillColor: colors.primary,
               fillOpacity: 0.12,
             }}
           />
           <LineLayer
             id="offlineRegionLine"
             style={{
-              lineColor: Colors.primary,
+              lineColor: colors.primary,
               lineWidth: 2,
               lineOpacity: 0.9,
             }}
@@ -288,7 +291,7 @@ export function OfflineRegionPickerMap({
           onPress={() => zoomBy(1)}
           disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
         >
-          <MaterialIcons name="add" size={22} color={Colors.text} />
+          <MaterialIcons name="add" size={22} color={colors.text} />
         </Pressable>
         <View style={styles.zoomDivider} />
         <Pressable
@@ -298,7 +301,7 @@ export function OfflineRegionPickerMap({
           onPress={() => zoomBy(-1)}
           disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
         >
-          <MaterialIcons name="remove" size={22} color={Colors.text} />
+          <MaterialIcons name="remove" size={22} color={colors.text} />
         </Pressable>
       </View>
       <View style={styles.legend} pointerEvents="none">
@@ -310,56 +313,58 @@ export function OfflineRegionPickerMap({
   );
 }
 
-const styles = StyleSheet.create({
-  fill: { flex: 1 },
-  map: { flex: 1 },
-  placeholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.xl,
-    backgroundColor: Colors.surface,
-  },
-  placeholderText: {
-    marginTop: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  zoomCluster: {
-    position: 'absolute',
-    right: Spacing.md,
-    bottom: Spacing.lg + 56,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: Colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    elevation: 3,
-  },
-  zoomButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-  },
-  zoomButtonPressed: { opacity: 0.85, backgroundColor: Colors.surfaceElevated },
-  zoomDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.border },
-  legend: {
-    position: 'absolute',
-    left: Spacing.md,
-    right: Spacing.md,
-    bottom: Spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    padding: Spacing.sm,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-  },
-  legendText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-});
+function createOfflineRegionPickerMapStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    fill: { flex: 1 },
+    map: { flex: 1 },
+    placeholder: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: Spacing.xl,
+      backgroundColor: colors.surface,
+    },
+    placeholderText: {
+      marginTop: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    zoomCluster: {
+      position: 'absolute',
+      right: Spacing.md,
+      bottom: Spacing.lg + 56,
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      elevation: 3,
+    },
+    zoomButton: {
+      width: 44,
+      height: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+    },
+    zoomButtonPressed: { opacity: 0.85, backgroundColor: colors.surfaceElevated },
+    zoomDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+    legend: {
+      position: 'absolute',
+      left: Spacing.md,
+      right: Spacing.md,
+      bottom: Spacing.md,
+      backgroundColor: colors.surfaceElevated,
+      padding: Spacing.sm,
+      borderRadius: 8,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    legendText: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+  });
+}
