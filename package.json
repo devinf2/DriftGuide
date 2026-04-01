@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "start:8082": "expo start --port 8082",
+    "start:8082:clear": "expo start --port 8082 --clear",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",

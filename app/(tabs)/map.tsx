@@ -142,6 +142,10 @@ export default function MapTabScreen() {
     searchText.trim().length >= 2 &&
     (mapSuggestionsLoading || mapSuggestions.length > 0 || savedLocationMatches.length > 0);
 
+  const searchAtRest =
+    !searchInputFocused && searchText.trim().length === 0 && !addingLocation;
+  const headerBarActive = addingLocation;
+
   const beginAddLocation = useCallback(() => {
     const [lng, lat] = mapCenter;
     setAddPin({ latitude: lat, longitude: lng });
@@ -199,102 +203,17 @@ export default function MapTabScreen() {
     [locations, router, addingLocation, endAddLocation],
   );
 
-  const renderSuggestionRow = (
-    key: string,
-    title: string,
-    subtitle: string | null,
-    onPress: () => void,
-  ) => (
+  const renderSuggestionRow = (key: string, title: string, onPress: () => void) => (
     <Pressable key={key} style={styles.suggestionRow} onPress={onPress}>
-      <Ionicons name="location-outline" size={20} color={Colors.primary} />
-      <View style={styles.suggestionTextBlock}>
-        <Text style={styles.suggestionTitle} numberOfLines={2}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text style={styles.suggestionSubtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
+      <Ionicons name="location-outline" size={16} color={Colors.primary} />
+      <Text style={styles.suggestionTitle} numberOfLines={2}>
+        {title}
+      </Text>
     </Pressable>
   );
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.headerStrip,
-          {
-            paddingTop: insets.top + Spacing.sm,
-            paddingLeft: Spacing.lg + insets.left,
-            paddingRight: Spacing.lg + insets.right,
-          },
-        ]}
-      >
-        <TextInput
-          style={styles.searchInput}
-          placeholder={addingLocation ? 'Search map & DriftGuide…' : 'Search Locations'}
-          placeholderTextColor={Colors.textTertiary}
-          value={searchText}
-          onChangeText={(text) => {
-            setSearchText(text);
-            if (addingLocation) {
-              addLocationSheetRef.current?.syncNameFromSearch(text);
-            }
-          }}
-          onFocus={() => setSearchInputFocused(true)}
-          onBlur={() => {
-            setTimeout(() => setSearchInputFocused(false), 200);
-          }}
-          returnKeyType="done"
-        />
-        {showSearchSuggestions ? (
-          <View style={styles.suggestionsPanel}>
-            <ScrollView
-              style={styles.suggestionsScroll}
-              keyboardShouldPersistTaps="handled"
-              nestedScrollEnabled
-            >
-              {savedLocationMatches.length > 0 ? (
-                <>
-                  <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
-                  {savedLocationMatches.slice(0, 8).map((loc: Location) =>
-                    renderSuggestionRow(
-                      `loc-${loc.id}`,
-                      loc.name,
-                      addingLocation ? 'Use existing location' : 'Open location',
-                      () => {
-                        router.push(`/spot/${loc.id}`);
-                        if (addingLocation) endAddLocation();
-                        setSearchInputFocused(false);
-                        Keyboard.dismiss();
-                      },
-                    ),
-                  )}
-                </>
-              ) : null}
-              {mapSuggestionsLoading ? (
-                <View style={styles.suggestionsLoadingRow}>
-                  <ActivityIndicator size="small" color={Colors.primary} />
-                  <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
-                </View>
-              ) : null}
-              {!mapSuggestionsLoading && mapSuggestions.length > 0 ? (
-                <>
-                  <Text style={styles.suggestionsSectionLabel}>Map suggestions</Text>
-                  {mapSuggestions.map((f) =>
-                    renderSuggestionRow(f.id, f.place_name, 'Move map here', () =>
-                      applyMapFeatureToMap(f),
-                    ),
-                  )}
-                </>
-              ) : null}
-            </ScrollView>
-          </View>
-        ) : null}
-      </View>
-
       <View
         style={styles.mapContainer}
         pointerEvents={mapInteractionBlocked ? 'none' : 'auto'}
@@ -347,6 +266,82 @@ export default function MapTabScreen() {
           </>
         )}
       </View>
+
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.headerOverlay,
+          {
+            paddingTop: insets.top + Spacing.sm,
+            paddingLeft: Spacing.lg + insets.left,
+            paddingRight: Spacing.lg + insets.right,
+          },
+          headerBarActive ? styles.headerOverlayActive : styles.headerOverlayIdle,
+        ]}
+      >
+        <TextInput
+          style={[
+            styles.searchInput,
+            searchAtRest
+              ? styles.searchInputIdle
+              : searchInputFocused || addingLocation
+                ? styles.searchInputEditingGlass
+                : styles.searchInputFilledGlass,
+            !searchAtRest && styles.searchInputCompact,
+          ]}
+          placeholder={addingLocation ? 'Search map & DriftGuide…' : 'Search Locations'}
+          placeholderTextColor={Colors.textTertiary}
+          value={searchText}
+          onChangeText={(text) => {
+            setSearchText(text);
+            if (addingLocation) {
+              addLocationSheetRef.current?.syncNameFromSearch(text);
+            }
+          }}
+          onFocus={() => setSearchInputFocused(true)}
+          onBlur={() => {
+            setTimeout(() => setSearchInputFocused(false), 200);
+          }}
+          returnKeyType="done"
+        />
+        {showSearchSuggestions ? (
+          <View style={styles.suggestionsPanel}>
+            <ScrollView
+              style={styles.suggestionsScroll}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              {savedLocationMatches.length > 0 ? (
+                <>
+                  <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
+                  {savedLocationMatches.slice(0, 8).map((loc: Location) =>
+                    renderSuggestionRow(`loc-${loc.id}`, loc.name, () => {
+                      router.push(`/spot/${loc.id}`);
+                      if (addingLocation) endAddLocation();
+                      setSearchInputFocused(false);
+                      Keyboard.dismiss();
+                    }),
+                  )}
+                </>
+              ) : null}
+              {mapSuggestionsLoading ? (
+                <View style={styles.suggestionsLoadingRow}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
+                </View>
+              ) : null}
+              {!mapSuggestionsLoading && mapSuggestions.length > 0 ? (
+                <>
+                  <Text style={styles.suggestionsSectionLabel}>Map suggestions</Text>
+                  {mapSuggestions.map((f) =>
+                    renderSuggestionRow(f.id, f.place_name, () => applyMapFeatureToMap(f)),
+                  )}
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -356,80 +351,109 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  headerStrip: {
-    backgroundColor: Colors.surface,
+  mapContainer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  headerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 2,
     paddingBottom: Spacing.sm,
+  },
+  headerOverlayIdle: {
+    backgroundColor: 'transparent',
+  },
+  headerOverlayActive: {
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-    zIndex: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   searchInput: {
-    backgroundColor: Colors.background,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     fontSize: FontSize.md,
     color: Colors.text,
     borderWidth: 1,
-    borderColor: Colors.border,
+  },
+  searchInputIdle: {
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
+    borderColor: 'rgba(226, 232, 240, 0.65)',
+  },
+  searchInputEditingGlass: {
+    backgroundColor: 'rgba(255, 255, 255, 0.58)',
+    borderColor: 'rgba(226, 232, 240, 0.85)',
+  },
+  searchInputFilledGlass: {
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+  },
+  searchInputCompact: {
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    fontSize: FontSize.sm,
+    borderRadius: BorderRadius.sm,
   },
   suggestionsPanel: {
-    marginTop: Spacing.sm,
-    maxHeight: 200,
-    borderRadius: BorderRadius.md,
+    marginTop: Spacing.xs,
+    maxHeight: 187,
+    borderRadius: BorderRadius.sm,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.surface,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   suggestionsScroll: {
-    maxHeight: 200,
+    maxHeight: 187,
   },
   suggestionsSectionLabel: {
-    fontSize: FontSize.xs,
+    fontSize: 10,
     fontWeight: '700',
     color: Colors.textTertiary,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.xs,
+    letterSpacing: 0.5,
+    paddingHorizontal: Spacing.sm,
+    paddingTop: Spacing.xs,
+    paddingBottom: 2,
   },
   suggestionsLoadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
   },
   suggestionsLoadingText: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     color: Colors.textTertiary,
   },
   suggestionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
+    gap: Spacing.xs,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
   },
-  suggestionTextBlock: {
-    flex: 1,
-  },
   suggestionTitle: {
-    fontSize: FontSize.md,
+    flex: 1,
+    fontSize: FontSize.sm,
     color: Colors.text,
     fontWeight: '500',
-  },
-  suggestionSubtitle: {
-    fontSize: FontSize.xs,
-    color: Colors.textTertiary,
-    marginTop: 2,
-  },
-  mapContainer: {
-    flex: 1,
+    lineHeight: 18,
   },
   mapStage: {
     flex: 1,
