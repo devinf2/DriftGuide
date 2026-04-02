@@ -2,7 +2,7 @@
   "expo": {
     "name": "DriftGuide",
     "slug": "DriftGuide",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "driftguide",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.driftguide.app",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "config": {
