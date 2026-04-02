@@ -12,6 +12,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
+import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
 import { Location, LocationConditions, ConditionRating, SessionType } from '@/src/types';
@@ -193,7 +194,13 @@ export default function NewTripScreen() {
   const pickerThemeVariant = resolvedScheme === 'dark' ? 'dark' : 'light';
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ locationId?: string }>();
+  const params = useLocalSearchParams<{ locationId?: string; fromHome?: string }>();
+  const paramTruthy = (v: string | string[] | undefined) => {
+    const s = Array.isArray(v) ? v[0] : v;
+    return s === '1' || s === 'true';
+  };
+  const fromHomeSuggestions = paramTruthy(params.fromHome);
+
   const { user } = useAuthStore();
   const { planTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
@@ -369,28 +376,37 @@ export default function NewTripScreen() {
 
     let cancelled = false;
     setConditionsLoading(true);
-    setSuggestionsLoading(true);
+
+    const homeItems = fromHomeSuggestions
+      ? usePlanTripHomeSuggestionsStore.getState().items
+      : [];
+    const useCachedHomeSuggestions = fromHomeSuggestions && homeItems.length > 0;
+    if (!useCachedHomeSuggestions) {
+      setSuggestionsLoading(true);
+    }
 
     (async () => {
       let spotsForSuggestions = topLevelLocations;
-      try {
-        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await ExpoLocation.getCurrentPositionAsync({
-            accuracy: ExpoLocation.Accuracy.Balanced,
-          });
-          const lat = loc.coords.latitude;
-          const lng = loc.coords.longitude;
-          const nearby = topLevelLocations.filter((l) => {
-            const locLat = l.latitude ?? null;
-            const locLng = l.longitude ?? null;
-            if (locLat == null || locLng == null) return false;
-            return haversineDistance(lat, lng, locLat, locLng) <= SUGGESTED_SPOTS_MAX_DRIVE_KM;
-          });
-          if (nearby.length > 0) spotsForSuggestions = nearby;
+      if (!useCachedHomeSuggestions) {
+        try {
+          const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const loc = await ExpoLocation.getCurrentPositionAsync({
+              accuracy: ExpoLocation.Accuracy.Balanced,
+            });
+            const lat = loc.coords.latitude;
+            const lng = loc.coords.longitude;
+            const nearby = topLevelLocations.filter((l) => {
+              const locLat = l.latitude ?? null;
+              const locLng = l.longitude ?? null;
+              if (locLat == null || locLng == null) return false;
+              return haversineDistance(lat, lng, locLat, locLng) <= SUGGESTED_SPOTS_MAX_DRIVE_KM;
+            });
+            if (nearby.length > 0) spotsForSuggestions = nearby;
+          }
+        } catch {
+          // use all spots if location fails
         }
-      } catch {
-        // use all spots if location fails
       }
 
       if (cancelled) return;
@@ -398,6 +414,14 @@ export default function NewTripScreen() {
       if (cancelled) return;
       setConditionsMap(result);
       setConditionsLoading(false);
+
+      if (useCachedHomeSuggestions) {
+        if (!cancelled) {
+          setSpotSuggestions(homeItems.map((h) => h.suggestion));
+          setSuggestionsLoading(false);
+        }
+        return;
+      }
 
       const suggestions = await getTopFishingSpots(spotsForSuggestions, result, plannedDate);
       if (!cancelled) {
@@ -407,7 +431,7 @@ export default function NewTripScreen() {
     })();
 
     return () => { cancelled = true; };
-  }, [topLevelLocations.length, plannedDate.getTime()]);
+  }, [topLevelLocations.length, plannedDate.getTime(), fromHomeSuggestions]);
 
   const filteredLocations = searchQuery.trim()
     ? isConnected
@@ -548,83 +572,83 @@ export default function NewTripScreen() {
 
       {/* Date & Time Selection */}
       <View style={styles.dateTimeRow}>
-        <View style={styles.dateTimeColumn}>
-          <Text style={styles.dateTimeLabel}>Date</Text>
-          <Pressable
-            style={styles.dateTimeButton}
-            onPress={() => setShowDatePicker(v => !v)}
-          >
-            <Text style={styles.dateTimeValue} numberOfLines={1}>
-              {format(plannedDate, 'EEE, MMM d')}
-            </Text>
-          </Pressable>
-        </View>
-        <View style={styles.dateTimeColumn}>
-          <Text style={styles.dateTimeLabel}>Time</Text>
-          <Pressable
-            style={styles.dateTimeButton}
-            onPress={() => setShowTimePicker(v => !v)}
-          >
-            <Text style={styles.dateTimeValue}>{format(plannedDate, 'h:mm a')}</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <Modal visible={showDatePicker} transparent animationType="fade">
-        <Pressable style={styles.modalOverlay} onPress={() => setShowDatePicker(false)}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Date</Text>
-              <Pressable onPress={() => setShowDatePicker(false)}>
-                <Text style={styles.modalDone}>Done</Text>
+            <View style={styles.dateTimeColumn}>
+              <Text style={styles.dateTimeLabel}>Date</Text>
+              <Pressable
+                style={styles.dateTimeButton}
+                onPress={() => setShowDatePicker(v => !v)}
+              >
+                <Text style={styles.dateTimeValue} numberOfLines={1}>
+                  {format(plannedDate, 'EEE, MMM d')}
+                </Text>
               </Pressable>
             </View>
-            <DateTimePicker
-              value={plannedDate}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'inline' : 'default'}
-              onChange={handleDateChange}
-              minimumDate={new Date()}
-              themeVariant={pickerThemeVariant}
-            />
-          </View>
-        </Pressable>
-      </Modal>
-
-      <Modal visible={showTimePicker} transparent animationType="fade">
-        <Pressable style={styles.modalOverlay} onPress={() => setShowTimePicker(false)}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Time</Text>
-              <Pressable onPress={() => setShowTimePicker(false)}>
-                <Text style={styles.modalDone}>Done</Text>
+            <View style={styles.dateTimeColumn}>
+              <Text style={styles.dateTimeLabel}>Time</Text>
+              <Pressable
+                style={styles.dateTimeButton}
+                onPress={() => setShowTimePicker(v => !v)}
+              >
+                <Text style={styles.dateTimeValue}>{format(plannedDate, 'h:mm a')}</Text>
               </Pressable>
             </View>
-            <DateTimePicker
-              value={plannedDate}
-              mode="time"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleTimeChange}
-              minuteInterval={15}
-              themeVariant={pickerThemeVariant}
-            />
           </View>
-        </Pressable>
-      </Modal>
 
-      {(() => {
-        for (const c of conditionsMap.values()) {
-          if (c.plannedTimeWeatherUnavailable) {
-            return (
-              <View style={styles.plannedWeatherNote}>
-                <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.plannedWeatherNoteText}>{PLANNED_WEATHER_UNAVAILABLE_NOTE}</Text>
+          <Modal visible={showDatePicker} transparent animationType="fade">
+            <Pressable style={styles.modalOverlay} onPress={() => setShowDatePicker(false)}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Select Date</Text>
+                  <Pressable onPress={() => setShowDatePicker(false)}>
+                    <Text style={styles.modalDone}>Done</Text>
+                  </Pressable>
+                </View>
+                <DateTimePicker
+                  value={plannedDate}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={handleDateChange}
+                  minimumDate={new Date()}
+                  themeVariant={pickerThemeVariant}
+                />
               </View>
-            );
-          }
-        }
-        return null;
-      })()}
+            </Pressable>
+          </Modal>
+
+          <Modal visible={showTimePicker} transparent animationType="fade">
+            <Pressable style={styles.modalOverlay} onPress={() => setShowTimePicker(false)}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Select Time</Text>
+                  <Pressable onPress={() => setShowTimePicker(false)}>
+                    <Text style={styles.modalDone}>Done</Text>
+                  </Pressable>
+                </View>
+                <DateTimePicker
+                  value={plannedDate}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleTimeChange}
+                  minuteInterval={15}
+                  themeVariant={pickerThemeVariant}
+                />
+              </View>
+            </Pressable>
+          </Modal>
+
+          {(() => {
+            for (const c of conditionsMap.values()) {
+              if (c.plannedTimeWeatherUnavailable) {
+                return (
+                  <View style={styles.plannedWeatherNote}>
+                    <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                    <Text style={styles.plannedWeatherNoteText}>{PLANNED_WEATHER_UNAVAILABLE_NOTE}</Text>
+                  </View>
+                );
+              }
+            }
+            return null;
+          })()}
 
       <View style={styles.sectionLabelRow}>
         <Text style={styles.sectionLabel}>Where are you fishing?</Text>

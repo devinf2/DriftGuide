@@ -9,6 +9,7 @@ import { useGuideChatContext } from '@/src/hooks/useGuideChatContext';
 import { useHomeHatchBriefing } from '@/src/hooks/useHomeHatchBriefing';
 import { useHomeHotSpots } from '@/src/hooks/useHomeHotSpots';
 import { useAuthStore } from '@/src/stores/authStore';
+import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { Trip } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
@@ -183,6 +184,11 @@ export default function HomeScreen() {
 
   const getContext = useGuideChatContext();
   const { hotSpotList, hotSpotLoading, watersForRegionalBriefing } = useHomeHotSpots(fullHome, briefingRefreshKey);
+  const setFromHomeHotSpots = usePlanTripHomeSuggestionsStore((s) => s.setFromHomeHotSpots);
+
+  useEffect(() => {
+    if (fullHome) setFromHomeHotSpots(hotSpotList);
+  }, [fullHome, hotSpotList, setFromHomeHotSpots]);
   const { hatchRows, hatchLoading } = useHomeHatchBriefing(
     fullHome,
     hotSpotLoading,

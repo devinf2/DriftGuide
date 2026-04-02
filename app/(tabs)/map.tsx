@@ -9,6 +9,7 @@ import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
+import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import type { Location } from '@/src/types';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
@@ -217,6 +218,7 @@ export default function MapTabScreen() {
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const { locations, fetchLocations } = useLocationStore();
+  const setMapAddLocationSheetActive = useAddLocationFlowStore((s) => s.setMapSheetActive);
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const userProximityRef = useRef<[number, number] | null>(null);
@@ -246,6 +248,11 @@ export default function MapTabScreen() {
       if (locations.length === 0) void fetchLocations();
     }, [locations.length, fetchLocations]),
   );
+
+  useEffect(() => {
+    setMapAddLocationSheetActive(addingLocation);
+    return () => setMapAddLocationSheetActive(false);
+  }, [addingLocation, setMapAddLocationSheetActive]);
 
   useEffect(() => {
     let subscription: ExpoLocation.LocationSubscription | undefined;

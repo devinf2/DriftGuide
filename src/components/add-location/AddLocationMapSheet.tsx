@@ -4,6 +4,7 @@ import {
   useEffect,
   forwardRef,
   useImperativeHandle,
+  useMemo,
   useRef,
 } from 'react';
 import {
@@ -24,7 +25,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { StatusBar } from 'expo-status-bar';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { LocationType, NearbyLocationResult } from '@/src/types';
@@ -57,6 +60,266 @@ function formatProximityKm(km: number): string {
   if (!Number.isFinite(km) || km < 0) return '';
   if (km < 1) return `${Math.round(km * 1000)} m away`;
   return `${km < 10 ? km.toFixed(1) : Math.round(km)} km away`;
+}
+
+function createAddLocationMapSheetStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    sheetRoot: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 4,
+    },
+    formPanel: {
+      backgroundColor: colors.surface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.sm,
+      paddingBottom: Spacing.md,
+      maxHeight: 400,
+      shadowColor: '#000',
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: -2 },
+      elevation: 8,
+    },
+    sheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: Spacing.sm,
+    },
+    sheetTitle: {
+      fontSize: FontSize.md,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    sheetCloseButton: {
+      padding: Spacing.xs,
+      marginRight: -Spacing.xs,
+    },
+    sheetCloseButtonPressed: {
+      opacity: 0.65,
+    },
+    formScrollContent: {
+      paddingBottom: 0,
+    },
+    nameTypeRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      alignItems: 'flex-start',
+    },
+    nameCol: {
+      flex: 1,
+      minWidth: 0,
+    },
+    typeCol: {
+      width: 118,
+      flexShrink: 0,
+    },
+    fieldLabel: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs,
+    },
+    fieldLabelCompact: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: 4,
+    },
+    nameFieldInput: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    dropdownCompact: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 6,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      minHeight: 34,
+    },
+    dropdownTextCompact: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.text,
+      flex: 1,
+      marginRight: 2,
+    },
+    dropdownPlaceholderCompact: {
+      color: colors.textTertiary,
+      fontWeight: '500',
+    },
+    dropdownChevronCompact: {
+      fontSize: 11,
+      color: colors.textSecondary,
+    },
+    publicLocationRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: Spacing.md,
+      minHeight: 32,
+    },
+    publicLocationLabel: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      flex: 1,
+      marginRight: Spacing.sm,
+    },
+    publicSwitchWrap: {
+      transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
+    },
+    saveButton: {
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.md,
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+      marginTop: Spacing.md,
+    },
+    saveButtonDisabled: {
+      backgroundColor: colors.textTertiary,
+    },
+    saveButtonText: {
+      color: colors.textInverse,
+      fontSize: FontSize.md,
+      fontWeight: '700',
+    },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      padding: Spacing.lg,
+    },
+    modalContent: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+    },
+    modalTitle: {
+      fontSize: FontSize.md,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: Spacing.sm,
+    },
+    modalOption: {
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+    },
+    modalOptionActive: {
+      backgroundColor: colors.primary + '18',
+    },
+    modalOptionText: {
+      fontSize: FontSize.md,
+      color: colors.text,
+    },
+    modalOptionTextActive: {
+      fontWeight: '700',
+      color: colors.primary,
+    },
+    parentLinkModalSubtitle: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      marginBottom: Spacing.md,
+    },
+    parentLinkOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: Spacing.sm,
+    },
+    parentLinkOptionText: {
+      flex: 1,
+      minWidth: 0,
+    },
+    parentLinkOptionName: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    parentLinkOptionMeta: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      marginTop: 2,
+    },
+    parentLinkDecline: {
+      marginTop: Spacing.sm,
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    parentLinkDeclineText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    parentLinkCancel: {
+      marginTop: Spacing.md,
+      paddingVertical: Spacing.sm,
+      alignItems: 'center',
+    },
+    parentLinkCancelText: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textTertiary,
+    },
+    parentLinkSavingWrap: {
+      alignItems: 'center',
+      paddingVertical: Spacing.xl,
+      gap: Spacing.md,
+    },
+    parentPickerFullScreen: {
+      flex: 1,
+      backgroundColor: colors.surface,
+      paddingHorizontal: Spacing.lg,
+    },
+    parentPickerTitle: {
+      fontSize: FontSize.lg,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: Spacing.md,
+    },
+    parentPickerScroll: {
+      flex: 1,
+    },
+    parentPickerEmptyNote: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      marginBottom: Spacing.md,
+    },
+    parentPickerSavingOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: colors.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: Spacing.md,
+    },
+  });
 }
 
 export type AddLocationMapSheetRef = {
@@ -92,6 +355,8 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
     ref,
   ) {
     const insets = useSafeAreaInsets();
+    const { colors, resolvedScheme } = useAppTheme();
+    const styles = useMemo(() => createAddLocationMapSheetStyles(colors), [colors]);
     const { user } = useAuthStore();
     const { fetchLocations, setLastAddedLocationId } = useLocationStore();
     const nameUserEditedRef = useRef(false);
@@ -266,7 +531,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                 accessibilityRole="button"
                 accessibilityLabel="Close"
               >
-                <Ionicons name="close" size={26} color={Colors.textSecondary} />
+                <Ionicons name="close" size={26} color={colors.textSecondary} />
               </Pressable>
             </View>
             <ScrollView
@@ -281,7 +546,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                   <TextInput
                     style={styles.nameFieldInput}
                     placeholder="Saved name"
-                    placeholderTextColor={Colors.textTertiary}
+                    placeholderTextColor={colors.textTertiary}
                     value={name}
                     onChangeText={(t) => {
                       nameUserEditedRef.current = true;
@@ -313,11 +578,11 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                   <Switch
                     value={isPublic}
                     onValueChange={setIsPublic}
-                    trackColor={{ false: Colors.border, true: Colors.primary + '99' }}
+                    trackColor={{ false: colors.border, true: colors.primary + '99' }}
                     thumbColor={
-                      Platform.OS === 'android' ? (isPublic ? Colors.primary : Colors.textTertiary) : undefined
+                      Platform.OS === 'android' ? (isPublic ? colors.primary : colors.textTertiary) : undefined
                     }
-                    ios_backgroundColor={Colors.border}
+                    ios_backgroundColor={colors.border}
                     accessibilityLabel={isPublic ? 'Public location on' : 'Public location off'}
                   />
                 </View>
@@ -329,7 +594,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                 disabled={addLocationBlocked}
               >
                 {parentPickerPhase === 'loading' ? (
-                  <ActivityIndicator color={Colors.textInverse} />
+                  <ActivityIndicator color={colors.textInverse} />
                 ) : (
                   <Text style={styles.saveButtonText}>Add location</Text>
                 )}
@@ -388,10 +653,11 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
               { paddingTop: insets.top + Spacing.md, paddingBottom: insets.bottom + Spacing.md },
             ]}
           >
+            <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />
             <Text style={styles.parentPickerTitle}>Part of an existing place?</Text>
             {parentPickerPhase === 'loading' && !parentLinkSaving ? (
               <View style={styles.parentLinkSavingWrap}>
-                <ActivityIndicator color={Colors.primary} size="large" />
+                <ActivityIndicator color={colors.primary} size="large" />
                 <Text style={styles.parentLinkModalSubtitle}>
                   Checking your pin against main locations in DriftGuide…
                 </Text>
@@ -416,7 +682,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                         </Text>
                         <Text style={styles.parentLinkOptionMeta}>{formatProximityKm(c.distance_km)}</Text>
                       </View>
-                      <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
+                      <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
                     </Pressable>
                   ))
                 ) : (
@@ -434,7 +700,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
             ) : null}
             {parentLinkSaving ? (
               <View style={styles.parentPickerSavingOverlay}>
-                <ActivityIndicator color={Colors.primary} size="large" />
+                <ActivityIndicator color={colors.primary} size="large" />
                 <Text style={styles.parentLinkModalSubtitle}>Saving your location…</Text>
               </View>
             ) : null}
@@ -444,261 +710,3 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
     );
   },
 );
-
-const styles = StyleSheet.create({
-  sheetRoot: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 4,
-  },
-  formPanel: {
-    backgroundColor: Colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
-    maxHeight: 400,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: -2 },
-    elevation: 8,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: Spacing.sm,
-  },
-  sheetTitle: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  sheetCloseButton: {
-    padding: Spacing.xs,
-    marginRight: -Spacing.xs,
-  },
-  sheetCloseButtonPressed: {
-    opacity: 0.65,
-  },
-  formScrollContent: {
-    paddingBottom: 0,
-  },
-  nameTypeRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'flex-start',
-  },
-  nameCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  typeCol: {
-    width: 118,
-    flexShrink: 0,
-  },
-  fieldLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: Spacing.xs,
-  },
-  fieldLabelCompact: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: 4,
-  },
-  nameFieldInput: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  dropdownCompact: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    minHeight: 34,
-  },
-  dropdownTextCompact: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.text,
-    flex: 1,
-    marginRight: 2,
-  },
-  dropdownPlaceholderCompact: {
-    color: Colors.textTertiary,
-    fontWeight: '500',
-  },
-  dropdownChevronCompact: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-  },
-  publicLocationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: Spacing.md,
-    minHeight: 32,
-  },
-  publicLocationLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    flex: 1,
-    marginRight: Spacing.sm,
-  },
-  publicSwitchWrap: {
-    transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
-  },
-  saveButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.md,
-  },
-  saveButtonDisabled: {
-    backgroundColor: Colors.textTertiary,
-  },
-  saveButtonText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: '700',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: Spacing.lg,
-  },
-  modalContent: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-  },
-  modalTitle: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: Colors.text,
-    marginBottom: Spacing.sm,
-  },
-  modalOption: {
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.sm,
-  },
-  modalOptionActive: {
-    backgroundColor: Colors.primary + '18',
-  },
-  modalOptionText: {
-    fontSize: FontSize.md,
-    color: Colors.text,
-  },
-  modalOptionTextActive: {
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  parentLinkModalSubtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: Spacing.md,
-  },
-  parentLinkOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: Spacing.sm,
-  },
-  parentLinkOptionText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  parentLinkOptionName: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  parentLinkOptionMeta: {
-    fontSize: FontSize.xs,
-    color: Colors.textTertiary,
-    marginTop: 2,
-  },
-  parentLinkDecline: {
-    marginTop: Spacing.sm,
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  parentLinkDeclineText: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  parentLinkCancel: {
-    marginTop: Spacing.md,
-    paddingVertical: Spacing.sm,
-    alignItems: 'center',
-  },
-  parentLinkCancelText: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.textTertiary,
-  },
-  parentLinkSavingWrap: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xl,
-    gap: Spacing.md,
-  },
-  parentPickerFullScreen: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    paddingHorizontal: Spacing.lg,
-  },
-  parentPickerTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.text,
-    marginBottom: Spacing.md,
-  },
-  parentPickerScroll: {
-    flex: 1,
-  },
-  parentPickerEmptyNote: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: Spacing.md,
-  },
-  parentPickerSavingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.md,
-  },
-});

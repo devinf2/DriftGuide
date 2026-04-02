@@ -834,8 +834,9 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     marginTop: Spacing.sm,
   },
 
+  /** Match Plan a Trip header navy (#2C4670): in dark mode `primary` is the lighter blue. */
   journalHeaderWrap: {
-    backgroundColor: colors.primary,
+    backgroundColor: scheme === 'dark' ? colors.primaryDark : colors.primary,
   },
   controlsBar: {
     flexDirection: 'row',
