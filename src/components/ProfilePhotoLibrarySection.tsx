@@ -1,6 +1,7 @@
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import {
   addPhoto,
+  deletePhoto,
   fetchPhotosWithTrip,
   PhotoQueuedOfflineError,
   type PhotoWithTrip,
@@ -79,6 +80,7 @@ export function ProfilePhotoLibrarySection() {
   const [addPhotoTrips, setAddPhotoTrips] = useState<Trip[]>([]);
   const [addPhotoTripsLoading, setAddPhotoTripsLoading] = useState(false);
   const [addPhotoDropdownOpen, setAddPhotoDropdownOpen] = useState(false);
+  const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
 
   const loadPhotos = useCallback(async () => {
     if (!user?.id) return;
@@ -257,6 +259,42 @@ export function ProfilePhotoLibrarySection() {
     setAddPhotoUri(null);
     setAddPhotoDropdownOpen(false);
   }, []);
+
+  const handleConfirmDeletePhoto = useCallback(
+    (photo: PhotoWithTrip) => {
+      if (!user?.id) return;
+      if (!isConnected) {
+        Alert.alert('Offline', 'Connect to the internet to delete photos from your library.');
+        return;
+      }
+      Alert.alert(
+        'Delete photo?',
+        'This removes the photo from your library and cloud storage. This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                setDeletingPhotoId(photo.id);
+                try {
+                  await deletePhoto(photo.id, user.id);
+                  setSelectedPhoto(null);
+                  setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+                } catch (e) {
+                  Alert.alert('Could not delete', (e as Error).message);
+                } finally {
+                  setDeletingPhotoId(null);
+                }
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [user?.id, isConnected],
+  );
 
   return (
     <View style={styles.wrap}>
@@ -674,6 +712,22 @@ export function ProfilePhotoLibrarySection() {
                 {selectedPhoto.caption ? (
                   <Text style={styles.photoInfoCaption}>{selectedPhoto.caption}</Text>
                 ) : null}
+                <Pressable
+                  style={styles.deletePhotoButton}
+                  onPress={() => handleConfirmDeletePhoto(selectedPhoto)}
+                  disabled={deletingPhotoId === selectedPhoto.id}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete photo"
+                >
+                  {deletingPhotoId === selectedPhoto.id ? (
+                    <ActivityIndicator size="small" color={colors.error} />
+                  ) : (
+                    <>
+                      <MaterialCommunityIcons name="trash-can-outline" size={20} color={colors.error} />
+                      <Text style={styles.deletePhotoButtonText}>Delete photo</Text>
+                    </>
+                  )}
+                </Pressable>
               </View>
             </ScrollView>
           )}
@@ -990,6 +1044,23 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
     fontSize: FontSize.sm,
     color: colors.textTertiary,
     marginTop: Spacing.xs,
+  },
+  deletePhotoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.error,
+    minHeight: 44,
+  },
+  deletePhotoButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: colors.error,
   },
   });
 }
