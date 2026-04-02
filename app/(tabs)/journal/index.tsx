@@ -3,19 +3,19 @@ import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/Tr
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
 import { BorderRadius, FontSize, LocationTypeColors, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
-import { getWeatherIconName } from '@/src/services/conditions';
+import { fetchPhotos } from '@/src/services/photoService';
 import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
 import {
     Trip,
     type CatchRow,
     type LocationType,
-    type WaterFlowData,
+    type Photo,
 } from '@/src/types';
 import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
 import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
-import { Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format, isAfter, startOfMonth, startOfWeek, startOfYear } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -47,33 +47,138 @@ const DATE_RANGES: { key: DateRange; label: string }[] = [
   { key: 'year', label: 'This Year' },
 ];
 
-const CLARITY_LABELS: Record<string, string> = {
-  clear: 'Clear',
-  slightly_stained: 'Slightly stained',
-  stained: 'Stained',
-  murky: 'Murky',
-  blown_out: 'Blown out',
-  unknown: '',
-};
+/** Unique image URLs for a trip: gallery photos first (newest), then catch photos. */
+function imageUrlsForTrip(tripId: string, photos: Photo[], catches: CatchRow[]): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const add = (u: string | null | undefined) => {
+    const t = u?.trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    urls.push(t);
+  };
 
-type TripListInsight =
-  | { kind: 'weather'; tempF: number; condition: string }
-  | { kind: 'water'; text: string }
-  | null;
+  const tripPhotos = photos.filter((p) => p.trip_id === tripId);
+  tripPhotos.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  for (const p of tripPhotos) add(p.url);
 
-/** List card tail: weather (temp ° + icon) or water (clarity / flow text). */
-function getTripListInsight(trip: Trip): TripListInsight {
-  const w = trip.weather_cache;
-  if (w) return { kind: 'weather', tempF: w.temperature_f, condition: w.condition };
-  const water = trip.water_flow_cache as WaterFlowData | null;
-  if (water) {
-    if (water.clarity && water.clarity !== 'unknown') {
-      const label = CLARITY_LABELS[water.clarity];
-      if (label) return { kind: 'water', text: label };
-    }
-    return { kind: 'water', text: `${Math.round(water.flow_cfs)} cfs` };
+  for (const c of catches) {
+    if (c.trip_id === tripId) add(c.photo_url);
   }
-  return null;
+  return urls;
+}
+
+function JournalTripCarousel({
+  urls,
+  width,
+  height,
+  colors,
+  styles,
+}: {
+  urls: string[];
+  width: number;
+  height: number;
+  colors: ThemeColors;
+  styles: ReturnType<typeof createJournalStyles>;
+}) {
+  const [index, setIndex] = useState(0);
+
+  if (urls.length === 0) {
+    return (
+      <View style={[styles.tripCarouselEmpty, { width, height }]}>
+        <MaterialIcons name="photo-library" size={28} color={colors.textTertiary} />
+        <Text style={styles.tripCarouselEmptyText}>No photos</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.tripCarouselWrap, { width, height }]}>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        nestedScrollEnabled
+        decelerationRate="fast"
+        keyboardShouldPersistTaps="handled"
+        onMomentumScrollEnd={(e) => {
+          const x = e.nativeEvent.contentOffset.x;
+          const page = Math.round(x / Math.max(width, 1));
+          setIndex(Math.min(Math.max(page, 0), urls.length - 1));
+        }}
+      >
+        {urls.map((uri, i) => (
+          <Image
+            key={`${uri}-${i}`}
+            source={{ uri }}
+            style={{ width, height }}
+            resizeMode="cover"
+          />
+        ))}
+      </ScrollView>
+      {urls.length > 1 ? (
+        <View style={styles.tripCarouselDots} pointerEvents="none">
+          {urls.map((_, i) => (
+            <View
+              key={i}
+              style={[styles.tripCarouselDot, i === index && styles.tripCarouselDotActive]}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function JournalTripGridCard({
+  trip,
+  imageUrls,
+  cardWidth,
+  onPress,
+  colors,
+  styles,
+}: {
+  trip: Trip;
+  imageUrls: string[];
+  cardWidth: number;
+  onPress: () => void;
+  colors: ThemeColors;
+  styles: ReturnType<typeof createJournalStyles>;
+}) {
+  const locationType = trip.location?.type as LocationType | undefined;
+  const accent =
+    locationType && LocationTypeColors[locationType] ? LocationTypeColors[locationType] : colors.primary;
+  const carouselHeight = Math.round(cardWidth * 1.02);
+
+  return (
+    <Pressable style={[styles.tripGridCard, { width: cardWidth }]} onPress={onPress}>
+      <JournalTripCarousel
+        urls={imageUrls}
+        width={cardWidth}
+        height={carouselHeight}
+        colors={colors}
+        styles={styles}
+      />
+      <View style={styles.tripGridBody}>
+        <View style={styles.tripGridLocationRow}>
+          <MaterialIcons name="place" size={12} color={accent} style={styles.tripGridPin} />
+          <Text style={styles.tripGridLocation} numberOfLines={2}>
+            {trip.location?.name || 'Unknown Location'}
+          </Text>
+        </View>
+        <View style={styles.tripGridMeta}>
+          <View style={[styles.tripGridPill, { backgroundColor: `${accent}18` }]}>
+            <Text style={[styles.tripGridStatAccent, { color: accent }]}>
+              {formatFishCount(trip.total_fish)}
+            </Text>
+          </View>
+          <Text style={styles.tripGridDate} numberOfLines={1}>
+            {formatTripDate(trip.start_time)}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
+  );
 }
 
 interface LocationGroup {
@@ -95,6 +200,7 @@ export default function JournalScreen() {
 
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
   const [allCatches, setAllCatches] = useState<CatchRow[]>([]);
+  const [allPhotos, setAllPhotos] = useState<Photo[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -111,12 +217,14 @@ export default function JournalScreen() {
 
   const loadJournalData = useCallback(async () => {
     if (!user) return;
-    const [trips, catches] = await Promise.all([
+    const [trips, catches, photosResult] = await Promise.all([
       fetchTripsFromCloud(user.id),
       fetchUserCatchesFromCloud(user.id),
+      fetchPhotos(user.id).catch(() => [] as Photo[]),
     ]);
     setAllTrips(trips.filter(t => t.status === 'completed'));
     setAllCatches(catches);
+    setAllPhotos(photosResult);
     setLoading(false);
   }, [user]);
 
@@ -318,62 +426,26 @@ export default function JournalScreen() {
     }));
   }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress, styles, colors]);
 
-  const renderTrip = ({ item }: { item: Trip }) => {
-    const locationType = item.location?.type as LocationType | undefined;
-    const accent = locationType && LocationTypeColors[locationType]
-      ? LocationTypeColors[locationType]
-      : colors.primary;
-    const insight = getTripListInsight(item);
-    return (
-      <Pressable
-        style={styles.tripCard}
+  const gridGap = Spacing.sm;
+  const listPadX = Spacing.xl;
+  const cardWidth = useMemo(() => {
+    const pad = listPadX * 2 + insets.left + insets.right;
+    return (winWidth - pad - gridGap) / 2;
+  }, [winWidth, insets.left, insets.right]);
+
+  const renderTrip = useCallback(
+    ({ item }: { item: Trip }) => (
+      <JournalTripGridCard
+        trip={item}
+        imageUrls={imageUrlsForTrip(item.id, allPhotos, allCatches)}
+        cardWidth={cardWidth}
         onPress={() => router.push(`/journal/${item.id}`)}
-      >
-        <View style={[styles.tripCardAccent, { backgroundColor: accent }]} />
-        <View style={styles.tripCardContent}>
-          <View style={styles.tripHeader}>
-            <View style={styles.tripLocationRow}>
-              <MaterialIcons name="place" size={18} color={accent} style={styles.tripLocationIcon} />
-              <Text style={styles.tripLocation} numberOfLines={1}>
-                {item.location?.name || 'Unknown Location'}
-              </Text>
-            </View>
-            <Text style={styles.tripDate}>{formatTripDate(item.start_time)}</Text>
-          </View>
-          <View style={styles.tripMeta}>
-            <View style={[styles.tripMetaPill, { backgroundColor: `${accent}18` }]}>
-              <Text style={[styles.tripStat, { color: accent }]}>
-                {formatFishCount(item.total_fish)}
-              </Text>
-            </View>
-            <Text style={styles.tripDivider}>·</Text>
-            <Text style={styles.tripStat}>
-              {formatTripDuration(item.start_time, item.end_time)}
-            </Text>
-            {insight ? (
-              <>
-                <Text style={styles.tripDivider}>·</Text>
-                {insight.kind === 'weather' ? (
-                  <View style={styles.tripWeatherMeta}>
-                    <Text style={styles.tripStat}>{`${Math.round(insight.tempF)}°`}</Text>
-                    <Ionicons
-                      name={getWeatherIconName(insight.condition) as keyof typeof Ionicons.glyphMap}
-                      size={17}
-                      color={colors.textSecondary}
-                    />
-                  </View>
-                ) : (
-                  <Text style={styles.tripStat} numberOfLines={1}>
-                    {insight.text}
-                  </Text>
-                )}
-              </>
-            ) : null}
-          </View>
-        </View>
-      </Pressable>
-    );
-  };
+        colors={colors}
+        styles={styles}
+      />
+    ),
+    [allPhotos, allCatches, cardWidth, router, colors, styles],
+  );
 
   if (loading) {
     return (
@@ -526,12 +598,14 @@ export default function JournalScreen() {
       {viewMode === 'list' && (
         <FlatList
           data={filteredTrips}
+          numColumns={2}
           renderItem={renderTrip}
           keyExtractor={(item) => item.id}
+          columnWrapperStyle={filteredTrips.length > 0 ? styles.journalGridRow : undefined}
           contentContainerStyle={
             filteredTrips.length === 0
               ? styles.centered
-              : [styles.list, { paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]
+              : [styles.journalGridList, { paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]
           }
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
@@ -886,20 +960,19 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     color: colors.primary,
   },
 
-  // List view
-  list: {
-    paddingHorizontal: Spacing.lg,
+  // List view (2-column grid)
+  journalGridList: {
     paddingTop: Spacing.md,
     paddingBottom: Spacing.xxl,
-    gap: 6,
   },
-  tripCard: {
-    flexDirection: 'row',
+  journalGridRow: {
+    justifyContent: 'space-between',
+    marginBottom: Spacing.sm,
+  },
+  tripGridCard: {
     backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     overflow: 'hidden',
-    minHeight: 88,
-    marginBottom: 6,
     borderWidth: 1,
     borderColor: colors.border,
     shadowColor: colors.shadow,
@@ -908,69 +981,85 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     shadowRadius: 6,
     elevation: 3,
   },
-  tripCardAccent: {
-    width: 5,
-    borderTopLeftRadius: BorderRadius.lg,
-    borderBottomLeftRadius: BorderRadius.lg,
+  tripCarouselWrap: {
+    position: 'relative',
+    backgroundColor: colors.borderLight,
   },
-  tripCardContent: {
-    flex: 1,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    justifyContent: 'center',
-  },
-  tripHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  tripLocationRow: {
-    flexDirection: 'row',
+  tripCarouselEmpty: {
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.borderLight,
+    gap: Spacing.xs,
+  },
+  tripCarouselEmptyText: {
+    fontSize: FontSize.xs,
+    color: colors.textTertiary,
+    fontWeight: '500',
+  },
+  tripCarouselDots: {
+    position: 'absolute',
+    bottom: 6,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  tripCarouselDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+  },
+  tripCarouselDotActive: {
+    backgroundColor: colors.textInverse,
+    width: 7,
+  },
+  tripGridBody: {
+    paddingHorizontal: 6,
+    paddingTop: 6,
+    paddingBottom: 6,
+  },
+  tripGridLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    minHeight: 0,
+  },
+  tripGridPin: {
+    marginRight: 3,
+    marginTop: 1,
+  },
+  tripGridLocation: {
     flex: 1,
     minWidth: 0,
-  },
-  tripLocationIcon: {
-    marginRight: Spacing.xs,
-  },
-  tripLocation: {
-    fontSize: FontSize.lg,
+    fontSize: 12,
     fontWeight: '600',
     color: colors.text,
+    lineHeight: 15,
+  },
+  tripGridDate: {
     flex: 1,
-  },
-  tripDate: {
-    fontSize: FontSize.sm,
+    flexShrink: 1,
+    fontSize: 10,
     color: colors.textSecondary,
-    marginLeft: Spacing.xs,
+    textAlign: 'right',
+    lineHeight: 13,
   },
-  tripMeta: {
+  tripGridMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: Spacing.sm,
-    gap: Spacing.sm,
+    marginTop: 4,
+    gap: 6,
   },
-  tripWeatherMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flexShrink: 0,
+  tripGridPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: BorderRadius.sm - 2,
   },
-  tripMetaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.sm,
-    gap: 4,
-  },
-  tripStat: {
-    fontSize: FontSize.sm,
-    color: colors.textSecondary,
-  },
-  tripDivider: {
-    fontSize: FontSize.sm,
-    color: colors.textTertiary,
+  tripGridStatAccent: {
+    fontSize: 10,
+    fontWeight: '600',
+    lineHeight: 13,
   },
   empty: {
     alignItems: 'center',
