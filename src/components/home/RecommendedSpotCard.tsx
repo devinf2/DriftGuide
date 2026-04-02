@@ -41,7 +41,7 @@ function windCompassFromSpeed(speed: number): string {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     card: {
-      backgroundColor: colors.surfaceElevated,
+      backgroundColor: colors.surface,
       borderRadius: BorderRadius.lg,
       paddingVertical: Spacing.md,
       paddingHorizontal: Spacing.sm,
@@ -96,23 +96,24 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '700',
       color: colors.warning,
     },
+    metaRow: {
+      marginTop: Spacing.sm,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+    },
+    meta: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+    },
     reportLink: {
-      marginTop: 4,
+      flexShrink: 0,
       fontSize: FontSize.xs,
       fontWeight: '600',
       color: colors.secondary,
       textDecorationLine: 'underline',
-    },
-    meta: {
-      marginTop: Spacing.sm,
-      fontSize: FontSize.xs,
-      color: colors.textTertiary,
-    },
-    reason: {
-      marginTop: Spacing.xs,
-      fontSize: FontSize.xs,
-      color: colors.textSecondary,
-      lineHeight: 16,
     },
     metricsRow: {
       marginTop: Spacing.sm,
@@ -123,7 +124,7 @@ function createStyles(colors: ThemeColors) {
     metricCard: {
       flex: 1,
       minWidth: 0,
-      backgroundColor: colors.surface,
+      backgroundColor: colors.surfaceElevated,
       borderRadius: BorderRadius.sm,
       paddingVertical: 6,
       paddingHorizontal: 4,
@@ -242,17 +243,14 @@ export function RecommendedSpotCard({
             <Ionicons name="star" size={14} color={colors.warning} />
             <Text style={styles.ratingNum}>{score.stars.toFixed(1)}</Text>
           </View>
-          <Text style={styles.reportLink}>Fishing report</Text>
         </View>
       </View>
-      <Text style={styles.meta} numberOfLines={2}>
-        {metaParts}
-      </Text>
-      {data.suggestion.reason ? (
-        <Text style={styles.reason} numberOfLines={4}>
-          {data.suggestion.reason}
+      <View style={styles.metaRow}>
+        <Text style={styles.meta} numberOfLines={1}>
+          {metaParts}
         </Text>
-      ) : null}
+        <Text style={styles.reportLink}>Fishing report</Text>
+      </View>
       <View style={styles.metricsRow}>
         <MetricMini
           icon="thermometer"
@@ -279,7 +277,7 @@ export function RecommendedSpotCard({
 export function recommendedSpotsLoadingStyles(colors: ThemeColors) {
   return StyleSheet.create({
     loadingBox: {
-      backgroundColor: colors.surfaceElevated,
+      backgroundColor: colors.surface,
       borderRadius: BorderRadius.lg,
       paddingVertical: Spacing.xl,
       alignItems: 'center',
@@ -287,7 +285,7 @@ export function recommendedSpotsLoadingStyles(colors: ThemeColors) {
       borderColor: colors.border,
     },
     emptyBox: {
-      backgroundColor: colors.surfaceElevated,
+      backgroundColor: colors.surface,
       borderRadius: BorderRadius.lg,
       paddingVertical: Spacing.lg,
       paddingHorizontal: Spacing.md,

@@ -4,7 +4,6 @@ import type { AIContext } from '@/src/services/ai';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import {
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,8 +14,6 @@ import {
   View,
   type RefreshControlProps,
 } from 'react-native';
-
-const DRIFTGUIDE_LOGO = require('@/assets/images/logo.png');
 
 export interface Message {
   id: string;
@@ -42,8 +39,6 @@ export interface GuideChatProps {
   listHeaderComponent?: ReactNode;
   /** Pull-to-refresh on the message scroll area (e.g. home). */
   refreshControl?: ReactElement<RefreshControlProps>;
-  /** When true, assistant replies render as a thread row with the DriftGuide logo (e.g. Fish home). */
-  useAssistantAvatar?: boolean;
 }
 
 const DEFAULT_TITLE = 'AI Fishing Guide';
@@ -133,29 +128,6 @@ function createStyles(colors: ThemeColors) {
     aiBubbleText: {
       color: colors.text,
     },
-    assistantRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: Spacing.xs,
-      alignSelf: 'stretch',
-      maxWidth: '100%',
-    },
-    assistantAvatar: {
-      width: 28,
-      height: 28,
-      borderRadius: BorderRadius.sm,
-      marginTop: 2,
-      backgroundColor: colors.surface,
-    },
-    assistantBubble: {
-      flex: 1,
-      minWidth: 0,
-      maxWidth: '100%',
-    },
-    bubbleTextSm: {
-      fontSize: FontSize.sm,
-      lineHeight: 19,
-    },
     inputRow: {
       flexDirection: 'row',
       padding: Spacing.md,
@@ -187,13 +159,6 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '600',
       fontSize: FontSize.md,
     },
-    inputSm: {
-      fontSize: FontSize.sm,
-      paddingVertical: Spacing.xs + 2,
-    },
-    sendButtonTextSm: {
-      fontSize: FontSize.sm,
-    },
   });
 }
 
@@ -206,7 +171,6 @@ export default function GuideChat({
   contentTopPadding = 0,
   listHeaderComponent,
   refreshControl,
-  useAssistantAvatar = false,
 }: GuideChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -299,22 +263,7 @@ export default function GuideChat({
         {messages.map((msg) =>
           msg.role === 'user' ? (
             <View key={msg.id} style={[styles.bubble, styles.userBubble]}>
-              <Text
-                style={[
-                  styles.bubbleText,
-                  styles.userBubbleText,
-                  useAssistantAvatar && styles.bubbleTextSm,
-                ]}
-              >
-                {msg.text}
-              </Text>
-            </View>
-          ) : useAssistantAvatar ? (
-            <View key={msg.id} style={styles.assistantRow}>
-              <Image source={DRIFTGUIDE_LOGO} style={styles.assistantAvatar} accessibilityLabel="DriftGuide" />
-              <View style={[styles.bubble, styles.aiBubble, styles.assistantBubble]}>
-                <Text style={[styles.bubbleText, styles.aiBubbleText, styles.bubbleTextSm]}>{msg.text}</Text>
-              </View>
+              <Text style={[styles.bubbleText, styles.userBubbleText]}>{msg.text}</Text>
             </View>
           ) : (
             <View key={msg.id} style={[styles.bubble, styles.aiBubble]}>
@@ -323,27 +272,19 @@ export default function GuideChat({
           ),
         )}
 
-        {loading &&
-          (useAssistantAvatar ? (
-            <View style={styles.assistantRow}>
-              <Image source={DRIFTGUIDE_LOGO} style={styles.assistantAvatar} accessibilityLabel="DriftGuide" />
-              <View style={[styles.bubble, styles.aiBubble, styles.assistantBubble]}>
-                <Text style={[styles.aiBubbleText, styles.bubbleTextSm]}>Thinking...</Text>
-              </View>
-            </View>
-          ) : (
-            <View style={[styles.bubble, styles.aiBubble]}>
-              <Text style={styles.aiBubbleText}>Thinking...</Text>
-            </View>
-          ))}
+        {loading ? (
+          <View style={[styles.bubble, styles.aiBubble]}>
+            <Text style={styles.aiBubbleText}>Thinking...</Text>
+          </View>
+        ) : null}
       </ScrollView>
 
       <View style={styles.inputRow}>
         <TextInput
-          style={[styles.input, useAssistantAvatar && styles.inputSm]}
+          style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Ask about fishing..."
+          placeholder="Ask the AI Guide about fishing, tips, etc."
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
@@ -353,7 +294,7 @@ export default function GuideChat({
           onPress={sendMessage}
           disabled={!input.trim() || loading}
         >
-          <Text style={[styles.sendButtonText, useAssistantAvatar && styles.sendButtonTextSm]}>Ask</Text>
+          <Text style={styles.sendButtonText}>Ask</Text>
         </Pressable>
       </View>
     </KeyboardAvoidingView>

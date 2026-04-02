@@ -1,47 +1,22 @@
-import { BorderRadius, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { type ReactNode, useMemo } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { Spacing } from '@/src/constants/theme';
+import { type ReactNode } from 'react';
+import { StyleSheet, View } from 'react-native';
 
-const LOGO = require('@/assets/images/logo.png');
+const styles = StyleSheet.create({
+  wrap: {
+    width: '100%',
+    alignSelf: 'stretch',
+    marginBottom: Spacing.md,
+  },
+});
 
 type Props = {
   children: ReactNode;
 };
 
-function createStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    row: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: Spacing.xs,
-      marginBottom: Spacing.md,
-      maxWidth: '100%',
-    },
-    avatar: {
-      width: 28,
-      height: 28,
-      borderRadius: BorderRadius.sm,
-      backgroundColor: colors.surface,
-      marginTop: 2,
-    },
-    body: {
-      flex: 1,
-      minWidth: 0,
-    },
-  });
-}
-
 /**
- * Left-aligned row: DriftGuide avatar + content (chat-thread style).
+ * Home briefing section wrapper: full-width block with modest space below (no side logo).
  */
 export function DriftGuideMessage({ children }: Props) {
-  const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  return (
-    <View style={styles.row}>
-      <Image source={LOGO} style={styles.avatar} accessibilityLabel="DriftGuide" />
-      <View style={styles.body}>{children}</View>
-    </View>
-  );
+  return <View style={styles.wrap}>{children}</View>;
 }

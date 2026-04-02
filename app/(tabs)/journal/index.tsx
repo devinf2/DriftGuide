@@ -1,7 +1,8 @@
 import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
-import { BorderRadius, Colors, FontSize, LocationTypeColors, Spacing } from '@/src/constants/theme';
+import { BorderRadius, FontSize, LocationTypeColors, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { getWeatherIconName } from '@/src/services/conditions';
 import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -88,6 +89,8 @@ export default function JournalScreen() {
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createJournalStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const filterButtonRef = useRef<View>(null);
 
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
@@ -279,7 +282,7 @@ export default function JournalScreen() {
             <View style={styles.markerBubble}>
               <CatalogLocationMapIcon
                 type={group.trips[0]?.location?.type as LocationType | undefined}
-                color={Colors.textInverse}
+                color={colors.textInverse}
                 size={20}
               />
             </View>
@@ -307,19 +310,19 @@ export default function JournalScreen() {
                 resizeMode="cover"
               />
             ) : (
-              <MaterialCommunityIcons name="fish" size={18} color={Colors.textInverse} />
+              <MaterialCommunityIcons name="fish" size={18} color={colors.textInverse} />
             )}
           </View>
         </View>
       ),
     }));
-  }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress]);
+  }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress, styles, colors]);
 
   const renderTrip = ({ item }: { item: Trip }) => {
     const locationType = item.location?.type as LocationType | undefined;
     const accent = locationType && LocationTypeColors[locationType]
       ? LocationTypeColors[locationType]
-      : Colors.primary;
+      : colors.primary;
     const insight = getTripListInsight(item);
     return (
       <Pressable
@@ -356,7 +359,7 @@ export default function JournalScreen() {
                     <Ionicons
                       name={getWeatherIconName(insight.condition) as keyof typeof Ionicons.glyphMap}
                       size={17}
-                      color={Colors.textSecondary}
+                      color={colors.textSecondary}
                     />
                   </View>
                 ) : (
@@ -375,14 +378,14 @@ export default function JournalScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>Loading trips...</Text>
       </View>
     );
   }
 
   const headerInactive = 'rgba(255,255,255,0.85)';
-  const headerActiveIcon = Colors.primary;
+  const headerActiveIcon = colors.primary;
 
   return (
     <View style={styles.container}>
@@ -451,7 +454,7 @@ export default function JournalScreen() {
               <MaterialIcons
                 name="menu-book"
                 size={16}
-                color={mapLayer === 'journal' ? Colors.primary : headerInactive}
+                color={mapLayer === 'journal' ? colors.primary : headerInactive}
               />
               <Text style={[styles.mapLayerChipText, mapLayer === 'journal' && styles.mapLayerChipTextActive]}>
                 Journal
@@ -467,7 +470,7 @@ export default function JournalScreen() {
               <MaterialCommunityIcons
                 name="fish"
                 size={16}
-                color={mapLayer === 'fish' ? Colors.primary : headerInactive}
+                color={mapLayer === 'fish' ? colors.primary : headerInactive}
               />
               <Text style={[styles.mapLayerChipText, mapLayer === 'fish' && styles.mapLayerChipTextActive]}>
                 My fish
@@ -510,7 +513,7 @@ export default function JournalScreen() {
                     {r.label}
                   </Text>
                   {dateRange === r.key && (
-                    <MaterialIcons name="check" size={20} color={Colors.primary} />
+                    <MaterialIcons name="check" size={20} color={colors.primary} />
                   )}
                 </Pressable>
               ))}
@@ -531,11 +534,11 @@ export default function JournalScreen() {
               : [styles.list, { paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]
           }
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <MaterialIcons name="menu-book" size={48} color={Colors.textTertiary} />
+              <MaterialIcons name="menu-book" size={48} color={colors.textTertiary} />
               <Text style={styles.emptyTitle}>
                 {dateRange === 'all' ? 'No trips yet' : 'No trips in this period'}
               </Text>
@@ -554,7 +557,7 @@ export default function JournalScreen() {
         <View style={styles.mapWrapper}>
           {Platform.OS === 'web' ? (
             <View style={styles.mapWebPlaceholder}>
-              <MaterialIcons name="map" size={48} color={Colors.textTertiary} />
+              <MaterialIcons name="map" size={48} color={colors.textTertiary} />
               <Text style={styles.mapWebPlaceholderText}>
                 Map is available in the iOS and Android app.
               </Text>
@@ -568,6 +571,8 @@ export default function JournalScreen() {
               markers={mapboxMarkers}
               showUserLocation={journalMapUserLocation}
               onZoomLevelChange={setMapZoom}
+              reservePlanTripFabSpacing
+              mapTabControlLayout
             />
           )}
 
@@ -615,7 +620,7 @@ export default function JournalScreen() {
                         </Text>
                       </View>
                       <Pressable onPress={() => setSelectedGroup(null)} hitSlop={12}>
-                        <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                        <MaterialIcons name="close" size={22} color={colors.textSecondary} />
                       </Pressable>
                     </View>
                     <FlatList
@@ -636,7 +641,7 @@ export default function JournalScreen() {
                                 {formatFishCount(item.total_fish)} · {formatTripDuration(item.start_time, item.end_time)}
                               </Text>
                             </View>
-                            <MaterialIcons name="chevron-right" size={20} color={Colors.textTertiary} />
+                            <MaterialIcons name="chevron-right" size={20} color={colors.textTertiary} />
                           </View>
                         </Pressable>
                       )}
@@ -712,7 +717,7 @@ export default function JournalScreen() {
                   <View style={[styles.fishCatchSheetActions, { paddingBottom: insets.bottom + Spacing.lg }]}>
                     <View style={styles.fishCatchSheetHeader}>
                       <Pressable onPress={() => setSelectedFishCatch(null)} hitSlop={12} style={styles.fishCatchSheetClose}>
-                        <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                        <MaterialIcons name="close" size={22} color={colors.textSecondary} />
                       </Pressable>
                     </View>
                     <Pressable
@@ -724,7 +729,7 @@ export default function JournalScreen() {
                       }}
                     >
                       <Text style={styles.fishOpenJournalBtnText}>Open journal entry</Text>
-                      <MaterialIcons name="chevron-right" size={20} color={Colors.textInverse} />
+                      <MaterialIcons name="chevron-right" size={20} color={colors.textInverse} />
                     </Pressable>
                   </View>
                 </View>
@@ -737,10 +742,11 @@ export default function JournalScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: colors.background,
   },
   centered: {
     flex: 1,
@@ -750,12 +756,12 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: Spacing.sm,
   },
 
   journalHeaderWrap: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
   },
   controlsBar: {
     flexDirection: 'row',
@@ -784,8 +790,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   filterButtonActive: {
-    backgroundColor: Colors.textInverse,
-    borderColor: Colors.textInverse,
+    backgroundColor: colors.textInverse,
+    borderColor: colors.textInverse,
   },
   filterOverlay: {
     flex: 1,
@@ -793,7 +799,7 @@ const styles = StyleSheet.create({
   },
   filterDropdown: {
     position: 'absolute',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.xs,
     minWidth: 200,
@@ -806,7 +812,7 @@ const styles = StyleSheet.create({
   filterPopupTitle: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     paddingHorizontal: Spacing.lg,
@@ -820,15 +826,15 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
   },
   filterOptionActive: {
-    backgroundColor: Colors.borderLight,
+    backgroundColor: colors.borderLight,
   },
   filterOptionText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: colors.text,
     fontWeight: '500',
   },
   filterOptionTextActive: {
-    color: Colors.primary,
+    color: colors.primary,
     fontWeight: '600',
   },
   toggleButton: {
@@ -841,7 +847,7 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
   toggleButtonActive: {
-    backgroundColor: Colors.textInverse,
+    backgroundColor: colors.textInverse,
   },
   toggleText: {
     fontSize: FontSize.sm,
@@ -849,7 +855,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.9)',
   },
   toggleTextActive: {
-    color: Colors.primary,
+    color: colors.primary,
   },
   mapLayerRow: {
     flexDirection: 'row',
@@ -868,8 +874,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.35)',
   },
   mapLayerChipActive: {
-    backgroundColor: Colors.textInverse,
-    borderColor: Colors.textInverse,
+    backgroundColor: colors.textInverse,
+    borderColor: colors.textInverse,
   },
   mapLayerChipText: {
     fontSize: FontSize.sm,
@@ -877,7 +883,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.9)',
   },
   mapLayerChipTextActive: {
-    color: Colors.primary,
+    color: colors.primary,
   },
 
   // List view
@@ -889,14 +895,14 @@ const styles = StyleSheet.create({
   },
   tripCard: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderRadius: BorderRadius.lg,
     overflow: 'hidden',
     minHeight: 88,
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: Colors.border,
-    shadowColor: Colors.shadow,
+    borderColor: colors.border,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 6,
@@ -930,12 +936,12 @@ const styles = StyleSheet.create({
   tripLocation: {
     fontSize: FontSize.lg,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     flex: 1,
   },
   tripDate: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginLeft: Spacing.xs,
   },
   tripMeta: {
@@ -960,11 +966,11 @@ const styles = StyleSheet.create({
   },
   tripStat: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
   },
   tripDivider: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: colors.textTertiary,
   },
   empty: {
     alignItems: 'center',
@@ -972,12 +978,12 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: FontSize.xl,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
     marginTop: Spacing.sm,
   },
   emptyText: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
     marginTop: Spacing.sm,
   },
@@ -994,12 +1000,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: Spacing.xl,
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
   },
   mapWebPlaceholderText: {
     marginTop: Spacing.md,
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   markerContainer: {
@@ -1007,7 +1013,7 @@ const styles = StyleSheet.create({
     width: 80,
   },
   markerBadge: {
-    backgroundColor: Colors.accent,
+    backgroundColor: colors.accent,
     borderRadius: BorderRadius.full,
     minWidth: 20,
     height: 20,
@@ -1023,12 +1029,12 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   markerBadgeText: {
-    color: Colors.textInverse,
+    color: colors.textInverse,
     fontSize: 11,
     fontWeight: '700',
   },
   markerBubble: {
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.full,
     width: 32,
     height: 32,
@@ -1043,10 +1049,10 @@ const styles = StyleSheet.create({
   markerLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.text,
+    color: scheme === 'dark' ? '#F8FAFC' : colors.text,
     marginTop: 2,
     textAlign: 'center',
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: scheme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.85)',
     paddingHorizontal: 4,
     paddingVertical: 1,
     borderRadius: 4,
@@ -1072,7 +1078,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   fishMarkerBubble: {
-    backgroundColor: Colors.accent,
+    backgroundColor: colors.accent,
     borderRadius: BorderRadius.full,
     width: 34,
     height: 34,
@@ -1101,7 +1107,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
   entryModalSheet: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     maxHeight: '58%',
@@ -1119,16 +1125,16 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   selectedPanelTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: colors.text,
   },
   selectedPanelSubtitle: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   selectedTripList: {
@@ -1141,7 +1147,7 @@ const styles = StyleSheet.create({
   selectedTripCard: {
     paddingVertical: Spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomColor: colors.borderLight,
   },
   selectedTripRow: {
     flexDirection: 'row',
@@ -1150,11 +1156,11 @@ const styles = StyleSheet.create({
   selectedTripDate: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: colors.text,
   },
   selectedTripMeta: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   fishCatchBottomStack: {
@@ -1185,7 +1191,7 @@ const styles = StyleSheet.create({
   fishCatchHeroTitle: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
   fishCatchHeroSubtitle: {
     fontSize: FontSize.sm,
@@ -1204,7 +1210,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   fishCatchSheetActions: {
-    backgroundColor: Colors.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     paddingHorizontal: Spacing.lg,
@@ -1231,12 +1237,13 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
     marginBottom: Spacing.md,
     paddingVertical: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
   },
   fishOpenJournalBtnText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: colors.textInverse,
   },
-});
+  });
+}

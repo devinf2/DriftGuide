@@ -415,10 +415,11 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
         : Spacing.lg + planTripFabClearance;
 
-    /** Map tab: layers sit above the add-location (+) FAB only, not above zoom. */
+    /** Map tab: layers sit above the trailing (+) FAB when present; else bottom-right above plan-trip FAB only. */
     const layersFabBottom =
       mapTabControlLayout && showBasemapSwitcher && mapStyle == null
-        ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
+        ? trailingFabBottom +
+          (hasTrailingFab ? TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP : 0)
         : undefined;
 
     const resolvedStyleURL = mapStyle ?? mapboxStyleURLForBasemap(basemapId);

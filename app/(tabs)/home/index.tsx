@@ -1,4 +1,3 @@
-import { FishHomeChatLead } from '@/src/components/home/FishHomeChatLead';
 import { FishHomeHatchSection } from '@/src/components/home/FishHomeHatchSection';
 import { FishHomeIntro } from '@/src/components/home/FishHomeIntro';
 import { FishHomePlannedSection } from '@/src/components/home/FishHomePlannedSection';
@@ -13,7 +12,7 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { Trip } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
-import { profileDisplayName } from '@/src/utils/profileDisplay';
+import { profileFirstName } from '@/src/utils/profileDisplay';
 import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -360,7 +359,6 @@ export default function HomeScreen() {
         <GuideChat
           getContext={getContext}
           variant="full"
-          useAssistantAvatar={fullHome}
           contentTopPadding={activeTrip && isTripPaused ? 0 : insets.top}
           refreshControl={
             fullHome ? (
@@ -370,7 +368,7 @@ export default function HomeScreen() {
           listHeaderComponent={
             fullHome ? (
               <View>
-                <FishHomeIntro displayName={profile ? profileDisplayName(profile) : null} />
+                <FishHomeIntro userFirstName={profileFirstName(profile)} />
                 <FishHomeHatchSection loading={hatchLoading} rows={hatchRows} />
                 <FishHomeSpotsSection
                   hotSpotLoading={hotSpotLoading}
@@ -383,7 +381,6 @@ export default function HomeScreen() {
                   onStartTrip={handleStartPlannedTrip}
                   onDeleteTrip={handleDeletePlannedTrip}
                 />
-                <FishHomeChatLead />
               </View>
             ) : undefined
           }

@@ -24,7 +24,7 @@ function hatchDotColor(tier: HatchBriefRow['tier'], colors: ThemeColors): string
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     card: {
-      backgroundColor: colors.surfaceElevated,
+      backgroundColor: colors.surface,
       borderRadius: BorderRadius.lg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
@@ -49,7 +49,9 @@ function createStyles(colors: ThemeColors) {
     },
     body: {
       paddingHorizontal: Spacing.sm,
-      paddingBottom: Spacing.md,
+      paddingBottom: Spacing.xs,
+    },
+    hatchList: {
       gap: Spacing.sm,
     },
     emptyText: {
@@ -62,7 +64,7 @@ function createStyles(colors: ThemeColors) {
     hatchRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.surface,
+      backgroundColor: colors.surfaceElevated,
       borderRadius: BorderRadius.md,
       paddingVertical: Spacing.md,
       paddingHorizontal: Spacing.md,
@@ -101,8 +103,9 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
       gap: Spacing.xs,
-      paddingVertical: Spacing.sm,
-      paddingHorizontal: Spacing.sm,
+      marginTop: Spacing.xs,
+      paddingVertical: 2,
+      paddingHorizontal: Spacing.xs,
     },
     seeMoreText: {
       fontSize: FontSize.xs,
@@ -165,25 +168,27 @@ export function FishHomeHatchSection({
               </Text>
             ) : (
               <>
-                {visibleRows.map((row, i) => (
-                  <View key={`${row.insect}-${i}`} style={styles.hatchRow}>
-                    <View style={[styles.statusDot, { backgroundColor: hatchDotColor(row.tier, colors) }]} />
-                    <View style={styles.hatchRowText}>
-                      <Text style={styles.insectName} numberOfLines={1}>
-                        {row.insect}
-                        {row.sizes ? (
-                          <Text style={styles.sizeHint}>
-                            {' '}
-                            ({row.sizes})
-                          </Text>
-                        ) : null}
+                <View style={styles.hatchList}>
+                  {visibleRows.map((row, i) => (
+                    <View key={`${row.insect}-${i}`} style={styles.hatchRow}>
+                      <View style={[styles.statusDot, { backgroundColor: hatchDotColor(row.tier, colors) }]} />
+                      <View style={styles.hatchRowText}>
+                        <Text style={styles.insectName} numberOfLines={1}>
+                          {row.insect}
+                          {row.sizes ? (
+                            <Text style={styles.sizeHint}>
+                              {' '}
+                              ({row.sizes})
+                            </Text>
+                          ) : null}
+                        </Text>
+                      </View>
+                      <Text style={styles.statusLabel} numberOfLines={1}>
+                        {row.status}
                       </Text>
                     </View>
-                    <Text style={styles.statusLabel} numberOfLines={1}>
-                      {row.status}
-                    </Text>
-                  </View>
-                ))}
+                  ))}
+                </View>
                 {hasMoreToShow && !showMoreHatches ? (
                   <Pressable
                     style={styles.seeMoreRow}
