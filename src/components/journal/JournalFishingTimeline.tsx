@@ -41,6 +41,7 @@ import {
 } from '@/src/utils/journalTimeline';
 import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
 import type { AIQueryData, CatchData, Fly, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
+import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatEventTime } from '@/src/utils/formatters';
 
 type RowAction = { label: string; destructive?: boolean; onPress: () => void };
@@ -498,10 +499,10 @@ export function JournalFishingTimeline({
                     {event.event_type === 'catch' ? (
                       <CatchDetailsBlock data={event.data as CatchData} />
                     ) : null}
-                    {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
+                    {event.event_type === 'catch' && getCatchHeroPhotoUrl(event.data as CatchData) ? (
                       <Pressable onPress={() => onCatchPhotoPress?.(event)}>
                         <Image
-                          source={{ uri: (event.data as CatchData).photo_url! }}
+                          source={{ uri: getCatchHeroPhotoUrl(event.data as CatchData)! }}
                           style={styles.timelineCatchThumb}
                         />
                       </Pressable>

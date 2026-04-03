@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
+import type { CatchData } from '@/src/types';
+import { catchDataWithAppendedPhotoUrl } from '@/src/utils/catchPhotos';
 import type { AddPhotoOptions } from './photoService';
 import { getPendingTrips } from './pendingSyncStorage';
 
@@ -15,6 +17,8 @@ export interface PendingPhoto {
   tripId: string;
   /** For type 'catch', the trip_events row id to update with photo_url after upload. */
   eventId?: string;
+  /** Order within the catch when multiple pending uploads. */
+  displayOrder?: number;
   caption?: string | null;
   species?: string | null;
   fly_pattern?: string | null;
@@ -50,6 +54,7 @@ export function buildPendingFromAddPhotoOptions(
     userId: options.userId,
     tripId: options.tripId ?? '',
     eventId,
+    displayOrder: options.displayOrder,
     caption: options.caption ?? null,
     species: options.species ?? null,
     fly_pattern: options.fly_pattern ?? null,
@@ -85,7 +90,7 @@ export async function removePendingPhoto(id: string): Promise<void> {
   await setStored(next);
 }
 
-/** Update photo_url for an event in the pending trip payload (so when we sync the trip later it has the URL). */
+/** Append uploaded photo URL to catch event data in the pending trip payload (multi-photo safe). */
 export async function updatePendingTripEventPhotoUrl(
   tripId: string,
   eventId: string,
@@ -97,7 +102,10 @@ export async function updatePendingTripEventPhotoUrl(
   if (!payload) return;
   const events = payload.events.map((e) =>
     e.id === eventId && e.event_type === 'catch'
-      ? { ...e, data: { ...e.data, photo_url: photoUrl } }
+      ? {
+          ...e,
+          data: catchDataWithAppendedPhotoUrl(e.data as CatchData, photoUrl),
+        }
       : e,
   );
   await savePendingTrip(tripId, payload.trip, events);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,7 +19,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { COMMON_SPECIES as SPECIES_OPTIONS, FLY_COLORS, FLY_NAMES, FLY_SIZES } from '@/src/constants/fishingTypes';
 import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
-import { addPhoto, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { addPhoto, deleteCatchPhotoByUrl, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { upsertCatchEventToCloud } from '@/src/services/sync';
 import { fetchHistoricalWeather } from '@/src/services/historicalWeather';
 import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
 import { upsertEventSorted } from '@/src/utils/journalTimeline';
@@ -35,6 +36,14 @@ import type {
   Trip,
   TripEvent,
 } from '@/src/types';
+import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
+
+const MAX_CATCH_PHOTOS = 8;
+
+function isRemoteStorageUrl(uri: string): boolean {
+  const t = uri.trim();
+  return t.startsWith('http://') || t.startsWith('https://');
+}
 
 export type CatchDetailsSubmitAdd = {
   primary: FlyChangeData;
@@ -42,7 +51,8 @@ export type CatchDetailsSubmitAdd = {
   catchFields: Partial<CatchData>;
   latitude: number | null;
   longitude: number | null;
-  photoUri: string | null;
+  /** Local file URIs from picker (uploaded after catch is saved). */
+  photoUris: string[];
   /** EXIF / photo capture time for storage and catch timestamp when present */
   photoCapturedAtIso?: string | null;
   /** Catch event time (usually same as photo when EXIF exists) */
@@ -201,8 +211,9 @@ export function CatchDetailsModal({
   const [catchNote, setCatchNote] = useState('');
   const [catchQty, setCatchQty] = useState('1');
   const [catchDepth, setCatchDepth] = useState('');
-  const [catchPhotoUri, setCatchPhotoUri] = useState<string | null>(null);
-  const [existingPhotoUrl, setExistingPhotoUrl] = useState<string | null>(null);
+  const [catchPhotoUris, setCatchPhotoUris] = useState<string[]>([]);
+  /** Remote URLs present when edit form opened (for delete-on-remove). */
+  const initialEditRemoteUrlsRef = useRef<string[]>([]);
   /** Set when user picks a photo that includes EXIF (library or camera). */
   const [photoExifMeta, setPhotoExifMeta] = useState<PhotoExifMetadata | null>(null);
   const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper'>('primary');
@@ -269,8 +280,8 @@ export function CatchDetailsModal({
     setCatchNote('');
     setCatchQty('1');
     setCatchDepth('');
-    setCatchPhotoUri(null);
-    setExistingPhotoUrl(null);
+    setCatchPhotoUris([]);
+    initialEditRemoteUrlsRef.current = [];
     setPhotoExifMeta(null);
     setCatchCaughtOnFly('primary');
     setCatchReleased(true);
@@ -308,11 +319,10 @@ export function CatchDetailsModal({
       setCatchSpecies(data.species ?? '');
       setCatchSize(data.size_inches != null ? String(data.size_inches) : '');
       setCatchNote(data.note ?? '');
-      setCatchQty(String(Math.max(1, data.quantity ?? 1)));
       setCatchDepth(data.depth_ft != null ? String(data.depth_ft) : '');
-      setCatchPhotoUri(null);
+      setCatchPhotoUris(normalizeCatchPhotoUrls(data));
+      initialEditRemoteUrlsRef.current = normalizeCatchPhotoUrls(data).filter(isRemoteStorageUrl);
       setPhotoExifMeta(null);
-      setExistingPhotoUrl(data.photo_url ?? null);
       setCatchCaughtOnFly(data.caught_on_fly ?? 'primary');
       setCatchPresentation(data.presentation_method ?? null);
       setCatchReleased(data.released ?? null);
@@ -456,6 +466,10 @@ export function CatchDetailsModal({
       onPickPhotoProp(source);
       return;
     }
+    if (catchPhotoUris.length >= MAX_CATCH_PHOTOS) {
+      Alert.alert('Limit reached', `You can add up to ${MAX_CATCH_PHOTOS} photos per catch.`);
+      return;
+    }
     const pickerOpts = { allowsEditing: false, quality: 0.85 as const, exif: true };
     if (source === 'camera') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -470,27 +484,46 @@ export function CatchDetailsModal({
         const hasMeta =
           meta.takenAt != null || meta.latitude != null || meta.longitude != null;
         setPhotoExifMeta(hasMeta ? meta : null);
-        setCatchPhotoUri(asset.uri);
+        setCatchPhotoUris((prev) => [...prev, asset.uri]);
         applyPhotoExifToPin(meta);
       }
     } else {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow photo library access to choose a photo.');
+        Alert.alert('Permission needed', 'Allow photo library access to choose photos.');
         return;
       }
+      const remaining = MAX_CATCH_PHOTOS - catchPhotoUris.length;
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        ...pickerOpts,
+        allowsEditing: false,
+        quality: 0.85,
+        exif: true,
+        allowsMultipleSelection: true,
+        selectionLimit: Math.max(1, remaining),
       });
-      const asset = result.assets?.[0];
-      if (!result.canceled && asset?.uri) {
+      if (result.canceled || !result.assets?.length) return;
+      const toAdd = result.assets
+        .map((a) => a.uri)
+        .filter((uri): uri is string => Boolean(uri))
+        .slice(0, remaining);
+      if (toAdd.length === 0) return;
+      setCatchPhotoUris((prev) => [...prev, ...toAdd]);
+      let appliedExif = false;
+      for (const asset of result.assets) {
+        if (!asset.uri) continue;
         const meta = extractPhotoMetadataFromPickerAsset(asset);
         const hasMeta =
           meta.takenAt != null || meta.latitude != null || meta.longitude != null;
-        setPhotoExifMeta(hasMeta ? meta : null);
-        setCatchPhotoUri(asset.uri);
-        applyPhotoExifToPin(meta);
+        if (hasMeta) {
+          setPhotoExifMeta(meta);
+          applyPhotoExifToPin(meta);
+          appliedExif = true;
+          break;
+        }
+      }
+      if (!appliedExif && toAdd.length > 0) {
+        setPhotoExifMeta(null);
       }
     }
   };
@@ -543,7 +576,7 @@ export function CatchDetailsModal({
     const species = catchSpecies.trim() || null;
     const sizeNum = catchSize.trim() ? parseFloat(catchSize.trim()) : null;
     const depthNum = catchDepth.trim() ? parseFloat(catchDepth.trim()) : null;
-    const qty = Math.max(1, Math.floor(Number(catchQty) || 1));
+    const qtyAdd = Math.max(1, Math.floor(Number(catchQty) || 1));
     syncPinFromText();
     const lat = pinLat;
     const lon = pinLon;
@@ -580,7 +613,7 @@ export function CatchDetailsModal({
             size_inches: sizeNum ?? undefined,
             note: catchNote.trim() || undefined,
             caught_on_fly: catchCaughtOnFly,
-            quantity: qty,
+            quantity: qtyAdd,
             depth_ft: depthNum ?? undefined,
             presentation_method: catchPresentation ?? undefined,
             released: catchReleased ?? undefined,
@@ -588,22 +621,52 @@ export function CatchDetailsModal({
           },
           latitude: lat,
           longitude: lon,
-          photoUri: catchPhotoUri,
+          photoUris: [...catchPhotoUris],
           photoCapturedAtIso,
           catchTimestampIso,
           conditionsSnapshot,
         });
         onClose();
       } else if (mode === 'edit' && editingEvent && onSubmitEdit) {
-        let photoUrl = existingPhotoUrl;
-        if (catchPhotoUri && isConnected) {
-          try {
+        const newLocalUris = catchPhotoUris.filter((u) => !isRemoteStorageUrl(u));
+        if (newLocalUris.length > 0 && !isConnected) {
+          Alert.alert('Offline', 'Connect to the internet to add new photos.');
+          setSubmitting(false);
+          return;
+        }
+
+        for (const u of initialEditRemoteUrlsRef.current) {
+          if (!catchPhotoUris.includes(u)) {
+            try {
+              await deleteCatchPhotoByUrl(userId, editingEvent.id, u);
+            } catch (e) {
+              console.warn('[CatchDetailsModal] deleteCatchPhotoByUrl', e);
+            }
+          }
+        }
+
+        if (newLocalUris.length > 0) {
+          const syncOk = await upsertCatchEventToCloud(trip, editingEvent, allEvents);
+          if (!syncOk) {
+            Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again.');
+            setSubmitting(false);
+            return;
+          }
+        }
+
+        const finalUrls: string[] = [];
+        try {
+          for (const u of catchPhotoUris) {
+            if (isRemoteStorageUrl(u)) {
+              finalUrls.push(u);
+              continue;
+            }
             const useDropper = catchCaughtOnFly === 'dropper' && dropper?.pattern?.trim();
             const p = await addPhoto(
               {
                 userId,
                 tripId: trip.id,
-                uri: catchPhotoUri,
+                uri: u,
                 caption: catchNote.trim() || undefined,
                 species: species ?? undefined,
                 fly_pattern: (useDropper ? dropper!.pattern : primary.pattern) || undefined,
@@ -611,18 +674,16 @@ export function CatchDetailsModal({
                 fly_color: (useDropper ? dropper!.color : primary.color) ?? undefined,
                 fly_id: useDropper ? dropper!.fly_id : primary.fly_id,
                 captured_at: photoExifMeta?.takenAt?.toISOString() ?? editingEvent.timestamp,
+                catchId: editingEvent.id,
+                displayOrder: finalUrls.length,
               },
               { isOnline: true },
             );
-            photoUrl = p.url;
-          } catch (e) {
-            if (e instanceof PhotoQueuedOfflineError) Alert.alert('Offline', e.message);
-            else Alert.alert('Photo', (e as Error).message);
-            setSubmitting(false);
-            return;
+            finalUrls.push(p.url);
           }
-        } else if (catchPhotoUri && !isConnected) {
-          Alert.alert('Offline', 'Connect to upload a new photo.');
+        } catch (e) {
+          if (e instanceof PhotoQueuedOfflineError) Alert.alert('Offline', e.message);
+          else Alert.alert('Photo', (e as Error).message);
           setSubmitting(false);
           return;
         }
@@ -631,10 +692,11 @@ export function CatchDetailsModal({
           species,
           size_inches: sizeNum != null && Number.isFinite(sizeNum) ? sizeNum : null,
           note: catchNote.trim() || null,
-          photo_url: catchPhotoUri ? photoUrl : existingPhotoUrl,
+          photo_url: finalUrls[0] ?? null,
+          photo_urls: finalUrls.length ? finalUrls : null,
           active_fly_event_id: (editingEvent.data as CatchData).active_fly_event_id,
           caught_on_fly: catchCaughtOnFly,
-          quantity: qty,
+          quantity: 1,
           depth_ft: depthNum != null && Number.isFinite(depthNum) ? depthNum : null,
           presentation_method: catchPresentation,
           released: catchReleased,
@@ -644,7 +706,8 @@ export function CatchDetailsModal({
         let eventOverrides:
           | { timestamp?: string; conditions_snapshot?: EventConditionsSnapshot | null }
           | undefined;
-        if (catchPhotoUri && photoExifMeta?.takenAt) {
+        const addedLocalPhoto = newLocalUris.length > 0;
+        if (addedLocalPhoto && photoExifMeta?.takenAt) {
           if (lat != null && lon != null) {
             const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
             eventOverrides = {
@@ -757,6 +820,7 @@ export function CatchDetailsModal({
               contentContainerStyle={styles.catchModalScrollContent}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
+              nestedScrollEnabled
             >
               {mode === 'add' ? (
                 <>
@@ -905,38 +969,42 @@ export function CatchDetailsModal({
                 </Pressable>
               )}
 
-              <Text style={styles.flyFieldLabel}>Photo</Text>
-              <View style={styles.catchPhotoRow}>
-                {catchPhotoUri || existingPhotoUrl ? (
-                  <View style={styles.catchPhotoPreviewWrap}>
-                    <Image
-                      source={{ uri: catchPhotoUri ?? existingPhotoUrl! }}
-                      style={styles.catchPhotoPreview}
-                    />
+              <Text style={styles.flyFieldLabel}>Photos</Text>
+              {catchPhotoUris.length < MAX_CATCH_PHOTOS ? (
+                <View style={styles.catchPhotoActionsRow}>
+                  <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('camera')}>
+                    <MaterialIcons name="photo-camera" size={22} color={Colors.primary} />
+                    <Text style={styles.catchPhotoButtonLabel}>Camera</Text>
+                  </Pressable>
+                  <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('library')}>
+                    <MaterialIcons name="photo-library" size={22} color={Colors.primary} />
+                    <Text style={styles.catchPhotoButtonLabel}>Upload</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+              <ScrollView
+                horizontal
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator
+                directionalLockEnabled
+                style={styles.catchPhotoScroll}
+                contentContainerStyle={styles.catchPhotoThumbsContent}
+              >
+                {catchPhotoUris.map((uri, idx) => (
+                  <View key={`${uri}-${idx}`} style={styles.catchPhotoPreviewWrap}>
+                    <Image source={{ uri }} style={styles.catchPhotoPreview} />
                     <Pressable
                       style={styles.catchPhotoRemove}
                       onPress={() => {
-                        setCatchPhotoUri(null);
-                        setExistingPhotoUrl(null);
+                        setCatchPhotoUris((prev) => prev.filter((_, i) => i !== idx));
                         setPhotoExifMeta(null);
                       }}
                     >
                       <MaterialIcons name="close" size={18} color={Colors.textInverse} />
                     </Pressable>
                   </View>
-                ) : (
-                  <>
-                    <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('camera')}>
-                      <MaterialIcons name="photo-camera" size={22} color={Colors.primary} />
-                      <Text style={styles.catchPhotoButtonLabel}>Camera</Text>
-                    </Pressable>
-                    <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('library')}>
-                      <MaterialIcons name="photo-library" size={22} color={Colors.primary} />
-                      <Text style={styles.catchPhotoButtonLabel}>Upload</Text>
-                    </Pressable>
-                  </>
-                )}
-              </View>
+                ))}
+              </ScrollView>
               {photoExifMeta?.takenAt ? (
                 <Text style={styles.exifHint}>
                   Using date and time from the photo
@@ -965,15 +1033,19 @@ export function CatchDetailsModal({
                 onChangeText={setCatchSize}
                 keyboardType="decimal-pad"
               />
-              <Text style={styles.flyFieldLabel}>Quantity</Text>
-              <TextInput
-                style={styles.catchModalInput}
-                placeholder="1"
-                placeholderTextColor={Colors.textTertiary}
-                value={catchQty}
-                onChangeText={setCatchQty}
-                keyboardType="number-pad"
-              />
+              {mode === 'add' ? (
+                <>
+                  <Text style={styles.flyFieldLabel}>Quantity</Text>
+                  <TextInput
+                    style={styles.catchModalInput}
+                    placeholder="1"
+                    placeholderTextColor={Colors.textTertiary}
+                    value={catchQty}
+                    onChangeText={setCatchQty}
+                    keyboardType="number-pad"
+                  />
+                </>
+              ) : null}
               <Text style={styles.flyFieldLabel}>Species</Text>
               <Pressable style={styles.catchFlyDropdownRow} onPress={() => setCatchSpeciesDropdownOpen(true)}>
                 <Text
@@ -1159,7 +1231,7 @@ export function CatchDetailsModal({
               <Pressable
                 style={styles.catchModalCancel}
                 onPress={() => {
-                  setCatchPhotoUri(null);
+                  setCatchPhotoUris([]);
                   setPhotoExifMeta(null);
                   onClose();
                 }}
@@ -1387,7 +1459,24 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   catchModalNoteInput: { minHeight: 64 },
-  catchPhotoRow: { flexDirection: 'row', gap: Spacing.md, marginBottom: Spacing.sm },
+  catchPhotoActionsRow: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+    alignItems: 'center',
+  },
+  catchPhotoScroll: {
+    marginBottom: Spacing.sm,
+    maxHeight: 130,
+    width: '100%',
+  },
+  /** Padding so last thumbnail can scroll past the edge; row must not shrink (horizontal scroll). */
+  catchPhotoThumbsContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: Spacing.lg,
+    gap: Spacing.md,
+  },
   catchPhotoButton: {
     flex: 1,
     flexDirection: 'row',

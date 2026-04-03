@@ -18,6 +18,7 @@ import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { dedupeConsecutiveLngLat, matchWalkingRoute } from '@/src/services/mapboxWalkingMatch';
 import type { CatchData, Trip, TripEvent } from '@/src/types';
+import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
 import { getAnnotationsLayerID } from '@rnmapbox/maps';
@@ -95,7 +96,7 @@ export function buildJournalWaypoints(trip: Trip, events: TripEvent[]): JournalW
       title: species ? `Catch · ${species}` : 'Catch',
       pinColor: Colors.primaryLight,
       kind: 'catch',
-      photoUrl: data.photo_url ?? null,
+      photoUrl: getCatchHeroPhotoUrl(data),
       catchEventId: e.id,
     });
   }

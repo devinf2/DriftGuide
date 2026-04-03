@@ -34,7 +34,6 @@ export function SyncOnConnectivity() {
       lastRunRef.current = now;
       inProgressRef.current = true;
       try {
-        await processPendingPhotos();
         if (userId) {
           await syncPendingUserCatches(userId);
         }
@@ -44,6 +43,7 @@ export function SyncOnConnectivity() {
         if (activeTrip && events) {
           await syncTripToCloud(activeTrip, events);
         }
+        await processPendingPhotos();
         await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, userId);
       } finally {
         inProgressRef.current = false;
@@ -62,21 +62,16 @@ export function SyncOnConnectivity() {
         if (now - lastRunRef.current < DEBOUNCE_MS) return;
         lastRunRef.current = now;
         inProgressRef.current = true;
-        processPendingPhotos()
-          .then(() => {
-            const uid = useAuthStore.getState().user?.id;
-            return uid ? syncPendingUserCatches(uid) : Promise.resolve();
-          })
-          .then(() => flushPendingCatches())
-          .then(() => retryPendingSyncs())
-          .then(() => {
-            const { activeTrip: at, events: ev } = useTripStore.getState();
-            if (at && ev) return syncTripToCloud(at, ev);
-          })
-          .then(() => {
-            const uid = useAuthStore.getState().user?.id;
-            return refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, uid);
-          })
+        (async () => {
+          const uid = useAuthStore.getState().user?.id;
+          if (uid) await syncPendingUserCatches(uid);
+          await flushPendingCatches();
+          await retryPendingSyncs();
+          const { activeTrip: at, events: ev } = useTripStore.getState();
+          if (at && ev) await syncTripToCloud(at, ev);
+          await processPendingPhotos();
+          await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, uid);
+        })()
           .finally(() => {
             inProgressRef.current = false;
           });

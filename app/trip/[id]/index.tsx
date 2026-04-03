@@ -60,6 +60,7 @@ import {
   TripEvent,
   type LocationType,
 } from '@/src/types';
+import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import {
   findActiveFlyEventIdBefore,
@@ -311,9 +312,10 @@ export default function TripDashboardScreen() {
 
   const handleCatchPhotoPress = useCallback((event: TripEvent) => {
     const data = event.data as CatchData;
-    if (!data?.photo_url) return;
+    const hero = getCatchHeroPhotoUrl(data);
+    if (!hero) return;
     setFullScreenPhoto({
-      url: data.photo_url,
+      url: hero,
       location: activeTrip?.location?.name ?? undefined,
       date: formatTripDate(event.timestamp),
       species: data.species ?? undefined,
@@ -382,7 +384,7 @@ export default function TripDashboardScreen() {
         catchFields,
         latitude,
         longitude,
-        photoUri,
+        photoUris,
         photoCapturedAtIso,
         catchTimestampIso,
         conditionsSnapshot,
@@ -398,32 +400,18 @@ export default function TripDashboardScreen() {
         changeFly(primary, dropper ?? null);
       }
       const species = catchFields.species ?? null;
-      const photoOptions =
-        photoUri
-          ? {
-              userId: activeTrip.user_id,
-              tripId: activeTrip.id,
-              uri: photoUri,
-              caption: catchFields.note?.trim() || undefined,
-              species: species ?? undefined,
-              fly_pattern: primary.pattern,
-              fly_size: primary.size ?? undefined,
-              fly_color: primary.color ?? undefined,
-              fly_id: primary.fly_id ?? undefined,
-              captured_at: photoCapturedAtIso ?? catchTimestampIso ?? new Date().toISOString(),
-            }
-          : null;
-
-      let photoUrl: string | null = null;
-      if (photoOptions && isConnected) {
-        try {
-          const photo = await addPhoto(photoOptions, { isOnline: true });
-          photoUrl = photo.url;
-        } catch (e) {
-          Alert.alert('Upload failed', (e as Error).message);
-          throw e;
-        }
-      }
+      const capturedAt = photoCapturedAtIso ?? catchTimestampIso ?? new Date().toISOString();
+      const photoOptionsBase = {
+        userId: activeTrip.user_id,
+        tripId: activeTrip.id,
+        caption: catchFields.note?.trim() || undefined,
+        species: species ?? undefined,
+        fly_pattern: primary.pattern,
+        fly_size: primary.size ?? undefined,
+        fly_color: primary.color ?? undefined,
+        fly_id: primary.fly_id ?? undefined,
+        captured_at: capturedAt,
+      };
 
       const catchOptions =
         catchTimestampIso != null || conditionsSnapshot !== undefined
@@ -433,10 +421,16 @@ export default function TripDashboardScreen() {
             }
           : undefined;
 
+      const hasPhotos = photoUris.length > 0;
       const eventId = addCatch(
         {
           ...catchFields,
-          photo_url: photoUrl ?? undefined,
+          ...(hasPhotos && !isConnected
+            ? {
+                photo_urls: [...photoUris],
+                photo_url: photoUris[0] ?? null,
+              }
+            : { photo_url: null, photo_urls: null }),
         },
         latitude,
         longitude,
@@ -444,17 +438,57 @@ export default function TripDashboardScreen() {
         catchOptions,
       );
 
-      if (photoOptions && !photoUrl && eventId) {
-        try {
-          await savePendingPhoto({
-            ...buildPendingFromAddPhotoOptions(photoOptions, 'catch', eventId),
-          });
-        } catch {
-          // non-blocking
+      if (!eventId || !hasPhotos) return;
+
+      const catchEvent = useTripStore.getState().events.find((e) => e.id === eventId && e.event_type === 'catch');
+      if (!catchEvent) return;
+
+      if (isConnected) {
+        const allEvents = useTripStore.getState().events;
+        const ok = await upsertCatchEventToCloud(activeTrip, catchEvent, allEvents);
+        if (!ok) {
+          Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again when online.');
+          return;
+        }
+        const appendCatchEventPhotoUrl = useTripStore.getState().appendCatchEventPhotoUrl;
+        for (let i = 0; i < photoUris.length; i++) {
+          try {
+            const photo = await addPhoto(
+              {
+                ...photoOptionsBase,
+                uri: photoUris[i],
+                catchId: eventId,
+                displayOrder: i,
+              },
+              { isOnline: true },
+            );
+            appendCatchEventPhotoUrl(activeTrip.id, eventId, photo.url);
+          } catch (e) {
+            Alert.alert('Upload failed', (e as Error).message);
+            throw e;
+          }
+        }
+      } else {
+        for (let i = 0; i < photoUris.length; i++) {
+          try {
+            await savePendingPhoto({
+              ...buildPendingFromAddPhotoOptions(
+                {
+                  ...photoOptionsBase,
+                  uri: photoUris[i],
+                  displayOrder: i,
+                },
+                'catch',
+                eventId,
+              ),
+            });
+          } catch {
+            // non-blocking
+          }
         }
       }
     },
-    [addCatch, changeFly, activeTrip?.id, activeTrip?.user_id, currentFly, currentFly2, isConnected],
+    [addCatch, changeFly, activeTrip, currentFly, currentFly2, isConnected],
   );
 
   const handleCatchSubmitEdit = useCallback(
@@ -1360,10 +1394,10 @@ function FishingTab({
                   {event.event_type === 'catch' ? (
                     <CatchDetailsBlock data={event.data as CatchData} styles={styles} />
                   ) : null}
-                  {event.event_type === 'catch' && (event.data as CatchData).photo_url ? (
+                  {event.event_type === 'catch' && getCatchHeroPhotoUrl(event.data as CatchData) ? (
                     <Pressable onPress={() => onCatchPhotoPress?.(event)}>
                       <Image
-                        source={{ uri: (event.data as CatchData).photo_url! }}
+                        source={{ uri: getCatchHeroPhotoUrl(event.data as CatchData)! }}
                         style={styles.timelineCatchThumb}
                       />
                     </Pressable>
@@ -1546,7 +1580,7 @@ function buildTripMapMarkers(trip: Trip, tripEvents: TripEvent[], themeColors: T
       title: speciesLabel ? `Catch · ${speciesLabel}` : 'Catch',
       color: themeColors.primaryLight,
       catchEventId: e.id,
-      catchPhotoUrl: catchData.photo_url ?? null,
+      catchPhotoUrl: getCatchHeroPhotoUrl(catchData),
     });
   }
 

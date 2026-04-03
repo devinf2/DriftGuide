@@ -19,6 +19,8 @@ function pendingToAddPhotoOptions(p: PendingPhoto): Parameters<typeof addPhoto>[
     fly_color: p.fly_color ?? undefined,
     fly_id: p.fly_id ?? undefined,
     captured_at: p.captured_at ?? undefined,
+    catchId: p.type === 'catch' ? p.eventId : undefined,
+    displayOrder: p.displayOrder ?? 0,
   };
 }
 
@@ -26,16 +28,23 @@ export async function processPendingPhotos(): Promise<void> {
   const list = await getPendingPhotos();
   if (list.length === 0) return;
 
-  const updateEventPhotoUrl = useTripStore.getState().updateEventPhotoUrl;
+  const resolveCatchEventPhotoUpload = useTripStore.getState().resolveCatchEventPhotoUpload;
 
-  for (const p of list) {
+  const sorted = [...list].sort((a, b) => {
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    if (ta !== tb) return ta - tb;
+    return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
+  });
+
+  for (const p of sorted) {
     try {
       const options = pendingToAddPhotoOptions(p);
       const photo = await addPhoto(options);
       const url = photo.url;
 
       if (p.type === 'catch' && p.eventId) {
-        updateEventPhotoUrl(p.tripId, p.eventId, url);
+        resolveCatchEventPhotoUpload(p.tripId, p.eventId, p.uri, url);
         await updatePendingTripEventPhotoUrl(p.tripId, p.eventId, url);
       }
 

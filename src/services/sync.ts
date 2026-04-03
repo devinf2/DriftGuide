@@ -14,6 +14,7 @@ import type {
   WaterClarity,
 } from '@/src/types';
 import { totalFishFromEvents } from '@/src/utils/journalTimeline';
+import { getCatchHeroPhotoUrl, normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 
 export interface PendingSyncData {
   trips: Trip[];
@@ -213,7 +214,7 @@ export async function upsertCatchEventToCloud(
       active_fly_event_id: catchData.active_fly_event_id ?? null,
       presentation_method: catchData.presentation_method ?? null,
       note: catchData.note ?? null,
-      photo_url: catchData.photo_url ?? null,
+      photo_url: getCatchHeroPhotoUrl(catchData),
       conditions_snapshot_id: conditionsSnapshotId,
       fly_pattern,
       fly_size,
@@ -411,11 +412,25 @@ export async function fetchUserCatchesFromCloud(userId: string): Promise<CatchRo
           lo == null ||
           !Number.isFinite(Number(la)) ||
           !Number.isFinite(Number(lo));
+        const urlsFromEvent = normalizeCatchPhotoUrls(data as CatchData);
+        const photoPatch =
+          urlsFromEvent.length > 0
+            ? {
+                photo_url: urlsFromEvent[0]!,
+                photo_urls: urlsFromEvent,
+              }
+            : {};
         if (needsCoords && hasEvCoords) {
           byId.set(ev.id, {
             ...existing,
             latitude: evLat!,
             longitude: evLng!,
+            ...photoPatch,
+          });
+        } else if (Object.keys(photoPatch).length > 0) {
+          byId.set(ev.id, {
+            ...existing,
+            ...photoPatch,
           });
         }
         continue;
@@ -442,7 +457,11 @@ export async function fetchUserCatchesFromCloud(userId: string): Promise<CatchRo
         active_fly_event_id: data?.active_fly_event_id ?? null,
         presentation_method: data?.presentation_method ?? null,
         note: data?.note ?? null,
-        photo_url: data?.photo_url ?? null,
+        photo_url: getCatchHeroPhotoUrl(data as CatchData),
+        photo_urls: (() => {
+          const u = normalizeCatchPhotoUrls(data as CatchData);
+          return u.length > 0 ? u : null;
+        })(),
         conditions_snapshot_id: null,
         fly_pattern: null,
         fly_size: null,

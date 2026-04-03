@@ -14,6 +14,10 @@ import { getStreamFlow } from '@/src/services/waterFlow';
 import { getCachedConditions } from '@/src/services/waterwayCache';
 import { latestFlyChangeRigFromEvents, totalFishFromEvents } from '@/src/utils/journalTimeline';
 import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
+import {
+  catchDataWithAppendedPhotoUrl,
+  normalizeCatchPhotoUrls,
+} from '@/src/utils/catchPhotos';
 
 const IN_TRIP_SYNC_DEBOUNCE_MS = 5000;
 let inTripSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -73,7 +77,9 @@ interface TripState {
       conditionsSnapshot?: EventConditionsSnapshot | null;
     },
   ) => string | undefined;
-  updateEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
+  appendCatchEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
+  /** After a pending upload: swap local file URI for remote URL in catch photo_urls (or append if not found). */
+  resolveCatchEventPhotoUpload: (tripId: string, eventId: string, localUri: string, remoteUrl: string) => void;
   removeCatch: () => void;
   changeFly: (primary: FlyChangeData, dropper?: FlyChangeData | null, latitude?: number | null, longitude?: number | null) => void;
   /** Update an existing fly_change row (timeline edit). Syncs current rig if that event is active. */
@@ -658,6 +664,16 @@ export const useTripStore = create<TripState>()(
             ? options.conditionsSnapshot
             : buildConditionsSnapshot(weatherData, waterFlowData);
 
+        const photoSeed: CatchData = {
+          species: null,
+          size_inches: null,
+          note: null,
+          photo_url: data?.photo_url ?? null,
+          photo_urls: data?.photo_urls ?? null,
+          active_fly_event_id: null,
+        };
+        const orderedPhotoUrls = normalizeCatchPhotoUrls(photoSeed);
+
         const catchEvent: TripEvent = {
           id: eventId,
           trip_id: activeTrip.id,
@@ -667,7 +683,8 @@ export const useTripStore = create<TripState>()(
             species: data?.species ?? null,
             size_inches: data?.size_inches ?? null,
             note: data?.note ?? null,
-            photo_url: data?.photo_url ?? null,
+            photo_url: orderedPhotoUrls[0] ?? null,
+            photo_urls: orderedPhotoUrls.length ? orderedPhotoUrls : null,
             active_fly_event_id: currentFlyEventId,
             caught_on_fly: data?.caught_on_fly ?? 'primary',
             quantity: data?.quantity ?? 1,
@@ -694,15 +711,47 @@ export const useTripStore = create<TripState>()(
         return eventId;
       },
 
-      updateEventPhotoUrl: (tripId, eventId, photoUrl) => {
+      appendCatchEventPhotoUrl: (tripId, eventId, photoUrl) => {
         const { activeTrip, isTripPaused } = get();
         if (!activeTrip || activeTrip.id !== tripId || isTripPaused) return;
         set((state) => ({
           events: state.events.map((e) =>
             e.id === eventId && e.event_type === 'catch'
-              ? { ...e, data: { ...e.data, photo_url: photoUrl } }
+              ? {
+                  ...e,
+                  data: catchDataWithAppendedPhotoUrl(e.data as CatchData, photoUrl),
+                }
               : e,
           ),
+        }));
+      },
+
+      resolveCatchEventPhotoUpload: (tripId, eventId, localUri, remoteUrl) => {
+        const { activeTrip, isTripPaused } = get();
+        if (!activeTrip || activeTrip.id !== tripId || isTripPaused) return;
+        set((state) => ({
+          events: state.events.map((e) => {
+            if (e.id !== eventId || e.event_type !== 'catch') return e;
+            const d = e.data as CatchData;
+            const urls = normalizeCatchPhotoUrls(d);
+            const idx = urls.findIndex((u) => u === localUri);
+            if (idx === -1) {
+              return {
+                ...e,
+                data: catchDataWithAppendedPhotoUrl(d, remoteUrl),
+              };
+            }
+            const next = [...urls];
+            next[idx] = remoteUrl.trim();
+            return {
+              ...e,
+              data: {
+                ...d,
+                photo_urls: next,
+                photo_url: next[0] ?? null,
+              },
+            };
+          }),
         }));
       },
 

@@ -143,7 +143,10 @@ export interface CatchData {
   species: string | null;
   size_inches: number | null;
   note: string | null;
+  /** Hero / map pin; kept in sync as first entry of photo_urls when set. */
   photo_url: string | null;
+  /** Ordered gallery (remote https or local file URIs before upload). */
+  photo_urls?: string[] | null;
   active_fly_event_id: string | null;
   /** Which fly on the rig caught the fish when using two flies */
   caught_on_fly?: 'primary' | 'dropper';
@@ -215,6 +218,8 @@ export interface CatchRow {
   presentation_method: string | null;
   note: string | null;
   photo_url: string | null;
+  /** From trip_events JSON when merged; optional on legacy rows. */
+  photo_urls?: string[] | null;
   conditions_snapshot_id: string | null;
   fly_pattern: string | null;
   fly_size: number | null;
@@ -392,6 +397,9 @@ export interface Photo {
   id: string;
   user_id: string;
   trip_id: string | null;
+  /** Same id as catches.id / trip_events.id for that catch. */
+  catch_id?: string | null;
+  display_order?: number | null;
   url: string;
   caption: string | null;
   species: string | null;

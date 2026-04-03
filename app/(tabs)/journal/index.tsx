@@ -47,8 +47,8 @@ const DATE_RANGES: { key: DateRange; label: string }[] = [
   { key: 'year', label: 'This Year' },
 ];
 
-/** Unique image URLs for a trip: gallery photos first (newest), then catch photos. */
-function imageUrlsForTrip(tripId: string, photos: Photo[], catches: CatchRow[]): string[] {
+/** Unique image URLs for a trip from `photos` rows (includes catch-linked via catch_id). */
+function imageUrlsForTrip(tripId: string, photos: Photo[]): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
   const add = (u: string | null | undefined) => {
@@ -62,10 +62,14 @@ function imageUrlsForTrip(tripId: string, photos: Photo[], catches: CatchRow[]):
   tripPhotos.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   for (const p of tripPhotos) add(p.url);
 
-  for (const c of catches) {
-    if (c.trip_id === tripId) add(c.photo_url);
-  }
   return urls;
+}
+
+function catchRowGalleryUrls(c: CatchRow): string[] {
+  const from = (c.photo_urls ?? []).map((u) => u?.trim()).filter(Boolean) as string[];
+  if (from.length) return from;
+  const u = c.photo_url?.trim();
+  return u ? [u] : [];
 }
 
 function JournalTripCarousel({
@@ -403,27 +407,31 @@ export default function JournalScreen() {
       });
       return placeMarkers;
     }
-    return fishMapPins.map((c) => ({
-      id: `fish-${c.id}`,
-      coordinate: [c.longitude!, c.latitude!] as [number, number],
-      title: c.species?.trim() || 'Catch',
-      onPress: () => handleFishMarkerPress(c),
-      children: (
-        <View style={styles.fishMarkerWrap} pointerEvents="box-none">
-          <View style={styles.fishMarkerBubble}>
-            {c.photo_url?.trim() ? (
-              <Image
-                source={{ uri: c.photo_url.trim() }}
-                style={styles.fishMarkerThumb}
-                resizeMode="cover"
-              />
-            ) : (
-              <MaterialCommunityIcons name="fish" size={18} color={colors.textInverse} />
-            )}
+    return fishMapPins.map((c) => {
+      const fishPhotos = catchRowGalleryUrls(c);
+      const fishHero = fishPhotos[0];
+      return {
+        id: `fish-${c.id}`,
+        coordinate: [c.longitude!, c.latitude!] as [number, number],
+        title: c.species?.trim() || 'Catch',
+        onPress: () => handleFishMarkerPress(c),
+        children: (
+          <View style={styles.fishMarkerWrap} pointerEvents="box-none">
+            <View style={styles.fishMarkerBubble}>
+              {fishHero ? (
+                <Image
+                  source={{ uri: fishHero }}
+                  style={styles.fishMarkerThumb}
+                  resizeMode="cover"
+                />
+              ) : (
+                <MaterialCommunityIcons name="fish" size={18} color={colors.textInverse} />
+              )}
+            </View>
           </View>
-        </View>
-      ),
-    }));
+        ),
+      };
+    });
   }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress, styles, colors]);
 
   const gridGap = Spacing.sm;
@@ -437,14 +445,14 @@ export default function JournalScreen() {
     ({ item }: { item: Trip }) => (
       <JournalTripGridCard
         trip={item}
-        imageUrls={imageUrlsForTrip(item.id, allPhotos, allCatches)}
+        imageUrls={imageUrlsForTrip(item.id, allPhotos)}
         cardWidth={cardWidth}
         onPress={() => router.push(`/journal/${item.id}`)}
         colors={colors}
         styles={styles}
       />
     ),
-    [allPhotos, allCatches, cardWidth, router, colors, styles],
+    [allPhotos, cardWidth, router, colors, styles],
   );
 
   if (loading) {
@@ -748,13 +756,27 @@ export default function JournalScreen() {
                     keyboardShouldPersistTaps="handled"
                   >
                     <View style={styles.fishCatchHeroInner}>
-                      {selectedFishCatch.photo_url?.trim() ? (
-                        <Image
-                          source={{ uri: selectedFishCatch.photo_url.trim() }}
-                          style={[styles.fishCatchHeroImage, { width: winWidth - Spacing.lg * 2 }]}
-                          resizeMode="cover"
-                        />
-                      ) : null}
+                      {(() => {
+                        const gallery = catchRowGalleryUrls(selectedFishCatch);
+                        if (gallery.length === 0) return null;
+                        return (
+                        <ScrollView
+                          horizontal
+                          pagingEnabled
+                          showsHorizontalScrollIndicator={false}
+                          style={{ width: winWidth - Spacing.lg * 2 }}
+                        >
+                          {gallery.map((uri, idx) => (
+                            <Image
+                              key={`${uri}-${idx}`}
+                              source={{ uri }}
+                              style={[styles.fishCatchHeroImage, { width: winWidth - Spacing.lg * 2 }]}
+                              resizeMode="cover"
+                            />
+                          ))}
+                        </ScrollView>
+                        );
+                      })()}
                       <View style={styles.fishCatchHeroCard}>
                         <Text style={styles.fishCatchHeroTitle}>
                           {selectedFishCatch.species || 'Catch'}

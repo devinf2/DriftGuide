@@ -72,6 +72,10 @@ export interface AddPhotoOptions {
   /** Catalog fly id when current fly has fly_id (e.g. from user fly box). */
   fly_id?: string | null;
   captured_at?: string | null;
+  /** When set, row is linked to catches.id (same as catch trip_events id). Requires catch row in DB before insert. */
+  catchId?: string | null;
+  /** Sort order within the same catch (default 0). */
+  displayOrder?: number;
 }
 
 /** Thrown when photo is queued for offline upload; UI can show "Saved locally; will upload when online". */
@@ -86,13 +90,27 @@ export async function addPhoto(
   options: AddPhotoOptions,
   opts?: { isOnline?: boolean },
 ): Promise<Photo> {
-  const { userId, tripId, uri, caption, species, fly_pattern, fly_size, fly_color, fly_id, captured_at } = options;
+  const {
+    userId,
+    tripId,
+    uri,
+    caption,
+    species,
+    fly_pattern,
+    fly_size,
+    fly_color,
+    fly_id,
+    captured_at,
+    catchId,
+    displayOrder,
+  } = options;
   const isOnline = opts?.isOnline !== false;
 
   if (!isOnline) {
     const { savePendingPhoto, buildPendingFromAddPhotoOptions } = await import('./pendingPhotoStorage');
+    const pendingType = catchId ? 'catch' : 'trip';
     await savePendingPhoto({
-      ...buildPendingFromAddPhotoOptions(options, 'trip'),
+      ...buildPendingFromAddPhotoOptions(options, pendingType, catchId ?? undefined),
     });
     throw new PhotoQueuedOfflineError();
   }
@@ -123,6 +141,8 @@ export async function addPhoto(
   const insertPayload = {
     user_id: userId,
     trip_id: tripId ?? null,
+    catch_id: catchId ?? null,
+    display_order: displayOrder ?? 0,
     url,
     caption: caption ?? null,
     species: species ?? null,
@@ -163,6 +183,17 @@ export async function deletePhoto(photoId: string, userId: string): Promise<void
 
   const { error: deleteError } = await supabase.from('photos').delete().eq('id', photoId).eq('user_id', userId);
   if (deleteError) throw deleteError;
+}
+
+/** Remove one album row for a catch by public URL (e.g. user removed a photo in edit). */
+export async function deleteCatchPhotoByUrl(userId: string, catchId: string, photoUrl: string): Promise<void> {
+  const { error } = await supabase
+    .from('photos')
+    .delete()
+    .eq('user_id', userId)
+    .eq('catch_id', catchId)
+    .eq('url', photoUrl);
+  if (error) throw error;
 }
 
 /** Upload a photo for a catch; returns the public URL to store in catch event data. Uses same path as home (photos/{userId}/) so RLS allows it. Does NOT insert into photos table. */

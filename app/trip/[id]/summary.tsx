@@ -7,6 +7,7 @@ import { TripEndpointPinModal, type TripEndpointKind } from '@/src/components/jo
 import { fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
 import { Trip, TripEvent, CatchData, FlyChangeData, NoteData, AIQueryData, WaterFlowData, NextFlyRecommendation, EventConditionsSnapshot, Photo } from '@/src/types';
+import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -86,9 +87,10 @@ export default function TripSummaryScreen() {
 
   const handleCatchPhotoPress = useCallback((event: TripEvent) => {
     const data = event.data as CatchData;
-    if (!data?.photo_url) return;
+    const hero = getCatchHeroPhotoUrl(data);
+    if (!hero) return;
     setFullScreenPhoto({
-      url: data.photo_url,
+      url: hero,
       location: trip?.location?.name ?? undefined,
       date: formatTripDate(event.timestamp),
       species: data.species ?? undefined,
@@ -101,9 +103,10 @@ export default function TripSummaryScreen() {
       const ev = events.find((e) => e.id === catchEventId && e.event_type === 'catch');
       if (!ev) return;
       const data = ev.data as CatchData;
-      if (data.photo_url) {
+      const hero = getCatchHeroPhotoUrl(data);
+      if (hero) {
         setFullScreenPhoto({
-          url: data.photo_url,
+          url: hero,
           location: trip?.location?.name ?? undefined,
           date: formatTripDate(ev.timestamp),
           species: data.species ?? undefined,
