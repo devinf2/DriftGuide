@@ -185,7 +185,7 @@ export function PlanTripFab() {
           hitSlop={12}
           accessibilityRole="button"
           accessibilityLabel="Fishing actions"
-          accessibilityHint="Opens plan a trip, fish now, or journal"
+          accessibilityHint="Opens plan a trip, fish now, or trips"
         >
           <MaterialCommunityIcons name="fish" size={ICON_SIZE} color={colors.textInverse} />
         </Pressable>

@@ -524,12 +524,12 @@ export default function JournalScreen() {
               }}
             >
               <MaterialIcons
-                name="menu-book"
+                name="route"
                 size={16}
                 color={mapLayer === 'journal' ? colors.primary : headerInactive}
               />
               <Text style={[styles.mapLayerChipText, mapLayer === 'journal' && styles.mapLayerChipTextActive]}>
-                Journal
+                My Trips
               </Text>
             </Pressable>
             <Pressable
@@ -545,7 +545,7 @@ export default function JournalScreen() {
                 color={mapLayer === 'fish' ? colors.primary : headerInactive}
               />
               <Text style={[styles.mapLayerChipText, mapLayer === 'fish' && styles.mapLayerChipTextActive]}>
-                My fish
+                My Fish
               </Text>
             </Pressable>
           </View>
@@ -612,7 +612,7 @@ export default function JournalScreen() {
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <MaterialIcons name="menu-book" size={48} color={colors.textTertiary} />
+              <MaterialIcons name="route" size={48} color={colors.textTertiary} />
               <Text style={styles.emptyTitle}>
                 {dateRange === 'all' ? 'No trips yet' : 'No trips in this period'}
               </Text>
@@ -802,7 +802,7 @@ export default function JournalScreen() {
                         router.push(`/journal/${id}`);
                       }}
                     >
-                      <Text style={styles.fishOpenJournalBtnText}>Open journal entry</Text>
+                      <Text style={styles.fishOpenJournalBtnText}>Open trip</Text>
                       <MaterialIcons name="chevron-right" size={20} color={colors.textInverse} />
                     </Pressable>
                   </View>
