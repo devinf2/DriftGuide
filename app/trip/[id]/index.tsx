@@ -60,6 +60,7 @@ import {
   TripEvent,
   type LocationType,
 } from '@/src/types';
+import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import {
@@ -1394,13 +1395,12 @@ function FishingTab({
                   {event.event_type === 'catch' ? (
                     <CatchDetailsBlock data={event.data as CatchData} styles={styles} />
                   ) : null}
-                  {event.event_type === 'catch' && getCatchHeroPhotoUrl(event.data as CatchData) ? (
-                    <Pressable onPress={() => onCatchPhotoPress?.(event)}>
-                      <Image
-                        source={{ uri: getCatchHeroPhotoUrl(event.data as CatchData)! }}
-                        style={styles.timelineCatchThumb}
-                      />
-                    </Pressable>
+                  {event.event_type === 'catch' ? (
+                    <TimelineCatchPhotoStrip
+                      data={event.data as CatchData}
+                      onPress={() => onCatchPhotoPress?.(event)}
+                      imageStyle={styles.timelineCatchThumb}
+                    />
                   ) : null}
                 </View>
                 <Pressable

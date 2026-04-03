@@ -720,7 +720,8 @@ export default function JournalScreen() {
                             <View style={{ flex: 1 }}>
                               <Text style={styles.selectedTripDate}>{formatTripDate(item.start_time)}</Text>
                               <Text style={styles.selectedTripMeta}>
-                                {formatFishCount(item.total_fish)} · {formatTripDuration(item.start_time, item.end_time)}
+                                {formatFishCount(item.total_fish)} ·{' '}
+                                {formatTripDuration(item.start_time, item.end_time, { imported: item.imported })}
                               </Text>
                             </View>
                             <MaterialIcons name="chevron-right" size={20} color={colors.textTertiary} />

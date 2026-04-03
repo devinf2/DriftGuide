@@ -91,6 +91,14 @@ function ThemedNavigation() {
             }}
           />
           <Stack.Screen
+            name="trip/import-past"
+            options={{
+              title: 'Import past trips',
+              headerShown: false,
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
             name="spot/[id]"
             options={{
               presentation: 'modal',

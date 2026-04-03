@@ -95,7 +95,7 @@ function flyDataMatches(a: FlyChangeData, b: FlyChangeData): boolean {
   );
 }
 
-function mergeEditCatchEvents(
+export function mergeEditCatchEvents(
   allEvents: TripEvent[],
   editing: TripEvent,
   primary: FlyChangeData,
@@ -178,6 +178,10 @@ export type CatchDetailsModalProps = {
   onSubmitAdd?: (payload: CatchDetailsSubmitAdd) => Promise<void>;
   onSubmitEdit?: (nextEvents: TripEvent[]) => Promise<void>;
   onPickPhoto?: (source: 'camera' | 'library') => void;
+  /** When true, edit submit skips Supabase photo/sync calls (e.g. import-past wizard). */
+  deferCloudWrites?: boolean;
+  /** Add mode: pre-fill gallery (e.g. import past trips). */
+  initialAddPhotoUris?: string[];
 };
 
 export function CatchDetailsModal({
@@ -199,6 +203,8 @@ export function CatchDetailsModal({
   onSubmitAdd,
   onSubmitEdit,
   onPickPhoto: onPickPhotoProp,
+  deferCloudWrites = false,
+  initialAddPhotoUris,
 }: CatchDetailsModalProps) {
   const [catchFlyName, setCatchFlyName] = useState('');
   const [catchFlySize, setCatchFlySize] = useState<number | null>(null);
@@ -353,6 +359,9 @@ export function CatchDetailsModal({
   useEffect(() => {
     if (!visible || mode !== 'add') return;
     resetFormForAdd();
+    if (initialAddPhotoUris && initialAddPhotoUris.length > 0) {
+      setCatchPhotoUris([...initialAddPhotoUris]);
+    }
     (async () => {
       try {
         const { status } = await ExpoLocation.getForegroundPermissionsAsync();
@@ -369,7 +378,7 @@ export function CatchDetailsModal({
         /* optional */
       }
     })();
-  }, [visible, mode, resetFormForAdd]);
+  }, [visible, mode, resetFormForAdd, initialAddPhotoUris]);
 
   useEffect(() => {
     if (!visible || mode !== 'add' || !catchFlyName?.trim() || !getPresentationForFly) return;
@@ -629,63 +638,69 @@ export function CatchDetailsModal({
         onClose();
       } else if (mode === 'edit' && editingEvent && onSubmitEdit) {
         const newLocalUris = catchPhotoUris.filter((u) => !isRemoteStorageUrl(u));
-        if (newLocalUris.length > 0 && !isConnected) {
+        if (!deferCloudWrites && newLocalUris.length > 0 && !isConnected) {
           Alert.alert('Offline', 'Connect to the internet to add new photos.');
           setSubmitting(false);
           return;
         }
 
-        for (const u of initialEditRemoteUrlsRef.current) {
-          if (!catchPhotoUris.includes(u)) {
-            try {
-              await deleteCatchPhotoByUrl(userId, editingEvent.id, u);
-            } catch (e) {
-              console.warn('[CatchDetailsModal] deleteCatchPhotoByUrl', e);
+        let finalUrls: string[];
+
+        if (deferCloudWrites) {
+          finalUrls = [...catchPhotoUris];
+        } else {
+          for (const u of initialEditRemoteUrlsRef.current) {
+            if (!catchPhotoUris.includes(u)) {
+              try {
+                await deleteCatchPhotoByUrl(userId, editingEvent.id, u);
+              } catch (e) {
+                console.warn('[CatchDetailsModal] deleteCatchPhotoByUrl', e);
+              }
             }
           }
-        }
 
-        if (newLocalUris.length > 0) {
-          const syncOk = await upsertCatchEventToCloud(trip, editingEvent, allEvents);
-          if (!syncOk) {
-            Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again.');
+          if (newLocalUris.length > 0) {
+            const syncOk = await upsertCatchEventToCloud(trip, editingEvent, allEvents);
+            if (!syncOk) {
+              Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again.');
+              setSubmitting(false);
+              return;
+            }
+          }
+
+          finalUrls = [];
+          try {
+            for (const u of catchPhotoUris) {
+              if (isRemoteStorageUrl(u)) {
+                finalUrls.push(u);
+                continue;
+              }
+              const useDropper = catchCaughtOnFly === 'dropper' && dropper?.pattern?.trim();
+              const p = await addPhoto(
+                {
+                  userId,
+                  tripId: trip.id,
+                  uri: u,
+                  caption: catchNote.trim() || undefined,
+                  species: species ?? undefined,
+                  fly_pattern: (useDropper ? dropper!.pattern : primary.pattern) || undefined,
+                  fly_size: (useDropper ? dropper!.size : primary.size) ?? undefined,
+                  fly_color: (useDropper ? dropper!.color : primary.color) ?? undefined,
+                  fly_id: useDropper ? dropper!.fly_id : primary.fly_id,
+                  captured_at: photoExifMeta?.takenAt?.toISOString() ?? editingEvent.timestamp,
+                  catchId: editingEvent.id,
+                  displayOrder: finalUrls.length,
+                },
+                { isOnline: true },
+              );
+              finalUrls.push(p.url);
+            }
+          } catch (e) {
+            if (e instanceof PhotoQueuedOfflineError) Alert.alert('Offline', e.message);
+            else Alert.alert('Photo', (e as Error).message);
             setSubmitting(false);
             return;
           }
-        }
-
-        const finalUrls: string[] = [];
-        try {
-          for (const u of catchPhotoUris) {
-            if (isRemoteStorageUrl(u)) {
-              finalUrls.push(u);
-              continue;
-            }
-            const useDropper = catchCaughtOnFly === 'dropper' && dropper?.pattern?.trim();
-            const p = await addPhoto(
-              {
-                userId,
-                tripId: trip.id,
-                uri: u,
-                caption: catchNote.trim() || undefined,
-                species: species ?? undefined,
-                fly_pattern: (useDropper ? dropper!.pattern : primary.pattern) || undefined,
-                fly_size: (useDropper ? dropper!.size : primary.size) ?? undefined,
-                fly_color: (useDropper ? dropper!.color : primary.color) ?? undefined,
-                fly_id: useDropper ? dropper!.fly_id : primary.fly_id,
-                captured_at: photoExifMeta?.takenAt?.toISOString() ?? editingEvent.timestamp,
-                catchId: editingEvent.id,
-                displayOrder: finalUrls.length,
-              },
-              { isOnline: true },
-            );
-            finalUrls.push(p.url);
-          }
-        } catch (e) {
-          if (e instanceof PhotoQueuedOfflineError) Alert.alert('Offline', e.message);
-          else Alert.alert('Photo', (e as Error).message);
-          setSubmitting(false);
-          return;
         }
 
         const catchData: CatchData = {
@@ -696,7 +711,7 @@ export function CatchDetailsModal({
           photo_urls: finalUrls.length ? finalUrls : null,
           active_fly_event_id: (editingEvent.data as CatchData).active_fly_event_id,
           caught_on_fly: catchCaughtOnFly,
-          quantity: 1,
+          quantity: qtyAdd,
           depth_ft: depthNum != null && Number.isFinite(depthNum) ? depthNum : null,
           presentation_method: catchPresentation,
           released: catchReleased,

@@ -46,3 +46,14 @@ export function catchDataWithRemovedPhotoAtIndex(data: CatchData, index: number)
     photo_url: next[0] ?? null,
   };
 }
+
+/** Remove a photo URI from a catch (e.g. moving that photo to scenery during import). */
+export function catchDataWithoutPhotoUri(data: CatchData, uriToRemove: string): CatchData {
+  const t = uriToRemove.trim();
+  const urls = normalizeCatchPhotoUrls(data).filter((u) => u !== t);
+  return {
+    ...data,
+    photo_urls: urls.length ? urls : null,
+    photo_url: urls[0] ?? null,
+  };
+}

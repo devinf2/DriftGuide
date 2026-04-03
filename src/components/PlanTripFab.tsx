@@ -148,7 +148,7 @@ export function PlanTripFab() {
 
   const onLogPastTrips = useCallback(() => {
     closeMenu();
-    router.push('/journal');
+    router.push('/trip/import-past');
   }, [closeMenu, router]);
 
   if (hideDuringAddLocation) {

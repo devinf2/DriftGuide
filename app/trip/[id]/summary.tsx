@@ -366,7 +366,7 @@ export default function TripSummaryScreen() {
         </View>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>
-            {formatTripDuration(trip.start_time, trip.end_time)}
+            {formatTripDuration(trip.start_time, trip.end_time, { imported: trip.imported })}
           </Text>
           <Text style={styles.statLabel}>Duration</Text>
         </View>

@@ -44,6 +44,7 @@ function tripToUpsertPayload(trip: Trip) {
     session_type: trip.session_type ?? null,
     rating: trip.rating ?? null,
     user_reported_clarity: trip.user_reported_clarity ?? null,
+    imported: trip.imported ?? false,
   };
 }
 
@@ -504,6 +505,7 @@ export async function savePlannedTrip(trip: Trip): Promise<boolean> {
         session_type: trip.session_type ?? null,
         rating: null,
         user_reported_clarity: null,
+        imported: false,
       });
 
     if (error) {

@@ -1,6 +1,11 @@
 import { format, formatDistanceToNow, differenceInMinutes, differenceInHours } from 'date-fns';
 
-export function formatTripDuration(startTime: string, endTime: string | null): string {
+export function formatTripDuration(
+  startTime: string,
+  endTime: string | null,
+  options?: { imported?: boolean | null },
+): string {
+  if (options?.imported) return 'Imported';
   const start = new Date(startTime);
   const end = endTime ? new Date(endTime) : new Date();
   const minutes = differenceInMinutes(end, start);
