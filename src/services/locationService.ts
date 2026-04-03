@@ -1,4 +1,8 @@
 import { supabase } from './supabase';
+import {
+  LOCATION_PIN_ADJUST_THRESHOLD_KM,
+  PARENT_CANDIDATE_MAX_RADIUS_KM,
+} from '@/src/constants/locationThresholds';
 import { Location, LocationType, NearbyLocationResult } from '@/src/types';
 
 const EARTH_RADIUS_KM = 6371;
@@ -12,6 +16,26 @@ export function haversineDistance(lat1: number, lng1: number, lat2: number, lng2
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * When true, choosing a listed parent place should reuse that location’s id only — do not call
+ * {@link addCommunityLocation}. Coordinates are coerced with `Number()` for RPC/JSON safety.
+ */
+export function isWithinPinParentReuseThreshold(
+  pinLat: number,
+  pinLng: number,
+  parentLat: number,
+  parentLng: number,
+): boolean {
+  const a = Number(pinLat);
+  const b = Number(pinLng);
+  const c = Number(parentLat);
+  const d = Number(parentLng);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || !Number.isFinite(d)) {
+    return false;
+  }
+  return haversineDistance(a, b, c, d) <= LOCATION_PIN_ADJUST_THRESHOLD_KM;
 }
 
 function trigramSimilarity(a: string, b: string): number {
@@ -93,11 +117,6 @@ async function clientSideNearbySearch(
     .slice(0, 10);
 }
 
-/** First pass: only ask about reasonably nearby main locations. */
-const PARENT_LINK_PROXIMAL_RADIUS_KM = 250;
-/** Second pass: if none nearby, still offer the closest main locations anywhere (user picks “No” if irrelevant). */
-const PARENT_LINK_GLOBAL_RADIUS_KM = 20015;
-
 async function fetchRootParentCandidatesForRadius(
   lat: number,
   lng: number,
@@ -126,19 +145,21 @@ async function fetchRootParentCandidatesForRadius(
 }
 
 /**
- * Top-level locations (no parent) nearest to a point. Pass `excludeLocationId` to omit one row (e.g. just created).
- * Tries RPC, then client Haversine. If nothing is within `proximalRadiusKm`, falls back to global nearest roots.
+ * Top-level locations (no parent) nearest to a point within `PARENT_CANDIDATE_MAX_RADIUS_KM` (~100 mi).
+ * Pass `excludeLocationId` to omit one row (e.g. just created). Tries RPC, then client Haversine.
+ * Does not return roots beyond `maxRadiusKm`; empty array means caller should skip pick-parent UI.
  */
 export async function searchNearbyRootParentCandidates(
   lat: number,
   lng: number,
   excludeLocationId?: string | null,
-  proximalRadiusKm: number = PARENT_LINK_PROXIMAL_RADIUS_KM,
+  maxRadiusKm: number = PARENT_CANDIDATE_MAX_RADIUS_KM,
 ): Promise<NearbyLocationResult[]> {
   const exclude = excludeLocationId ?? null;
-  let rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, proximalRadiusKm);
-  if (rows.length === 0) {
-    rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, PARENT_LINK_GLOBAL_RADIUS_KM);
+  let rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, maxRadiusKm);
+  const maxR = Number(maxRadiusKm);
+  if (Number.isFinite(maxR)) {
+    rows = rows.filter(r => Number(r.distance_km) <= maxR);
   }
   return rows.slice(0, 3);
 }

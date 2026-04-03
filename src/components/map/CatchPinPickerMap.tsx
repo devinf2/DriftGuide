@@ -73,6 +73,8 @@ export type CatchPinPickerMapProps = {
   /** Fixed style; when set, hides the basemap switcher. */
   mapStyle?: string;
   showBasemapSwitcher?: boolean;
+  /** When false, hides the caption above/below the map. */
+  showHint?: boolean;
 };
 
 /**
@@ -98,6 +100,7 @@ export function CatchPinPickerMap({
   zoomStep = 1,
   mapStyle: mapStyleProp,
   showBasemapSwitcher = true,
+  showHint = true,
 }: CatchPinPickerMapProps) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
@@ -292,9 +295,9 @@ export function CatchPinPickerMap({
 
   return (
     <View style={wrapStyle}>
-      {hintPosition === 'above' ? <Text style={styles.hint}>{resolvedHint}</Text> : null}
+      {showHint && hintPosition === 'above' ? <Text style={styles.hint}>{resolvedHint}</Text> : null}
       {mapBody}
-      {hintPosition === 'below' ? <Text style={[styles.hint, styles.hintBelow]}>{resolvedHint}</Text> : null}
+      {showHint && hintPosition === 'below' ? <Text style={[styles.hint, styles.hintBelow]}>{resolvedHint}</Text> : null}
     </View>
   );
 }

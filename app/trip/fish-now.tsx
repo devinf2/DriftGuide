@@ -1,18 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
-  ScrollView,
   ActivityIndicator,
-  TextInput,
   Alert,
   KeyboardAvoidingView,
   Platform,
   Modal,
   TouchableOpacity,
-  Switch,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -25,11 +22,16 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
-import { addCommunityLocation, haversineDistance, searchNearbyRootParentCandidates } from '@/src/services/locationService';
+import {
+  addCommunityLocation,
+  isWithinPinParentReuseThreshold,
+  searchNearbyRootParentCandidates,
+} from '@/src/services/locationService';
 import type { Location, LocationType, NearbyLocationResult } from '@/src/types';
-
-/** If the angler is within this distance of the parent pin, start the trip on the parent (no new child row). */
-const CLOSE_TO_PARENT_KM = 1.5;
+import {
+  LocationPinParentTwoStepFlow,
+  type PinParentFlowStep,
+} from '@/src/components/location/LocationPinParentTwoStepFlow';
 
 /**
  * Provo, UT — used in __DEV__ when the simulator has no GPS or location calls fail,
@@ -52,12 +54,6 @@ function typeLabel(t: LocationType | null): string {
   return LOCATION_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
 }
 
-function formatProximityKm(km: number): string {
-  if (!Number.isFinite(km) || km < 0) return '';
-  if (km < 1) return `${Math.round(km * 1000)} m away`;
-  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km away`;
-}
-
 function nearbyResultToLocation(c: NearbyLocationResult): Location {
   const st = c.status;
   const status =
@@ -74,7 +70,7 @@ function nearbyResultToLocation(c: NearbyLocationResult): Location {
   };
 }
 
-type Phase = 'locating' | 'loading_parents' | 'pick_parent' | 'details' | 'busy';
+type Phase = 'locating' | 'loading_parents' | 'pick_parent' | 'busy';
 
 export default function FishNowScreen() {
   const { colors, resolvedScheme } = useAppTheme();
@@ -89,22 +85,68 @@ export default function FishNowScreen() {
 
   const [phase, setPhase] = useState<Phase>('locating');
   const [gpsError, setGpsError] = useState<string | null>(null);
-  /** Shown in dev when coordinates are the Provo fallback (simulator / no GPS). */
   const [devFallbackNotice, setDevFallbackNotice] = useState<string | null>(null);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [pinCoords, setPinCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [mapFocusNonce, setMapFocusNonce] = useState(0);
+  const initialGpsSyncedRef = useRef(false);
   const [candidates, setCandidates] = useState<NearbyLocationResult[]>([]);
-  /** When continuing to details: parent id if child/standalone save, or null for standalone. */
   const [detailsParentId, setDetailsParentId] = useState<string | null>(null);
-  const [detailsParentLabel, setDetailsParentLabel] = useState<string | null>(null);
+  const [pickerFlowStep, setPickerFlowStep] = useState<PinParentFlowStep>(1);
 
   const [name, setName] = useState('');
   const [locationType, setLocationType] = useState<LocationType | null>(null);
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [isPublic, setIsPublic] = useState(true);
 
+  const selectedParentGeo = useMemo(() => {
+    if (!detailsParentId) return null;
+    const fromStore = locations.find((l) => l.id === detailsParentId);
+    if (fromStore?.latitude != null && fromStore.longitude != null) {
+      return { lat: fromStore.latitude, lng: fromStore.longitude };
+    }
+    const fromCand = candidates.find((c) => c.id === detailsParentId);
+    if (fromCand) return { lat: fromCand.latitude, lng: fromCand.longitude };
+    return null;
+  }, [detailsParentId, locations, candidates]);
+
+  const closePinToSelectedParent = useMemo(() => {
+    if (detailsParentId == null || selectedParentGeo == null) return false;
+    const anchor = pinCoords ?? userCoords;
+    if (!anchor) return false;
+    return isWithinPinParentReuseThreshold(
+      anchor.latitude,
+      anchor.longitude,
+      selectedParentGeo.lat,
+      selectedParentGeo.lng,
+    );
+  }, [detailsParentId, selectedParentGeo, pinCoords, userCoords]);
+
+  const showDetailsSpotFields = useMemo(
+    () => detailsParentId == null || !closePinToSelectedParent,
+    [detailsParentId, closePinToSelectedParent],
+  );
+
+  const resolveLocationForParentId = useCallback(
+    (parentId: string): Location | null => {
+      const fromStore = locations.find((l) => l.id === parentId);
+      if (fromStore) return fromStore;
+      const fromCand = candidates.find((c) => c.id === parentId);
+      return fromCand ? nearbyResultToLocation(fromCand) : null;
+    },
+    [locations, candidates],
+  );
+
   useEffect(() => {
     void fetchLocations();
   }, [fetchLocations]);
+
+  useEffect(() => {
+    if (!userCoords || initialGpsSyncedRef.current) return;
+    initialGpsSyncedRef.current = true;
+    setPinCoords(userCoords);
+    setMapFocusNonce((n) => n + 1);
+  }, [userCoords]);
 
   useEffect(() => {
     let cancelled = false;
@@ -211,42 +253,71 @@ export default function FishNowScreen() {
 
   const handlePickParent = useCallback(
     (c: NearbyLocationResult) => {
-      if (!userCoords) return;
-      const d = haversineDistance(userCoords.latitude, userCoords.longitude, c.latitude, c.longitude);
-      if (d <= CLOSE_TO_PARENT_KM) {
+      const anchor = pinCoords ?? userCoords;
+      if (!anchor) return;
+      if (isWithinPinParentReuseThreshold(anchor.latitude, anchor.longitude, c.latitude, c.longitude)) {
         const fromStore = locations.find((l) => l.id === c.id);
         void startOnExistingLocation(fromStore ?? nearbyResultToLocation(c));
         return;
       }
       setDetailsParentId(c.id);
-      setDetailsParentLabel(c.name);
       setName('');
       setLocationType(c.type);
-      setPhase('details');
+      setPickerFlowStep(2);
     },
-    [userCoords, locations, startOnExistingLocation],
+    [pinCoords, userCoords, locations, startOnExistingLocation],
   );
 
   const handleStandalone = useCallback(() => {
     setDetailsParentId(null);
-    setDetailsParentLabel(null);
     setName('');
     setLocationType(null);
-    setPhase('details');
+    setPickerFlowStep(2);
   }, []);
 
-  const handleBackFromDetails = useCallback(() => {
+  const handleBackFromSpotStep = useCallback(() => {
     if (phase === 'busy') return;
-    setPhase('pick_parent');
+    if (candidates.length === 0) {
+      router.back();
+      return;
+    }
+    setPickerFlowStep(1);
     setDetailsParentId(null);
-    setDetailsParentLabel(null);
-  }, [phase]);
+  }, [phase, candidates.length, router]);
+
+  useEffect(() => {
+    if (phase !== 'pick_parent') return;
+    if (candidates.length > 0) return;
+    setPickerFlowStep(2);
+    setDetailsParentId(null);
+    setName('');
+    setLocationType(null);
+  }, [phase, candidates.length]);
 
   const handleStartWithNewSpot = useCallback(async () => {
-    if (!user || !userCoords) {
+    const anchor = pinCoords ?? userCoords;
+    if (!user || !anchor) {
       Alert.alert('Sign in required', 'Sign in to start a trip.');
       return;
     }
+
+    if (detailsParentId && selectedParentGeo) {
+      if (
+        isWithinPinParentReuseThreshold(
+          anchor.latitude,
+          anchor.longitude,
+          selectedParentGeo.lat,
+          selectedParentGeo.lng,
+        )
+      ) {
+        const loc = resolveLocationForParentId(detailsParentId);
+        if (loc) {
+          void startOnExistingLocation(loc);
+          return;
+        }
+      }
+    }
+
     if (!isConnected) {
       Alert.alert('Offline', 'Adding a spot requires a connection. Try again when you are online.');
       return;
@@ -273,14 +344,15 @@ export default function FishNowScreen() {
     const newLoc = await addCommunityLocation(
       name.trim(),
       locationType,
-      userCoords.latitude,
-      userCoords.longitude,
+      anchor.latitude,
+      anchor.longitude,
       user.id,
       isPublic,
       detailsParentId,
     );
     if (!newLoc) {
-      setPhase('details');
+      setPhase('pick_parent');
+      setPickerFlowStep(2);
       Alert.alert(
         'Could not save spot',
         'Check your connection. If this keeps happening, confirm your Supabase migrations are up to date.',
@@ -293,17 +365,24 @@ export default function FishNowScreen() {
     router.replace(`/trip/${tripId}`);
   }, [
     user,
+    pinCoords,
     userCoords,
     isConnected,
     name,
     locationType,
     isPublic,
     detailsParentId,
+    selectedParentGeo,
+    resolveLocationForParentId,
+    startOnExistingLocation,
     fetchLocations,
     addRecentLocation,
     startTrip,
     router,
   ]);
+
+  const isTripBusy = phase === 'busy';
+  const coord = pinCoords ?? userCoords;
 
   return (
     <KeyboardAvoidingView
@@ -317,10 +396,14 @@ export default function FishNowScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Go back"
-            onPress={() => (phase === 'details' ? handleBackFromDetails() : router.back())}
+            onPress={() =>
+              phase === 'pick_parent' && pickerFlowStep === 2 && !isTripBusy
+                ? handleBackFromSpotStep()
+                : router.back()
+            }
             style={({ pressed }) => [styles.headerBackPress, { opacity: pressed ? 0.65 : 1 }]}
             hitSlop={12}
-            disabled={phase === 'busy'}
+            disabled={isTripBusy}
           >
             <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
             <Text style={styles.headerBackText}>Back</Text>
@@ -332,124 +415,58 @@ export default function FishNowScreen() {
         <View style={styles.headerSide} />
       </View>
 
-      {phase === 'details' ? (
-        <ScrollView
-          style={styles.detailsScroll}
-          contentContainerStyle={[styles.detailsContent, { paddingBottom: insets.bottom + Spacing.xl }]}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-        >
-          <Text style={styles.detailsHeadline}>Your spot</Text>
-          <Text style={styles.detailsSub}>
-            {detailsParentId
-              ? `Saving a pin on ${detailsParentLabel ?? 'this water'} at your current location.`
-              : 'Saving a new place at your current location.'}
-          </Text>
-          {devFallbackNotice ? <Text style={styles.devFallbackBanner}>{devFallbackNotice}</Text> : null}
-
-          <Text style={styles.fieldLabel}>Name</Text>
-          <TextInput
-            style={styles.nameInput}
-            placeholder="e.g. Riverside access"
-            placeholderTextColor={colors.textTertiary}
-            value={name}
-            onChangeText={setName}
-            returnKeyType="done"
-            editable={phase !== 'busy'}
-          />
-
-          <Text style={[styles.fieldLabel, { marginTop: Spacing.md }]}>Type</Text>
-          <Pressable style={styles.typeDropdown} onPress={() => setTypePickerOpen(true)} disabled={phase === 'busy'}>
-            <Text style={[styles.typeDropdownText, locationType == null && styles.typeDropdownPlaceholder]}>
-              {typeLabel(locationType)}
+      <View style={[styles.pickerBody, { paddingBottom: insets.bottom + Spacing.md }]}>
+        {gpsError ? <Text style={styles.errorBanner}>{gpsError}</Text> : null}
+        {devFallbackNotice ? <Text style={styles.devFallbackBanner}>{devFallbackNotice}</Text> : null}
+        {phase === 'locating' || phase === 'loading_parents' ? (
+          <View style={styles.centerBlock}>
+            <ActivityIndicator color={colors.primary} size="large" />
+            <Text style={styles.loadingCaption}>
+              {phase === 'locating' ? 'Getting your location…' : 'Finding nearby waters…'}
             </Text>
-            <Text style={styles.typeChevron}>▾</Text>
-          </Pressable>
-
-          <View style={styles.publicRow}>
-            <Text style={styles.publicLabel}>Public location</Text>
-            <Switch
-              value={isPublic}
-              onValueChange={setIsPublic}
-              disabled={phase === 'busy'}
-              trackColor={{ false: colors.border, true: colors.primary + '99' }}
-              thumbColor={Platform.OS === 'android' ? (isPublic ? colors.primary : colors.textTertiary) : undefined}
-              ios_backgroundColor={colors.border}
-            />
           </View>
-
-          <Pressable
-            style={[styles.primaryBtn, phase === 'busy' && styles.primaryBtnDisabled]}
-            onPress={() => void handleStartWithNewSpot()}
-            disabled={phase === 'busy'}
-          >
-            {phase === 'busy' ? (
-              <ActivityIndicator color={colors.textInverse} />
-            ) : (
-              <Text style={styles.primaryBtnText}>Start fishing</Text>
-            )}
-          </Pressable>
-        </ScrollView>
-      ) : (
-        <View style={[styles.pickerBody, { paddingBottom: insets.bottom + Spacing.md }]}>
-          {gpsError ? <Text style={styles.errorBanner}>{gpsError}</Text> : null}
-          {devFallbackNotice ? <Text style={styles.devFallbackBanner}>{devFallbackNotice}</Text> : null}
-          {phase === 'locating' || phase === 'loading_parents' ? (
-            <View style={styles.centerBlock}>
-              <ActivityIndicator color={colors.primary} size="large" />
-              <Text style={styles.loadingCaption}>
-                {phase === 'locating' ? 'Getting your location…' : 'Finding nearby waters…'}
-              </Text>
-            </View>
-          ) : null}
-          {phase === 'pick_parent' && !gpsError && userCoords == null ? (
-            <View style={styles.centerBlock}>
-              <Text style={styles.loadingCaption}>Turn on location to use Fish now.</Text>
-            </View>
-          ) : null}
-          {phase === 'pick_parent' && userCoords != null ? (
-            <ScrollView
-              style={styles.pickerScroll}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.pickerScrollContent}
-            >
-              <Text style={styles.pickerTitle}>Part of an existing place?</Text>
-              <Text style={styles.pickerSubtitle}>
-                Nothing is saved yet. If this spot belongs inside a larger waterbody we already have, choose it.
-                Otherwise save it as its own place.
-              </Text>
-              {candidates.length > 0
-                ? candidates.map((c) => (
-                    <Pressable
-                      key={c.id}
-                      style={styles.parentRow}
-                      onPress={() => handlePickParent(c)}
-                      disabled={phase === 'busy'}
-                    >
-                      <View style={styles.parentRowText}>
-                        <Text style={styles.parentRowName} numberOfLines={2}>
-                          Part of {c.name}
-                        </Text>
-                        <Text style={styles.parentRowMeta}>{formatProximityKm(c.distance_km)}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-                    </Pressable>
-                  ))
-                : null}
-              <Pressable style={styles.declineBtn} onPress={handleStandalone} disabled={phase === 'busy'}>
-                <Text style={styles.declineBtnText}>No — save as its own place</Text>
-              </Pressable>
-            </ScrollView>
-          ) : null}
-          {phase === 'busy' && userCoords != null ? (
-            <View style={styles.busyOverlay}>
-              <ActivityIndicator color={colors.primary} size="large" />
-              <Text style={styles.loadingCaption}>Starting your trip…</Text>
-            </View>
-          ) : null}
-        </View>
-      )}
+        ) : null}
+        {phase === 'pick_parent' && !gpsError && userCoords == null ? (
+          <View style={styles.centerBlock}>
+            <Text style={styles.loadingCaption}>Turn on location to use Fish now.</Text>
+          </View>
+        ) : null}
+        {(phase === 'pick_parent' || phase === 'busy') && userCoords != null && coord != null ? (
+          <LocationPinParentTwoStepFlow
+            latitude={coord.latitude}
+            longitude={coord.longitude}
+            onCoordinateChange={(lat, lng) => setPinCoords({ latitude: lat, longitude: lng })}
+            mapFocusKey={mapFocusNonce}
+            mapFallbackCenter={[userCoords.longitude, userCoords.latitude]}
+            mapFlex={1}
+            bottomPanelFlex={1}
+            step={pickerFlowStep}
+            candidates={candidates}
+            onPressCandidate={handlePickParent}
+            notPartOfListLabel="No — save as its own place"
+            onPressNotPartOfList={handleStandalone}
+            showSpotDetailFields={showDetailsSpotFields}
+            name={name}
+            onNameChange={setName}
+            locationType={locationType}
+            typeLabel={typeLabel}
+            onPressOpenTypePicker={() => setTypePickerOpen(true)}
+            isPublic={isPublic}
+            onIsPublicChange={setIsPublic}
+            primaryButtonLabel="Start fishing"
+            onPressPrimary={() => void handleStartWithNewSpot()}
+            primaryBusy={isTripBusy}
+            interactionDisabled={isTripBusy}
+            bottomInsetPadding={Spacing.md}
+          />
+        ) : null}
+        {phase === 'busy' && userCoords != null ? (
+          <View style={styles.busyOverlay}>
+            <ActivityIndicator color={colors.primary} size="large" />
+            <Text style={styles.loadingCaption}>Starting your trip…</Text>
+          </View>
+        ) : null}
+      </View>
 
       <Modal visible={typePickerOpen} transparent animationType="fade" onRequestClose={() => setTypePickerOpen(false)}>
         <TouchableOpacity
@@ -531,63 +548,6 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: Spacing.lg,
       paddingTop: Spacing.md,
     },
-    pickerScroll: {
-      flex: 1,
-    },
-    pickerScrollContent: {
-      paddingBottom: Spacing.lg,
-    },
-    pickerTitle: {
-      fontSize: FontSize.lg,
-      fontWeight: '700',
-      color: colors.text,
-      marginBottom: Spacing.sm,
-    },
-    pickerSubtitle: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      lineHeight: 20,
-      marginBottom: Spacing.md,
-    },
-    parentRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: Spacing.md,
-      paddingHorizontal: Spacing.sm,
-      borderRadius: BorderRadius.sm,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
-      marginBottom: Spacing.sm,
-    },
-    parentRowText: {
-      flex: 1,
-      minWidth: 0,
-    },
-    parentRowName: {
-      fontSize: FontSize.md,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    parentRowMeta: {
-      fontSize: FontSize.xs,
-      color: colors.textTertiary,
-      marginTop: 2,
-    },
-    declineBtn: {
-      marginTop: Spacing.sm,
-      paddingVertical: Spacing.md,
-      alignItems: 'center',
-      borderRadius: BorderRadius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
-    declineBtnText: {
-      fontSize: FontSize.md,
-      fontWeight: '600',
-      color: colors.textSecondary,
-    },
     centerBlock: {
       flex: 1,
       justifyContent: 'center',
@@ -623,94 +583,6 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       gap: Spacing.md,
-    },
-    detailsScroll: {
-      flex: 1,
-    },
-    detailsContent: {
-      paddingHorizontal: Spacing.lg,
-      paddingTop: Spacing.lg,
-    },
-    detailsHeadline: {
-      fontSize: FontSize.xl,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    detailsSub: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      lineHeight: 20,
-      marginTop: Spacing.sm,
-      marginBottom: Spacing.lg,
-    },
-    fieldLabel: {
-      fontSize: FontSize.sm,
-      fontWeight: '600',
-      color: colors.textSecondary,
-      marginBottom: Spacing.xs,
-    },
-    nameInput: {
-      backgroundColor: colors.surface,
-      borderRadius: BorderRadius.md,
-      borderWidth: 1,
-      borderColor: colors.border,
-      paddingHorizontal: Spacing.md,
-      paddingVertical: Spacing.sm,
-      fontSize: FontSize.md,
-      color: colors.text,
-    },
-    typeDropdown: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: Spacing.sm,
-      paddingHorizontal: Spacing.md,
-      borderRadius: BorderRadius.md,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
-    typeDropdownText: {
-      fontSize: FontSize.md,
-      fontWeight: '600',
-      color: colors.text,
-      flex: 1,
-    },
-    typeDropdownPlaceholder: {
-      color: colors.textTertiary,
-      fontWeight: '500',
-    },
-    typeChevron: {
-      fontSize: 12,
-      color: colors.textSecondary,
-    },
-    publicRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginTop: Spacing.lg,
-    },
-    publicLabel: {
-      fontSize: FontSize.sm,
-      fontWeight: '600',
-      color: colors.textSecondary,
-      flex: 1,
-      marginRight: Spacing.sm,
-    },
-    primaryBtn: {
-      marginTop: Spacing.xl,
-      backgroundColor: colors.primary,
-      borderRadius: BorderRadius.md,
-      paddingVertical: Spacing.md,
-      alignItems: 'center',
-    },
-    primaryBtnDisabled: {
-      opacity: 0.7,
-    },
-    primaryBtnText: {
-      color: colors.textInverse,
-      fontSize: FontSize.md,
-      fontWeight: '700',
     },
     modalBackdrop: {
       flex: 1,

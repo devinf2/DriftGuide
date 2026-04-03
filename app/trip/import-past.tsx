@@ -1,4 +1,4 @@
-import { NearbyRootLocationPickerModal } from '@/src/components/importPastTrips/NearbyRootLocationPickerModal';
+import { ImportTripLocationFlowModal } from '@/src/components/importPastTrips/ImportTripLocationFlowModal';
 import {
   CatchDetailsModal,
   type CatchDetailsSubmitAdd,
@@ -13,6 +13,7 @@ import {
   useImportPastTripsStore,
 } from '@/src/stores/importPastTripsStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { CatchData, Fly, Location, NearbyLocationResult, TripEvent } from '@/src/types';
 import { extractPhotoMetadataFromPickerAsset } from '@/src/utils/imageExif';
@@ -46,22 +47,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 const STEP_TITLES = ['Upload', 'Trips', 'Tag catches', 'Review'] as const;
 const TOTAL_STEPS = STEP_TITLES.length;
-
-function nearbyResultToLocation(c: NearbyLocationResult): Location {
-  const st = c.status;
-  const status =
-    st === 'verified' || st === 'community' || st === 'pending' ? st : undefined;
-  return {
-    id: c.id,
-    name: c.name,
-    type: c.type,
-    parent_location_id: null,
-    latitude: c.latitude,
-    longitude: c.longitude,
-    metadata: {},
-    status,
-  };
-}
 
 function computeAnchor(photoIds: string[], photos: ImportPhoto[]): { lat: number; lng: number } | null {
   const pts = photoIds
@@ -462,6 +447,7 @@ export default function ImportPastTripsScreen() {
     return { cell, gap };
   }, [windowWidth]);
   const { user, profile } = useAuthStore();
+  const fetchLocations = useLocationStore((s) => s.fetchLocations);
   const { isConnected } = useNetworkStatus();
 
   const step = useImportPastTripsStore((s) => s.step);
@@ -563,18 +549,6 @@ export default function ImportPastTripsScreen() {
       }
     },
     [groups, photos],
-  );
-
-  const onConfirmLocation = useCallback(
-    (c: NearbyLocationResult) => {
-      if (!locTargetGroupId) return;
-      const gid = locTargetGroupId;
-      const loc = nearbyResultToLocation(c);
-      setGroupLocation(gid, loc, loc.id);
-      setLocModalVisible(false);
-      setLocTargetGroupId(null);
-    },
-    [locTargetGroupId, setGroupLocation],
   );
 
   const pickPhotos = useCallback(async () => {
@@ -1357,7 +1331,7 @@ export default function ImportPastTripsScreen() {
 
       {renderWizardFooter()}
 
-      <NearbyRootLocationPickerModal
+      <ImportTripLocationFlowModal
         visible={locModalVisible}
         onClose={() => {
           setLocModalVisible(false);
@@ -1367,7 +1341,14 @@ export default function ImportPastTripsScreen() {
         loading={locLoading}
         anchorLat={locAnchor?.lat ?? null}
         anchorLng={locAnchor?.lng ?? null}
-        onPick={(c) => void onConfirmLocation(c)}
+        userId={user?.id ?? null}
+        isConnected={isConnected}
+        onComplete={(loc, locationId) => {
+          const gid = locTargetGroupId;
+          if (!gid) return;
+          setGroupLocation(gid, loc, locationId);
+        }}
+        onLocationCreated={() => void fetchLocations()}
       />
 
       <Modal visible={splitModalGroupId != null} transparent animationType="fade">
