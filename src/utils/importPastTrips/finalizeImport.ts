@@ -1,10 +1,26 @@
 import { addPhoto, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { fetchHistoricalWeather } from '@/src/services/historicalWeather';
 import { syncTripToCloud } from '@/src/services/sync';
 import type { CatchData, FishingType, Location, Trip, TripEvent } from '@/src/types';
 import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 import type { ImportPhoto, ImportTripGroup } from '@/src/stores/importPastTripsStore';
 import { sortEventsByTime, totalFishFromEvents } from '@/src/utils/journalTimeline';
+import { enrichCatchEventsWithHistoricalConditions } from '@/src/utils/importPastTrips/enrichImportConditions';
 import { parseISO } from 'date-fns';
+
+/** Same instant heuristic as per-catch historical enrichment: earliest EXIF in trip, else trip-date noon. */
+function weatherAnchorDateForImportGroup(group: ImportTripGroup, photos: ImportPhoto[]): Date {
+  const times = group.photoIds
+    .map((id) => photos.find((p) => p.id === id)?.meta.takenAt)
+    .filter((t): t is Date => t != null);
+  if (times.length > 0) {
+    return new Date(Math.min(...times.map((t) => t.getTime())));
+  }
+  const key = group.tripDateKey;
+  const baseFromKey =
+    key && key !== '__unknown__' ? parseISO(`${key}T12:00:00`) : new Date();
+  return Number.isNaN(baseFromKey.getTime()) ? new Date() : baseFromKey;
+}
 
 function isRemoteStorageUrl(uri: string): boolean {
   const t = uri.trim();
@@ -90,15 +106,36 @@ export async function finalizeImportGroup(
   fishingType: FishingType,
   isOnline: boolean,
 ): Promise<FinalizeImportResult> {
-  const trip = buildCompletedTripForImport(group, photos, userId, fishingType);
-  const sorted = sortEventsByTime([...group.events]);
+  let trip = buildCompletedTripForImport(group, photos, userId, fishingType);
+  if (!trip.weather_cache && isOnline && group.location) {
+    const la = group.location.latitude;
+    const lo = group.location.longitude;
+    if (la != null && lo != null && Number.isFinite(la) && Number.isFinite(lo)) {
+      const at = weatherAnchorDateForImportGroup(group, photos);
+      if (!Number.isNaN(at.getTime())) {
+        try {
+          const w = await fetchHistoricalWeather(la, lo, at);
+          if (w) trip = { ...trip, weather_cache: w };
+        } catch {
+          /* keep null */
+        }
+      }
+    }
+  }
 
-  const stripped = eventsWithCatchPhotosNulled(sorted);
+  const sorted = sortEventsByTime([...group.events]);
+  const enriched = await enrichCatchEventsWithHistoricalConditions(sorted, {
+    fallbackLat: group.location?.latitude,
+    fallbackLon: group.location?.longitude,
+    isOnline,
+  });
+
+  const stripped = eventsWithCatchPhotosNulled(enriched);
   let ok = await syncTripToCloud(trip, stripped);
   if (!ok) return { ok: false, message: 'Could not save trip. Check your connection and try again.' };
 
   const rebuilt: TripEvent[] = [];
-  for (const e of sorted) {
+  for (const e of enriched) {
     if (e.event_type !== 'catch') {
       rebuilt.push(e);
       continue;

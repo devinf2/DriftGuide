@@ -3,6 +3,10 @@ import type { CatchData, FlyChangeData, Location, TripEvent, WeatherData } from 
 import type { PhotoExifMetadata } from '@/src/utils/imageExif';
 import { catchDataWithoutPhotoUri, normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 import { applyCatchDetailsAddPayload } from '@/src/utils/importPastTrips/applyCatchPayload';
+import {
+  buildMinimalCatchPayloadForImport,
+  orderPhotoIdsByTripOrder,
+} from '@/src/utils/importPastTrips/minimalImportCatch';
 import { format } from 'date-fns';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
@@ -59,6 +63,10 @@ interface ImportPastTripsState {
   /** Fish track vs scenery; detaches from catch when switching a catch photo to scenery. */
   setImportPhotoScenery: (groupId: string, photoId: string, isScenery: boolean) => void;
   addCatchFromPayload: (groupId: string, photoIds: string[], payload: CatchDetailsSubmitAdd) => void;
+  /** One minimal catch (photos only) for the given photo IDs, in trip order. */
+  addMinimalCatchForPhotoIds: (groupId: string, photoIds: string[]) => void;
+  /** Turn every remaining untagged fish photo into its own minimal catch (for Review / import). */
+  materializeMinimalCatchesForAllGroups: () => void;
   updateGroupEventsAfterEdit: (groupId: string, nextEvents: TripEvent[]) => void;
   deleteCatchAndResetPhotos: (groupId: string, catchEventId: string) => void;
   /** Rebuild photoStates catch links from events (after edit) */
@@ -355,6 +363,76 @@ export const useImportPastTripsStore = create<ImportPastTripsState>((set, get) =
       return { groups, selectedPhotoIdsForAction: [] };
     });
   },
+
+  addMinimalCatchForPhotoIds: (groupId, photoIds) => {
+    if (photoIds.length === 0) return;
+    set((state) => {
+      const gi = state.groups.findIndex((g) => g.id === groupId);
+      if (gi === -1) return state;
+      const g = state.groups[gi];
+      const ordered = orderPhotoIdsByTripOrder(g, photoIds);
+      if (ordered.length === 0) return state;
+      const payload = buildMinimalCatchPayloadForImport(g, state.photos, ordered);
+      const applied = applyCatchDetailsAddPayload({
+        tripId: g.draftTripId,
+        events: g.events,
+        currentFlyEventId: g.currentFlyEventId,
+        currentPrimary: g.currentPrimary,
+        currentDropper: g.currentDropper,
+        payload,
+      });
+      const photoStates = { ...g.photoStates };
+      for (const pid of ordered) {
+        photoStates[pid] = { kind: 'catch', catchEventId: applied.catchEventId };
+      }
+      const groups = [...state.groups];
+      groups[gi] = {
+        ...g,
+        events: applied.events,
+        currentFlyEventId: applied.currentFlyEventId,
+        currentPrimary: applied.currentPrimary,
+        currentDropper: applied.currentDropper,
+        photoStates,
+      };
+      return { groups, selectedPhotoIdsForAction: [] };
+    });
+  },
+
+  materializeMinimalCatchesForAllGroups: () =>
+    set((state) => {
+      const photos = state.photos;
+      const groups = state.groups.map((g) => {
+        const untaggedOrdered = g.photoIds.filter((pid) => {
+          const st = g.photoStates[pid];
+          return !st || st.kind === 'untagged';
+        });
+        let next = g;
+        for (const pid of untaggedOrdered) {
+          const payload = buildMinimalCatchPayloadForImport(next, photos, [pid]);
+          const applied = applyCatchDetailsAddPayload({
+            tripId: next.draftTripId,
+            events: next.events,
+            currentFlyEventId: next.currentFlyEventId,
+            currentPrimary: next.currentPrimary,
+            currentDropper: next.currentDropper,
+            payload,
+          });
+          next = {
+            ...next,
+            events: applied.events,
+            currentFlyEventId: applied.currentFlyEventId,
+            currentPrimary: applied.currentPrimary,
+            currentDropper: applied.currentDropper,
+            photoStates: {
+              ...next.photoStates,
+              [pid]: { kind: 'catch', catchEventId: applied.catchEventId },
+            },
+          };
+        }
+        return next;
+      });
+      return { groups };
+    }),
 
   updateGroupEventsAfterEdit: (groupId, nextEvents) => {
     set((state) => ({

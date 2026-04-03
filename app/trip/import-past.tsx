@@ -413,9 +413,16 @@ function Step3CatchDetailsSummary({
   events: TripEvent[];
   styles: ImportPastTripStyles;
 }) {
-  if (!catchEvent || catchEvent.event_type !== 'catch') return null;
-  const d = catchEvent.data as CatchData;
-  const { species, size, fly } = step3CatchDetailStrings(d, events);
+  let species = '—';
+  let size = '—';
+  let fly = '—';
+  if (catchEvent && catchEvent.event_type === 'catch') {
+    const d = catchEvent.data as CatchData;
+    const s = step3CatchDetailStrings(d, events);
+    species = s.species;
+    size = s.size;
+    fly = s.fly;
+  }
   return (
     <View style={styles.step3CatchDetailBlock}>
       <View style={styles.step3CatchDetailRow}>
@@ -473,6 +480,10 @@ export default function ImportPastTripsScreen() {
   const clearPhotoSelection = useImportPastTripsStore((s) => s.clearPhotoSelection);
   const setImportPhotoScenery = useImportPastTripsStore((s) => s.setImportPhotoScenery);
   const addCatchFromPayload = useImportPastTripsStore((s) => s.addCatchFromPayload);
+  const addMinimalCatchForPhotoIds = useImportPastTripsStore((s) => s.addMinimalCatchForPhotoIds);
+  const materializeMinimalCatchesForAllGroups = useImportPastTripsStore(
+    (s) => s.materializeMinimalCatchesForAllGroups,
+  );
   const updateGroupEventsAfterEdit = useImportPastTripsStore((s) => s.updateGroupEventsAfterEdit);
   const activeGroupIdForStep4 = useImportPastTripsStore((s) => s.activeGroupIdForStep4);
   const setActiveGroupForStep4 = useImportPastTripsStore((s) => s.setActiveGroupForStep4);
@@ -633,13 +644,15 @@ export default function ImportPastTripsScreen() {
 
   const handleImportAll = useCallback(async () => {
     if (!user?.id) return;
-    if (!step4Valid(groups)) {
-      Alert.alert('Incomplete', 'Tag every photo as scenery or a catch before importing.');
+    materializeMinimalCatchesForAllGroups();
+    const freshGroups = useImportPastTripsStore.getState().groups;
+    if (!step4Valid(freshGroups)) {
+      Alert.alert('Incomplete', 'Mark each photo as scenery or fish before importing.');
       return;
     }
     setImporting(true);
     try {
-      for (const g of groups) {
+      for (const g of freshGroups) {
         const res = await finalizeImportGroup(g, photos, user.id, fishingType, isConnected);
         if (!res.ok) {
           Alert.alert('Import', res.message);
@@ -654,7 +667,15 @@ export default function ImportPastTripsScreen() {
     } finally {
       setImporting(false);
     }
-  }, [user?.id, groups, photos, fishingType, isConnected, reset, router]);
+  }, [
+    user?.id,
+    photos,
+    fishingType,
+    isConnected,
+    reset,
+    router,
+    materializeMinimalCatchesForAllGroups,
+  ]);
 
   const renderStep1 = () => (
     <>
@@ -825,8 +846,8 @@ export default function ImportPastTripsScreen() {
   const renderStep3 = () => (
     <>
       <Text style={{ color: colors.textSecondary, marginBottom: Spacing.md }}>
-        Fish / Scenery per photo (fish are numbered) until you combine. Combined catches: Edit details only. One fish:
-        Edit details. Two+ untagged: select rows, Combine selected.
+        Mark Scenery vs Fish. Fish become photo-only catches when you tap Review (no form). Optional: Edit details anytime.
+        Select two or more untagged fish, then Combine selected to merge into one catch.
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
         <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
@@ -967,6 +988,7 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
+                  <Step3CatchDetailsSummary catchEvent={undefined} events={activeGroup.events} styles={styles} />
                   <View
                     style={{
                       flexDirection: 'row',
@@ -981,7 +1003,7 @@ export default function ImportPastTripsScreen() {
                       {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
                       <View style={{ flex: 1, minWidth: 0, marginLeft: ph ? Spacing.sm : 0 }}>
                         <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
-                        <Text style={styles.muted}>Tap to select · Catch details optional</Text>
+                        <Text style={[styles.muted, { marginTop: Spacing.xs }]}>Edit details to change</Text>
                       </View>
                     </Pressable>
                     <Pressable
@@ -1155,12 +1177,7 @@ export default function ImportPastTripsScreen() {
                   Alert.alert('Combine', 'Select at least two untagged fish photos.');
                   return;
                 }
-                setCatchUi({
-                  groupId: activeGroup.id,
-                  mode: 'add',
-                  photoIds: sel,
-                  editingEvent: null,
-                });
+                addMinimalCatchForPhotoIds(activeGroup.id, sel);
               }}
             >
               <Text style={styles.primaryBtnText}>Combine selected</Text>
@@ -1257,8 +1274,10 @@ export default function ImportPastTripsScreen() {
           <Pressable
             style={[styles.primaryBtn, { flex: 2, marginTop: 0 }]}
             onPress={() => {
-              if (!step4Valid(groups)) {
-                Alert.alert('Tag photos', 'Every photo must be scenery or part of a catch.');
+              materializeMinimalCatchesForAllGroups();
+              const nextGroups = useImportPastTripsStore.getState().groups;
+              if (!step4Valid(nextGroups)) {
+                Alert.alert('Tag photos', 'Every photo must be scenery or a catch.');
                 return;
               }
               setStep(4);
