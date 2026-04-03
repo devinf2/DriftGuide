@@ -24,7 +24,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginBottom: Spacing.sm,
+      marginBottom: Spacing.xs,
       borderWidth: 1,
       borderColor: colors.border,
     },
@@ -89,8 +89,8 @@ export function FishHomePlannedSection({
   if (plannedTrips.length === 0) return null;
 
   return (
-    <DriftGuideMessage>
-      <View style={{ marginBottom: Spacing.sm }}>
+    <DriftGuideMessage compactAfter>
+      <View>
         <Text style={styles.sectionTitle}>Up next</Text>
         {plannedTripsLoading ? (
           <ActivityIndicator color={colors.primary} style={{ marginTop: Spacing.md }} />

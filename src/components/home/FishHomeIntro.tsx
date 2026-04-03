@@ -1,5 +1,4 @@
 import { DriftGuideMessage } from '@/src/components/home/DriftGuideMessage';
-import { useFishHomeStyles } from '@/src/components/home/fishHomeStyles';
 import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -39,17 +38,26 @@ function capitalizeWord(s: string): string {
 
 export function FishHomeIntro({ userFirstName }: Props) {
   const { colors } = useAppTheme();
-  const fishStyles = useFishHomeStyles();
   const styles = useMemo(
     () =>
       StyleSheet.create({
-        heroOuter: {
+        compoundCard: {
+          alignSelf: 'stretch',
           borderRadius: BorderRadius.lg,
           overflow: 'hidden',
-          marginBottom: Spacing.sm,
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: colors.border,
+        },
+        heroStack: {
           minHeight: HERO_MIN_HEIGHT,
+          overflow: 'hidden',
+        },
+        blurbBlock: {
+          backgroundColor: colors.surface,
+          paddingHorizontal: Spacing.md,
+          paddingVertical: Spacing.md,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: colors.border,
         },
         heroImage: {
           ...StyleSheet.absoluteFillObject,
@@ -80,10 +88,10 @@ export function FishHomeIntro({ userFirstName }: Props) {
           textShadowRadius: 4,
         },
         greeting: {
-          fontSize: FontSize.xxl,
+          fontSize: FontSize.xl,
           fontWeight: '700',
           color: colors.textInverse,
-          lineHeight: 34,
+          lineHeight: Math.round(FontSize.xl * 1.25),
           fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: undefined }),
           textShadowColor: 'rgba(0,0,0,0.65)',
           textShadowOffset: { width: 0, height: 1 },
@@ -119,8 +127,8 @@ export function FishHomeIntro({ userFirstName }: Props) {
 
   return (
     <DriftGuideMessage>
-      <View>
-        <View style={styles.heroOuter}>
+      <View style={styles.compoundCard}>
+        <View style={styles.heroStack}>
           <Image
             source={HERO_IMAGE}
             style={styles.heroImage}
@@ -137,14 +145,18 @@ export function FishHomeIntro({ userFirstName }: Props) {
               />
               <Text style={styles.labelText}>AI Fishing Guide</Text>
             </View>
-            <Text style={styles.greeting}>
+            <Text
+              style={styles.greeting}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.65}
+            >
               {greetingLine}, {displayName}
             </Text>
             <Text style={styles.dateLine}>{dateStr}</Text>
           </View>
         </View>
-
-        <View style={fishStyles.aiBubbleLike}>
+        <View style={styles.blurbBlock}>
           <Text style={styles.blurbText}>{blurb}</Text>
         </View>
       </View>

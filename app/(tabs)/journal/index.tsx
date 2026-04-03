@@ -2,10 +2,10 @@ import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapI
 import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
 import { BorderRadius, FontSize, LocationTypeColors, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { fetchPhotos } from '@/src/services/photoService';
 import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import {
     Trip,
     type CatchRow,

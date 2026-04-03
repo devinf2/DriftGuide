@@ -1,16 +1,16 @@
+import GuideChat from '@/src/components/GuideChat';
 import { FishHomeHatchSection } from '@/src/components/home/FishHomeHatchSection';
 import { FishHomeIntro } from '@/src/components/home/FishHomeIntro';
 import { FishHomePlannedSection } from '@/src/components/home/FishHomePlannedSection';
 import { FishHomeSpotsSection } from '@/src/components/home/FishHomeSpotsSection';
-import GuideChat from '@/src/components/GuideChat';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useGuideChatContext } from '@/src/hooks/useGuideChatContext';
 import { useHomeHatchBriefing } from '@/src/hooks/useHomeHatchBriefing';
 import { useHomeHotSpots } from '@/src/hooks/useHomeHotSpots';
 import { useAuthStore } from '@/src/stores/authStore';
 import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useTripStore } from '@/src/stores/tripStore';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { Trip } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
 import { profileFirstName } from '@/src/utils/profileDisplay';
@@ -375,17 +375,17 @@ export default function HomeScreen() {
             fullHome ? (
               <View>
                 <FishHomeIntro userFirstName={profileFirstName(profile)} />
-                <FishHomeHatchSection loading={hatchLoading} rows={hatchRows} />
-                <FishHomeSpotsSection
-                  hotSpotLoading={hotSpotLoading}
-                  hotSpotList={hotSpotList}
-                  onOpenSpot={openSpot}
-                />
                 <FishHomePlannedSection
                   plannedTrips={plannedTrips}
                   plannedTripsLoading={plannedTripsLoading}
                   onStartTrip={handleStartPlannedTrip}
                   onDeleteTrip={handleDeletePlannedTrip}
+                />
+                <FishHomeHatchSection loading={hatchLoading} rows={hatchRows} />
+                <FishHomeSpotsSection
+                  hotSpotLoading={hotSpotLoading}
+                  hotSpotList={hotSpotList}
+                  onOpenSpot={openSpot}
                 />
               </View>
             ) : undefined
