@@ -59,12 +59,15 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       backgroundColor: 'rgba(0,0,0,0.25)',
     },
-    menuCard: {
+    menuAnchor: {
       position: 'absolute',
+      alignItems: 'flex-end',
+    },
+    menuCard: {
       backgroundColor: colors.surface,
       borderRadius: BorderRadius.md,
       paddingVertical: Spacing.xs,
-      minWidth: 220,
+      minWidth: 0,
       maxWidth: Dimensions.get('window').width - Spacing.lg * 2,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
@@ -78,11 +81,11 @@ function createStyles(colors: ThemeColors) {
       color: colors.textSecondary,
       textTransform: 'uppercase',
       letterSpacing: 0.8,
-      paddingHorizontal: Spacing.lg,
+      paddingHorizontal: Spacing.md,
       paddingVertical: Spacing.sm,
     },
     menuRow: {
-      paddingHorizontal: Spacing.lg,
+      paddingHorizontal: Spacing.md,
       paddingVertical: Spacing.md,
     },
     menuRowPressed: {
@@ -119,8 +122,6 @@ export function PlanTripFab() {
     };
   }, []);
 
-  const hideOnProfile = pathname === '/profile' || pathname.startsWith('/profile/');
-
   const hideDuringAddLocation =
     mapAddLocationOpen || pathname.includes('/trip/add-location');
 
@@ -150,7 +151,7 @@ export function PlanTripFab() {
     router.push('/journal');
   }, [closeMenu, router]);
 
-  if (hideOnProfile || hideDuringAddLocation) {
+  if (hideDuringAddLocation) {
     return null;
   }
 
@@ -199,28 +200,30 @@ export function PlanTripFab() {
         <Pressable style={styles.menuOverlay} onPress={closeMenu}>
           {menuAnchor != null ? (
             <View
-              style={[styles.menuCard, { bottom: menuBottom, right: menuRight }]}
+              style={[styles.menuAnchor, { bottom: menuBottom, right: menuRight }]}
               onStartShouldSetResponder={() => true}
             >
-              <Text style={styles.menuTitle}>Go fishing</Text>
-              <Pressable
-                style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                onPress={onPlanTrip}
-              >
-                <Text style={styles.menuRowText}>Plan a Trip</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                onPress={onFishNow}
-              >
-                <Text style={styles.menuRowText}>Fish Now</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                onPress={onLogPastTrips}
-              >
-                <Text style={styles.menuRowText}>Log Past Trips</Text>
-              </Pressable>
+              <View style={styles.menuCard}>
+                <Text style={styles.menuTitle}>Go fishing</Text>
+                <Pressable
+                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
+                  onPress={onPlanTrip}
+                >
+                  <Text style={styles.menuRowText}>Plan a Trip</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
+                  onPress={onFishNow}
+                >
+                  <Text style={styles.menuRowText}>Fish Now</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
+                  onPress={onLogPastTrips}
+                >
+                  <Text style={styles.menuRowText}>Log Past Trips</Text>
+                </Pressable>
+              </View>
             </View>
           ) : null}
         </Pressable>

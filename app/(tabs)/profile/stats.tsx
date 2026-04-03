@@ -1,3 +1,4 @@
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { fetchProfileStats, ProfileStats } from '@/src/services/profileStats';
@@ -81,7 +82,10 @@ export default function ProfileStatsScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.xl }]}
+      contentContainerStyle={[
+        styles.content,
+        { paddingBottom: insets.bottom + Spacing.xl + PLAN_TRIP_FAB_MAP_CLEARANCE },
+      ]}
     >
       <View style={styles.card}>
         <View style={styles.cardHeader}>

@@ -1,9 +1,10 @@
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
 import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrarySection';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { uploadProfileAvatar } from '@/src/services/photoService';
-import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import { Image } from 'expo-image';
@@ -11,17 +12,17 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -161,7 +162,13 @@ export default function ProfileScreen() {
     <Fragment>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[styles.content, { paddingTop: Spacing.md + insets.top }]}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: Spacing.md + insets.top,
+            paddingBottom: Spacing.lg + PLAN_TRIP_FAB_MAP_CLEARANCE,
+          },
+        ]}
       >
         <View style={styles.headerCard}>
           <View style={styles.headerActions}>
@@ -358,7 +365,6 @@ function createProfileStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.background },
     content: {
       paddingHorizontal: Spacing.md,
-      paddingBottom: Spacing.lg,
     },
     headerCard: {
       position: 'relative',
