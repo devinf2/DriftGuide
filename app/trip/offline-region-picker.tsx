@@ -23,6 +23,16 @@ import {
   offlineRegionHalfExtents,
   type OfflineRegionSizePreset,
 } from '@/src/utils/offlineDownloadRegion';
+import {
+  useOfflineDownloadResumeStore,
+  type PlanTripResumePayload,
+} from '@/src/stores/offlineDownloadResumeStore';
+import type { Location } from '@/src/types';
+
+function paramStr(v: string | string[] | undefined): string | undefined {
+  if (v == null) return undefined;
+  return Array.isArray(v) ? v[0] : v;
+}
 
 function parseNum(v: string | undefined, fallback: number): number {
   if (v == null || v === '') return fallback;
@@ -37,6 +47,9 @@ export default function OfflineRegionPickerScreen() {
     locationId?: string;
     centerLng?: string;
     centerLat?: string;
+    resumeFlow?: string;
+    resumeLocation?: string;
+    planTripPayload?: string;
   }>();
   const user = useAuthStore((s) => s.user);
   const basemapId = useMapBasemapStore((s) => s.basemapId);
@@ -116,6 +129,44 @@ export default function OfflineRegionPickerScreen() {
       const msg = tilesOk
         ? 'Map tiles and local data (conditions + catches in this area) are saved for offline use.'
         : 'Local data (conditions + catches in this area) are saved. Map tiles need a Mapbox native build to download.';
+
+      const flow = paramStr(params.resumeFlow);
+      if (flow === 'fish-now') {
+        const raw = paramStr(params.resumeLocation);
+        if (raw) {
+          let loc: Location | null = null;
+          try {
+            loc = JSON.parse(raw) as Location;
+          } catch {
+            try {
+              loc = JSON.parse(decodeURIComponent(raw)) as Location;
+            } catch {
+              loc = null;
+            }
+          }
+          if (loc?.id) {
+            useOfflineDownloadResumeStore.getState().setFishNowResume(loc);
+          }
+        }
+      } else if (flow === 'plan-trip') {
+        const raw = paramStr(params.planTripPayload);
+        if (raw) {
+          let p: PlanTripResumePayload | null = null;
+          try {
+            p = JSON.parse(raw) as PlanTripResumePayload;
+          } catch {
+            try {
+              p = JSON.parse(decodeURIComponent(raw)) as PlanTripResumePayload;
+            } catch {
+              p = null;
+            }
+          }
+          if (p?.userId && p?.locationId && p?.location?.id) {
+            useOfflineDownloadResumeStore.getState().setPlanTripResume(p);
+          }
+        }
+      }
+
       Alert.alert('Downloaded', msg, [{ text: 'OK', onPress: () => router.back() }]);
     } catch (e) {
       Alert.alert('Download failed', (e as Error).message);

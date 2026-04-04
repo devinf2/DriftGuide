@@ -13,7 +13,33 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FLY_COLORS, FLY_NAMES, FLY_SIZES } from '@/src/constants/fishingTypes';
 import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
-import type { Fly, FlyChangeData } from '@/src/types';
+import type { Fly, FlyChangeData, NextFlyRecommendation } from '@/src/types';
+
+function selectionFromNextRecommendation(rec: NextFlyRecommendation): {
+  primary: FlyChangeData;
+  dropper: FlyChangeData | null;
+} {
+  const primary: FlyChangeData = {
+    pattern: rec.pattern,
+    size: rec.size,
+    color: rec.color,
+    fly_id: rec.fly_id ?? undefined,
+    fly_color_id: rec.fly_color_id ?? undefined,
+    fly_size_id: rec.fly_size_id ?? undefined,
+  };
+  const dropper =
+    rec.pattern2 != null && rec.pattern2.trim()
+      ? {
+          pattern: rec.pattern2,
+          size: rec.size2 ?? null,
+          color: rec.color2 ?? null,
+          fly_id: rec.fly_id2 ?? undefined,
+          fly_color_id: rec.fly_color_id2 ?? undefined,
+          fly_size_id: rec.fly_size_id2 ?? undefined,
+        }
+      : null;
+  return { primary, dropper };
+}
 
 /** Split stored fly_change `data` into primary + optional dropper for the picker. */
 export function splitFlyChangeData(data: FlyChangeData): {
@@ -76,6 +102,9 @@ export type ChangeFlyPickerModalProps = {
   initialDropper: FlyChangeData | null;
   title?: string;
   onConfirm: (primary: FlyChangeData, dropper: FlyChangeData | null) => void;
+  /** When set (e.g. active trip, not editing a timeline row), shows Try next banner above the form. */
+  nextFlyRecommendation?: NextFlyRecommendation | null;
+  recommendationLoading?: boolean;
 };
 
 export function ChangeFlyPickerModal({
@@ -88,6 +117,8 @@ export function ChangeFlyPickerModal({
   initialDropper,
   title = 'Select Fly',
   onConfirm,
+  nextFlyRecommendation = null,
+  recommendationLoading = false,
 }: ChangeFlyPickerModalProps) {
   const [pickerName, setPickerName] = useState<string | null>(null);
   const [pickerSize, setPickerSize] = useState<number | null>(null);
@@ -177,6 +208,12 @@ export function ChangeFlyPickerModal({
     onConfirm,
   ]);
 
+  const applyNextRecommendation = useCallback(() => {
+    if (!nextFlyRecommendation) return;
+    const { primary, dropper } = selectionFromNextRecommendation(nextFlyRecommendation);
+    onConfirm(primary, dropper);
+  }, [nextFlyRecommendation, onConfirm]);
+
   const confirmLabel = pickerName
     ? pickerName2
       ? `Select ${pickerName}${pickerSize ? ` #${pickerSize}` : ''} / ${pickerName2}${pickerSize2 ? ` #${pickerSize2}` : ''}`
@@ -194,6 +231,26 @@ export function ChangeFlyPickerModal({
               <Text style={styles.flyPickerClose}>Cancel</Text>
             </Pressable>
           </View>
+          {nextFlyRecommendation ? (
+            <Pressable style={styles.nextFlyBanner} onPress={applyNextRecommendation}>
+              <View style={styles.nextFlyLeft}>
+                <Text style={styles.nextFlyLabel}>
+                  {recommendationLoading ? 'AI thinking\u2026' : 'Try next'}
+                </Text>
+                <Text style={styles.nextFlyName}>
+                  {nextFlyRecommendation.pattern2
+                    ? `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size} / ${nextFlyRecommendation.pattern2} #${nextFlyRecommendation.size2 ?? ''}`
+                    : `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size}`}
+                </Text>
+                {nextFlyRecommendation.reason ? (
+                  <Text style={styles.nextFlyReason} numberOfLines={2}>
+                    {nextFlyRecommendation.reason}
+                  </Text>
+                ) : null}
+              </View>
+              <Text style={styles.nextFlyTap}>Tap to switch</Text>
+            </Pressable>
+          ) : null}
           <ScrollView
             style={styles.flyPickerScroll}
             contentContainerStyle={styles.flyPickerContent}
@@ -389,6 +446,39 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     backgroundColor: Colors.surface,
+  },
+  nextFlyBanner: {
+    backgroundColor: Colors.accent,
+    paddingVertical: Spacing.sm + 2,
+    paddingHorizontal: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  nextFlyLeft: {
+    flex: 1,
+  },
+  nextFlyLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textInverse,
+    textTransform: 'uppercase',
+  },
+  nextFlyName: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.textInverse,
+  },
+  nextFlyReason: {
+    fontSize: FontSize.xs,
+    color: 'rgba(255,255,255,0.8)',
+    marginTop: 2,
+  },
+  nextFlyTap: {
+    fontSize: FontSize.xs,
+    color: 'rgba(255,255,255,0.7)',
   },
   flyPickerTitle: {
     fontSize: FontSize.xl,

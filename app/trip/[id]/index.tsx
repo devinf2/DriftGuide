@@ -151,6 +151,8 @@ export default function TripDashboardScreen() {
 
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
   const conditionsFetched = useRef(false);
+  /** One automatic "select fly" prompt per trip id (dismiss without picking does not re-prompt). */
+  const autoFlyPromptedForTripRef = useRef<string | null>(null);
   const [mapLocation, setMapLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [mapLocationLoading, setMapLocationLoading] = useState(false);
   const [mapLocationError, setMapLocationError] = useState<string | null>(null);
@@ -609,6 +611,16 @@ export default function TripDashboardScreen() {
     setFlyPickerEditEvent(null);
   }, []);
 
+  useEffect(() => {
+    if (!activeTrip || activeTrip.status !== 'active' || isTripPaused) return;
+    const hasPrimaryFly = Boolean(currentFly?.pattern?.trim());
+    if (hasPrimaryFly) return;
+    if (autoFlyPromptedForTripRef.current === activeTrip.id) return;
+    autoFlyPromptedForTripRef.current = activeTrip.id;
+    setFlyPickerEditEvent(null);
+    setShowFlyPicker(true);
+  }, [activeTrip?.id, activeTrip?.status, currentFly, isTripPaused]);
+
   const handleAskAI = useCallback(async () => {
     const question = aiInput.trim();
     if (!question || aiLoading || isTripPaused) return;
@@ -860,9 +872,6 @@ export default function TripDashboardScreen() {
           <FishingTab
             activeTrip={activeTrip}
             replaceActiveTripEvents={replaceActiveTripEvents}
-            nextFlyRecommendation={nextFlyRecommendation}
-            recommendationLoading={recommendationLoading}
-            changeFly={changeFly}
             currentFly={currentFly}
             currentFly2={currentFly2}
             openFlyPicker={openFlyPicker}
@@ -903,19 +912,22 @@ export default function TripDashboardScreen() {
             onSubmitAdd={handleCatchSubmitAdd}
             onSubmitEdit={handleCatchSubmitEdit}
           />
-          <ChangeFlyPickerModal
-            visible={showFlyPicker}
-            onClose={closeFlyPicker}
-            userFlies={userFlies}
-            flyPickerNames={flyPickerNames}
-            seedKey={flyPickerEditEvent?.id ?? 'rig'}
-            initialPrimary={flyPickerSeeds.primary}
-            initialDropper={flyPickerSeeds.dropper}
-            title={flyPickerEditEvent ? 'Edit fly change' : 'Select Fly'}
-            onConfirm={handleFlyPickerConfirm}
-          />
         </>
       )}
+
+      <ChangeFlyPickerModal
+        visible={showFlyPicker}
+        onClose={closeFlyPicker}
+        userFlies={userFlies}
+        flyPickerNames={flyPickerNames}
+        seedKey={flyPickerEditEvent?.id ?? 'rig'}
+        initialPrimary={flyPickerSeeds.primary}
+        initialDropper={flyPickerSeeds.dropper}
+        title={flyPickerEditEvent ? 'Edit fly change' : 'Select Fly'}
+        onConfirm={handleFlyPickerConfirm}
+        nextFlyRecommendation={flyPickerEditEvent ? null : nextFlyRecommendation}
+        recommendationLoading={recommendationLoading}
+      />
 
       {activeTab === 'photos' && (
         <PhotosTab
@@ -1071,7 +1083,7 @@ export default function TripDashboardScreen() {
 function FishingTab({
   activeTrip,
   replaceActiveTripEvents,
-  nextFlyRecommendation, recommendationLoading, changeFly, currentFly, currentFly2,
+  currentFly, currentFly2,
   openFlyPicker, fishCount, removeCatch, onFishPlus, onEditCatch, onEditFlyChange,
   showNoteInput, setShowNoteInput, noteText, setNoteText, handleAddNote,
   addBite, addFishOn,
@@ -1282,52 +1294,6 @@ function FishingTab({
         style={{ flex: 1, opacity: tripPaused ? 0.38 : 1 }}
         pointerEvents={tripPaused ? 'none' : 'auto'}
       >
-      {/* Next Fly Recommendation */}
-      {nextFlyRecommendation && (
-        <Pressable
-          style={styles.nextFlyBanner}
-          onPress={() => {
-            const primary = {
-              pattern: nextFlyRecommendation.pattern,
-              size: nextFlyRecommendation.size,
-              color: nextFlyRecommendation.color,
-              fly_id: nextFlyRecommendation.fly_id ?? undefined,
-              fly_color_id: nextFlyRecommendation.fly_color_id ?? undefined,
-              fly_size_id: nextFlyRecommendation.fly_size_id ?? undefined,
-            };
-            const dropper =
-              nextFlyRecommendation.pattern2 != null && nextFlyRecommendation.pattern2.trim()
-                ? {
-                    pattern: nextFlyRecommendation.pattern2,
-                    size: nextFlyRecommendation.size2 ?? null,
-                    color: nextFlyRecommendation.color2 ?? null,
-                    fly_id: nextFlyRecommendation.fly_id2 ?? undefined,
-                    fly_color_id: nextFlyRecommendation.fly_color_id2 ?? undefined,
-                    fly_size_id: nextFlyRecommendation.fly_size_id2 ?? undefined,
-                  }
-                : null;
-            changeFly(primary, dropper);
-          }}
-        >
-          <View style={styles.nextFlyLeft}>
-            <Text style={styles.nextFlyLabel}>
-              {recommendationLoading ? 'AI Thinking...' : 'Try Next'}
-            </Text>
-            <Text style={styles.nextFlyName}>
-              {nextFlyRecommendation.pattern2
-                ? `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size} / ${nextFlyRecommendation.pattern2} #${nextFlyRecommendation.size2 ?? ''}`
-                : `${nextFlyRecommendation.pattern} #${nextFlyRecommendation.size}`}
-            </Text>
-            {nextFlyRecommendation.reason ? (
-              <Text style={styles.nextFlyReason} numberOfLines={2}>
-                {nextFlyRecommendation.reason}
-              </Text>
-            ) : null}
-          </View>
-          <Text style={styles.nextFlyTap}>Tap to switch</Text>
-        </Pressable>
-      )}
-
       {/* Current Fly (primary + optional dropper) */}
       <Pressable style={styles.currentFlyBar} onPress={openFlyPicker}>
         <Text style={styles.currentFlyLabel}>{currentFly2 ? 'Current rig' : 'Current Fly'}</Text>
@@ -2546,37 +2512,6 @@ function createTripDashboardStyles(colors: ThemeColors) {
     fontSize: FontSize.sm,
     color: colors.textSecondary,
     lineHeight: 20,
-  },
-  nextFlyBanner: {
-    backgroundColor: colors.accent,
-    paddingVertical: Spacing.sm + 2,
-    paddingHorizontal: Spacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  nextFlyLeft: {
-    flex: 1,
-  },
-  nextFlyLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: colors.textInverse,
-    textTransform: 'uppercase',
-  },
-  nextFlyName: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: colors.textInverse,
-  },
-  nextFlyReason: {
-    fontSize: FontSize.xs,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 2,
-  },
-  nextFlyTap: {
-    fontSize: FontSize.xs,
-    color: 'rgba(255,255,255,0.7)',
   },
   currentFlyBar: {
     flexDirection: 'row',

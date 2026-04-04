@@ -29,6 +29,8 @@ import type { AIContext } from '@/src/services/ai';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
+import { isPlaceCoveredByOfflineDownloads } from '@/src/utils/offlineDownloadCoverage';
+import { useOfflineDownloadResumeStore } from '@/src/stores/offlineDownloadResumeStore';
 
 /** Max drive distance (km) for suggested spots — ~2 hours at 60 mph ≈ 120 mi ≈ 193 km. */
 const SUGGESTED_SPOTS_MAX_DRIVE_KM = 193;
@@ -481,12 +483,8 @@ export default function NewTripScreen() {
     }
   }, []);
 
-  const handlePlanTrip = useCallback(async () => {
+  const completePlanTripSave = useCallback(async () => {
     if (!user || !selectedLocation) return;
-    if (!sessionType) {
-      Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore so we can save your trip.');
-      return;
-    }
     setSaving(true);
     addRecentLocation(selectedLocation.id);
     const tripId = await planTrip(
@@ -505,6 +503,100 @@ export default function NewTripScreen() {
       Alert.alert('Couldn\'t create trip', 'Something went wrong saving your trip. Check your connection and try again.');
     }
   }, [user, selectedLocation, planTrip, addRecentLocation, router, plannedDate, sessionType]);
+
+  const handlePlanTrip = useCallback(async () => {
+    if (!user || !selectedLocation) return;
+    if (!sessionType) {
+      Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore so we can save your trip.');
+      return;
+    }
+    const lat = selectedLocation.latitude;
+    const lng = selectedLocation.longitude;
+    const coordsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+
+    if (isConnected && coordsOk && !(await isPlaceCoveredByOfflineDownloads(lat, lng, selectedLocation.id))) {
+      Alert.alert(
+        'Download map for offline?',
+        'This place is not inside a saved offline map region. Download the map now so you can use it without a signal?',
+        [
+          {
+            text: 'Not now',
+            style: 'cancel',
+            onPress: () => {
+              void completePlanTripSave();
+            },
+          },
+          {
+            text: 'Download',
+            onPress: () => {
+              const payload = {
+                userId: user.id,
+                locationId: selectedLocation.id,
+                fishingType: 'fly' as const,
+                location: selectedLocation,
+                plannedDateIso: plannedDate.toISOString(),
+                sessionType,
+                accessPointId: null as string | null,
+              };
+              router.push({
+                pathname: '/trip/offline-region-picker',
+                params: {
+                  centerLat: String(lat),
+                  centerLng: String(lng),
+                  locationId: selectedLocation.id,
+                  resumeFlow: 'plan-trip',
+                  planTripPayload: JSON.stringify(payload),
+                },
+              });
+            },
+          },
+        ],
+      );
+      return;
+    }
+
+    await completePlanTripSave();
+  }, [
+    user,
+    selectedLocation,
+    sessionType,
+    isConnected,
+    completePlanTripSave,
+    router,
+    plannedDate,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const p = useOfflineDownloadResumeStore.getState().planTripResume;
+      if (!p) return;
+      useOfflineDownloadResumeStore.getState().clearPlanTripResume();
+
+      (async () => {
+        if (!user) return;
+        setSaving(true);
+        addRecentLocation(p.locationId);
+        const tripId = await planTrip(
+          p.userId,
+          p.locationId,
+          p.fishingType,
+          p.location,
+          new Date(p.plannedDateIso),
+          p.sessionType,
+          p.accessPointId,
+        );
+        setSaving(false);
+        if (tripId) {
+          router.back();
+        } else {
+          Alert.alert(
+            'Couldn\'t create trip',
+            'Something went wrong saving your trip. Check your connection and try again.',
+          );
+        }
+      })();
+    }, [user, planTrip, addRecentLocation, router]),
+  );
 
   const handleSelectSuggestion = useCallback((suggestion: SpotSuggestion) => {
     const match = findLocationForSuggestion(suggestion);

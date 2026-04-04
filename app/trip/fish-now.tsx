@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { STEP1_NEARBY_CATALOG_LIST_CAP } from '@/src/constants/locationThresholds';
 import {
   View,
@@ -34,6 +35,8 @@ import {
   LocationPinParentTwoStepFlow,
   type PinParentFlowStep,
 } from '@/src/components/location/LocationPinParentTwoStepFlow';
+import { isPlaceCoveredByOfflineDownloads } from '@/src/utils/offlineDownloadCoverage';
+import { useOfflineDownloadResumeStore } from '@/src/stores/offlineDownloadResumeStore';
 
 /**
  * Provo, UT — used in __DEV__ when the simulator has no GPS or location calls fail,
@@ -240,8 +243,19 @@ export default function FishNowScreen() {
     };
   }, []);
 
-  const startOnExistingLocation = useCallback(
+  const executeStartTripForLocation = useCallback(
     async (loc: Location) => {
+      if (!user) return;
+      setPhase('busy');
+      addRecentLocation(loc.id);
+      const tripId = await startTrip(user.id, loc.id, 'fly', loc, 'wade');
+      router.replace(`/trip/${tripId}`);
+    },
+    [user, addRecentLocation, startTrip, router],
+  );
+
+  const startOnExistingLocation = useCallback(
+    async (loc: Location, options?: { skipOfflineDownloadPrompt?: boolean }) => {
       if (!user) {
         Alert.alert('Sign in required', 'Sign in to start a trip.');
         return;
@@ -256,12 +270,57 @@ export default function FishNowScreen() {
         );
         return;
       }
-      setPhase('busy');
-      addRecentLocation(loc.id);
-      const tripId = await startTrip(user.id, loc.id, 'fly', loc, 'wade');
-      router.replace(`/trip/${tripId}`);
+
+      if (!options?.skipOfflineDownloadPrompt && isConnected) {
+        const lat = loc.latitude;
+        const lng = loc.longitude;
+        const coordsOk =
+          lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+        if (coordsOk && !(await isPlaceCoveredByOfflineDownloads(lat, lng, loc.id))) {
+          Alert.alert(
+            'Download map for offline?',
+            'This place is not inside a saved offline map region. Download the map now so you can use it without a signal?',
+            [
+              {
+                text: 'Not now',
+                style: 'cancel',
+                onPress: () => {
+                  void executeStartTripForLocation(loc);
+                },
+              },
+              {
+                text: 'Download',
+                onPress: () => {
+                  router.push({
+                    pathname: '/trip/offline-region-picker',
+                    params: {
+                      centerLat: String(lat),
+                      centerLng: String(lng),
+                      locationId: loc.id,
+                      resumeFlow: 'fish-now',
+                      resumeLocation: JSON.stringify(loc),
+                    },
+                  });
+                },
+              },
+            ],
+          );
+          return;
+        }
+      }
+
+      await executeStartTripForLocation(loc);
     },
-    [user, addRecentLocation, startTrip, router],
+    [user, isConnected, executeStartTripForLocation, router],
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const loc = useOfflineDownloadResumeStore.getState().fishNowLocation;
+      if (!loc) return;
+      useOfflineDownloadResumeStore.getState().clearFishNowResume();
+      void startOnExistingLocation(loc, { skipOfflineDownloadPrompt: true });
+    }, [startOnExistingLocation]),
   );
 
   const handlePickParent = useCallback(
@@ -397,9 +456,8 @@ export default function FishNowScreen() {
       return;
     }
     await fetchLocations();
-    addRecentLocation(newLoc.id);
-    const tripId = await startTrip(user.id, newLoc.id, 'fly', newLoc, 'wade');
-    router.replace(`/trip/${tripId}`);
+    setPhase('pick_parent');
+    await startOnExistingLocation(newLoc);
   }, [
     user,
     pinCoords,
@@ -413,9 +471,6 @@ export default function FishNowScreen() {
     resolveLocationForParentId,
     startOnExistingLocation,
     fetchLocations,
-    addRecentLocation,
-    startTrip,
-    router,
   ]);
 
   const isTripBusy = phase === 'busy';
