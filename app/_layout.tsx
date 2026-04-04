@@ -143,8 +143,8 @@ function ThemedNavigation() {
           <Stack.Screen
             name="fly-box"
             options={{
-              title: 'Fly Box',
-              headerBackTitle: 'Back',
+              headerShown: false,
+              animation: 'slide_from_right',
             }}
           />
         </Stack>

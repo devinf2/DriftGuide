@@ -235,6 +235,14 @@ export default function FlyBoxScreen() {
     }
   };
 
+  const goBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/profile');
+    }
+  }, [router]);
+
   const handleDelete = (fly: Fly) => {
     Alert.alert(
       'Remove fly',
@@ -260,6 +268,25 @@ export default function FlyBoxScreen() {
 
   return (
     <View style={[styles.container, { paddingBottom: insets.bottom + Spacing.lg }]}>
+      <View style={[styles.screenHeader, { paddingTop: insets.top + Spacing.sm }]}>
+        <Pressable
+          style={styles.screenHeaderBack}
+          onPress={goBack}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Ionicons name="chevron-back" size={24} color={colors.textInverse} />
+          <Text style={styles.screenHeaderBackLabel}>Back</Text>
+        </Pressable>
+        <View style={styles.screenHeaderCenter}>
+          <Text style={styles.screenHeaderTitle} numberOfLines={1}>
+            Fly Box
+          </Text>
+        </View>
+        <View style={styles.screenHeaderSide} />
+      </View>
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
@@ -508,6 +535,37 @@ function createFlyBoxStyles(colors: ThemeColors) {
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  screenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
+    backgroundColor: colors.primary,
+  },
+  screenHeaderBack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 88,
+  },
+  screenHeaderBackLabel: {
+    fontSize: FontSize.md,
+    fontWeight: '500',
+    color: colors.textInverse,
+    marginLeft: -4,
+  },
+  screenHeaderCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  screenHeaderTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    color: colors.textInverse,
+  },
+  screenHeaderSide: {
+    minWidth: 88,
   },
   scroll: { flex: 1 },
   scrollContent: {
