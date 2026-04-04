@@ -1,4 +1,5 @@
 import { getTopFishingSpots, type SpotSuggestion } from '@/src/services/ai';
+import { fetchCommunityFishTotalsForLocations } from '@/src/services/catchAggregates';
 import { fetchAllLocationConditions } from '@/src/services/conditions';
 import { haversineDistance } from '@/src/services/locationService';
 import { Location, LocationConditions } from '@/src/types';
@@ -23,6 +24,8 @@ export type HomeHotSpotData = {
   conditions: LocationConditions;
   /** km from user when location permission + coords available */
   distanceKm: number | null;
+  /** Community fish-equivalent in lookback window */
+  communityFishN?: number;
 };
 
 export type WaterConditionsBrief = {
@@ -83,6 +86,7 @@ function buildHotSpotListFromSuggestions(
   conditionsMap: Map<string, LocationConditions>,
   suggestions: SpotSuggestion[],
   userCoords: { latitude: number; longitude: number } | null,
+  communityFishByLocationId: Map<string, number>,
 ): HomeHotSpotData[] {
   const list: HomeHotSpotData[] = [];
   const seenIds = new Set<string>();
@@ -109,6 +113,7 @@ function buildHotSpotListFromSuggestions(
         location: loc,
         conditions: conditionsToUse,
         distanceKm: distanceKmForLocation(loc, userCoords),
+        communityFishN: communityFishByLocationId.get(loc.id) ?? 0,
       });
     }
   }
@@ -137,6 +142,7 @@ function buildHotSpotListFromSuggestions(
         location: loc,
         conditions,
         distanceKm: distanceKmForLocation(loc, userCoords),
+        communityFishN: communityFishByLocationId.get(loc.id) ?? 0,
       });
     }
     fallback.sort((a, b) => {
@@ -190,17 +196,25 @@ export async function fetchHomeHotSpotsData(
     return { hotSpotList: [], watersForRegionalBriefing: [] };
   }
   const conditionsMap = await fetchAllLocationConditions(spotsToUse);
+  const communityFishByLocationId = await fetchCommunityFishTotalsForLocations(
+    spotsToUse.map((s) => s.id),
+  );
   const watersForRegionalBriefing = buildWatersForRegionalBriefing(
     spotsToUse,
     conditionsMap,
     MAX_HOME_HOTSPOT_POOL,
   );
-  const suggestions = await getTopFishingSpots(spotsToUse, conditionsMap);
+  const suggestions = await getTopFishingSpots(spotsToUse, conditionsMap, undefined, {
+    userLat: userCoords?.latitude ?? null,
+    userLng: userCoords?.longitude ?? null,
+    communityFishByLocationId,
+  });
   const hotSpotList = buildHotSpotListFromSuggestions(
     spotsToUse,
     conditionsMap,
     suggestions,
     userCoords,
+    communityFishByLocationId,
   );
   return { hotSpotList, watersForRegionalBriefing };
 }

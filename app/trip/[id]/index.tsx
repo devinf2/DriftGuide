@@ -19,6 +19,11 @@ import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPi
 import { CatchDetailsModal, type CatchDetailsSubmitAdd } from '@/src/components/catch/CatchDetailsModal';
 import { ChangeFlyPickerModal, splitFlyChangeData } from '@/src/components/fly/ChangeFlyPickerModal';
 import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/TripMapboxMapView';
+import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
+import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
+import { GuideLocationRecommendationCards } from '@/src/components/GuideLocationRecommendationCards';
+import { SpotTaggedText } from '@/src/components/SpotTaggedText';
+import type { GuideIntelSource, GuideLocationRecommendation } from '@/src/services/guideIntelContract';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { SAMPLE_OFFLINE_BOUNDING_BOX } from '@/src/constants/offlineSampleRegion';
@@ -128,7 +133,18 @@ export default function TripDashboardScreen() {
     caption?: string;
   } | null>(null);
 
-  const [aiMessages, setAiMessages] = useState<{ id: string; role: 'user' | 'ai'; text: string }[]>([]);
+  const [aiMessages, setAiMessages] = useState<
+    {
+      id: string;
+      role: 'user' | 'ai';
+      text: string;
+      linkedSpots?: { id: string; name: string }[];
+      ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
+      webSources?: GuideIntelSource[];
+      sourcesFetchedAt?: string;
+      locationRecommendation?: GuideLocationRecommendation | null;
+    }[]
+  >([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const aiScrollRef = useRef<ScrollView>(null);
@@ -625,11 +641,29 @@ export default function TripDashboardScreen() {
     });
     const response = await askAI(context, question);
 
-    const aiMsg = { id: (Date.now() + 1).toString(), role: 'ai' as const, text: response };
-    setAiMessages(prev => [...prev, aiMsg]);
+    const aiMsg = {
+      id: (Date.now() + 1).toString(),
+      role: 'ai' as const,
+      text: response.text,
+      linkedSpots: context.guideLinkedSpots,
+      ambiguousSpots: context.guideLocationAmbiguous,
+      webSources: response.sources,
+      sourcesFetchedAt: response.fetchedAt,
+      locationRecommendation: response.locationRecommendation,
+    };
+    setAiMessages((prev) => [...prev, aiMsg]);
     setAiLoading(false);
 
-    addAIQuery(question, response);
+    addAIQuery(
+      question,
+      response.text,
+      response.sources?.map((s) => ({
+        url: s.url,
+        title: s.title,
+        fetchedAt: s.fetchedAt,
+        excerpt: s.excerpt,
+      })),
+    );
 
     setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [
@@ -1894,7 +1928,16 @@ function AIGuideTab({
   styles,
   colors,
 }: {
-  messages: any[];
+  messages: {
+    id: string;
+    role: 'user' | 'ai';
+    text: string;
+    linkedSpots?: { id: string; name: string }[];
+    ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
+    webSources?: GuideIntelSource[];
+    sourcesFetchedAt?: string;
+    locationRecommendation?: GuideLocationRecommendation | null;
+  }[];
   input: string;
   setInput: (v: string) => void;
   loading: boolean;
@@ -1924,14 +1967,36 @@ function AIGuideTab({
         </Text>
 
         {/* Chat Messages */}
-        {messages.map((msg: any) => (
+        {messages.map((msg) => (
           <View
             key={msg.id}
             style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
           >
-            <Text style={[styles.bubbleText, msg.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
-              {msg.text}
-            </Text>
+            {msg.role === 'user' ? (
+              <Text style={[styles.bubbleText, styles.userBubbleText]}>{msg.text}</Text>
+            ) : (
+              <SpotTaggedText
+                text={msg.text}
+                baseStyle={[styles.bubbleText, styles.aiBubbleText]}
+              />
+            )}
+            {msg.role === 'ai' && msg.locationRecommendation ? (
+              <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+            ) : null}
+            {msg.role === 'ai' ? (
+              <GuideChatLinkedSpots
+                linkedSpots={msg.linkedSpots}
+                ambiguous={msg.ambiguousSpots}
+                colors={colors}
+              />
+            ) : null}
+            {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
+              <GuideChatWebSources
+                sources={msg.webSources}
+                fetchedAt={msg.sourcesFetchedAt}
+                colors={colors}
+              />
+            ) : null}
           </View>
         ))}
 
@@ -2150,9 +2215,14 @@ function TripTimelineAiModal({
           <Pressable
             onPress={() => {
               if (!event) return;
+              const prev = event.data as AIQueryData;
               const next: TripEvent = {
                 ...event,
-                data: { question: q.trim() || 'Question', response: r.trim() || null } as AIQueryData,
+                data: {
+                  ...prev,
+                  question: q.trim() || 'Question',
+                  response: r.trim() || null,
+                },
               };
               onApply(upsertEventSorted(allEvents, next));
               onClose();

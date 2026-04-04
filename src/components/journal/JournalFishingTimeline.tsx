@@ -704,9 +704,14 @@ function EditAiModal({
           <Text style={styles.modalTitle}>AI entry</Text>
           <Pressable
             onPress={() => {
+              const prev = event.data as AIQueryData;
               const next: TripEvent = {
                 ...event,
-                data: { question: q.trim() || 'Question', response: r.trim() || null } as AIQueryData,
+                data: {
+                  ...prev,
+                  question: q.trim() || 'Question',
+                  response: r.trim() || null,
+                },
               };
               onSaved(next, upsertEventSorted(allEvents, next));
             }}

@@ -163,9 +163,18 @@ export interface NoteData {
   text: string;
 }
 
+/** Optional web citations saved with AI guide replies (trip timeline). */
+export interface AIQueryWebSource {
+  url: string;
+  title: string;
+  fetchedAt?: string;
+  excerpt?: string;
+}
+
 export interface AIQueryData {
   question: string;
   response: string | null;
+  webSources?: AIQueryWebSource[];
 }
 
 export interface EventConditionsSnapshot {

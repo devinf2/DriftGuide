@@ -1,7 +1,14 @@
+import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
+import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
+import { SpotTaggedText } from '@/src/components/SpotTaggedText';
+import type { GuideIntelSource, GuideLocationRecommendation } from '@/src/services/guideIntelContract';
+import { GuideLocationRecommendationCards } from '@/src/components/GuideLocationRecommendationCards';
+import { OfflineFallbackGuide } from '@/src/components/OfflineFallbackGuide';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { askAI } from '@/src/services/ai';
 import type { AIContext } from '@/src/services/ai';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import NetInfo from '@react-native-community/netinfo';
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
@@ -20,6 +27,11 @@ export interface Message {
   role: 'user' | 'ai';
   text: string;
   timestamp: Date;
+  linkedSpots?: { id: string; name: string }[];
+  ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
+  webSources?: GuideIntelSource[];
+  sourcesFetchedAt?: string;
+  locationRecommendation?: GuideLocationRecommendation | null;
 }
 
 export interface GuideChatProps {
@@ -105,6 +117,13 @@ function createStyles(colors: ThemeColors) {
       marginTop: Spacing.sm,
       lineHeight: 22,
     },
+    offlineChatHint: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: Spacing.md,
+      lineHeight: 20,
+      paddingHorizontal: Spacing.lg,
+    },
     bubble: {
       maxWidth: '92%',
       borderRadius: BorderRadius.lg,
@@ -175,9 +194,20 @@ export default function GuideChat({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [netOn, setNetOn] = useState(true);
   const scrollRef = useRef<ScrollView>(null);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  useEffect(() => {
+    const sub = NetInfo.addEventListener((s) => {
+      setNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+    });
+    void NetInfo.fetch().then((s) => {
+      setNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+    });
+    return () => sub();
+  }, []);
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -189,7 +219,7 @@ export default function GuideChat({
 
   const sendMessage = async () => {
     const question = input.trim();
-    if (!question || loading) return;
+    if (!question || loading || !netOn) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -209,8 +239,13 @@ export default function GuideChat({
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'ai',
-        text: response,
+        text: response.text,
         timestamp: new Date(),
+        linkedSpots: context.guideLinkedSpots,
+        ambiguousSpots: context.guideLocationAmbiguous,
+        webSources: response.sources,
+        sourcesFetchedAt: response.fetchedAt,
+        locationRecommendation: response.locationRecommendation,
       };
 
       setMessages((prev) => [...prev, aiMsg]);
@@ -260,6 +295,13 @@ export default function GuideChat({
           </View>
         )}
 
+        {!netOn && messages.length === 0 ? <OfflineFallbackGuide /> : null}
+        {!netOn ? (
+          <Text style={styles.offlineChatHint}>
+            Reconnect for live answers from the guide. The tips above work without a signal.
+          </Text>
+        ) : null}
+
         {messages.map((msg) =>
           msg.role === 'user' ? (
             <View key={msg.id} style={[styles.bubble, styles.userBubble]}>
@@ -267,7 +309,22 @@ export default function GuideChat({
             </View>
           ) : (
             <View key={msg.id} style={[styles.bubble, styles.aiBubble]}>
-              <Text style={[styles.bubbleText, styles.aiBubbleText]}>{msg.text}</Text>
+              <SpotTaggedText text={msg.text} baseStyle={[styles.bubbleText, styles.aiBubbleText]} />
+              {msg.locationRecommendation ? (
+                <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+              ) : null}
+              <GuideChatLinkedSpots
+                linkedSpots={msg.linkedSpots}
+                ambiguous={msg.ambiguousSpots}
+                colors={colors}
+              />
+              {msg.webSources && msg.webSources.length > 0 ? (
+                <GuideChatWebSources
+                  sources={msg.webSources}
+                  fetchedAt={msg.sourcesFetchedAt}
+                  colors={colors}
+                />
+              ) : null}
             </View>
           ),
         )}
@@ -284,15 +341,18 @@ export default function GuideChat({
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Ask the AI Guide about fishing, tips, etc."
+          placeholder={
+            netOn ? 'Ask the AI Guide about fishing, tips, etc.' : 'Offline — reconnect to chat…'
+          }
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
+          editable={netOn && !loading}
         />
         <Pressable
-          style={[styles.sendButton, (!input.trim() || loading) && styles.sendButtonDisabled]}
+          style={[styles.sendButton, (!input.trim() || loading || !netOn) && styles.sendButtonDisabled]}
           onPress={sendMessage}
-          disabled={!input.trim() || loading}
+          disabled={!input.trim() || loading || !netOn}
         >
           <Text style={styles.sendButtonText}>Ask</Text>
         </Pressable>

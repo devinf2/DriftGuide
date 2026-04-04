@@ -24,6 +24,8 @@ export function useHomeHatchBriefing(
   hotSpotLoading: boolean,
   waters: RegionalHatchWaterInput[],
   refreshKey: number,
+  userLat?: number | null,
+  userLng?: number | null,
 ) {
   const [hatchBriefing, setHatchBriefing] = useState<RegionalHatchBriefingResult>({ rows: [] });
   const [fetching, setFetching] = useState(false);
@@ -41,7 +43,7 @@ export function useHomeHatchBriefing(
 
     let cancelled = false;
     setFetching(true);
-    getRegionalHatchBriefing(waters)
+    getRegionalHatchBriefing(waters, new Date(), { userLat, userLng })
       .then((result) => {
         if (!cancelled) {
           const r = result?.rows;
@@ -58,7 +60,7 @@ export function useHomeHatchBriefing(
     return () => {
       cancelled = true;
     };
-  }, [enabled, hotSpotLoading, refreshKey, watersSignature(waters)]);
+  }, [enabled, hotSpotLoading, refreshKey, userLat, userLng, watersSignature(waters)]);
 
   return {
     hatchRows: Array.isArray(hatchBriefing.rows) ? hatchBriefing.rows : [],

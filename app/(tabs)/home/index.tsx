@@ -183,7 +183,10 @@ export default function HomeScreen() {
   const [briefingRefreshKey, setBriefingRefreshKey] = useState(0);
 
   const getContext = useGuideChatContext();
-  const { hotSpotList, hotSpotLoading, watersForRegionalBriefing } = useHomeHotSpots(fullHome, briefingRefreshKey);
+  const { hotSpotList, hotSpotLoading, watersForRegionalBriefing, userCoords } = useHomeHotSpots(
+    fullHome,
+    briefingRefreshKey,
+  );
   const setFromHomeHotSpots = usePlanTripHomeSuggestionsStore((s) => s.setFromHomeHotSpots);
 
   useEffect(() => {
@@ -194,6 +197,8 @@ export default function HomeScreen() {
     hotSpotLoading,
     watersForRegionalBriefing,
     briefingRefreshKey,
+    userCoords?.latitude,
+    userCoords?.longitude,
   );
 
   useEffect(() => {
@@ -374,7 +379,11 @@ export default function HomeScreen() {
           listHeaderComponent={
             fullHome ? (
               <View>
-                <FishHomeIntro userFirstName={profileFirstName(profile)} />
+                <FishHomeIntro
+                  userFirstName={profileFirstName(profile)}
+                  briefingLoading={hotSpotLoading}
+                  rankedWatersCount={hotSpotList.length}
+                />
                 <FishHomePlannedSection
                   plannedTrips={plannedTrips}
                   plannedTripsLoading={plannedTripsLoading}

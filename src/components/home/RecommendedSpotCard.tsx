@@ -1,4 +1,7 @@
-import { getDriftGuideScore } from '@/src/services/conditions';
+import {
+  computeDriftGuideCompositeScore,
+  internalRawFromCounts,
+} from '@/src/services/driftGuideScore';
 import type { HomeHotSpotData } from '@/src/utils/homeHotSpots';
 import { formatDistanceLabel } from '@/src/utils/homeHotSpots';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -15,10 +18,10 @@ function conditionTierLabel(stars: number): string {
   return 'Tough';
 }
 
-function activityLabel(stars: number): { text: string; positive: boolean } {
-  if (stars >= 4) return { text: 'High', positive: true };
-  if (stars >= 2.5) return { text: 'Moderate', positive: false };
-  return { text: 'Low', positive: false };
+function outlookLabel(stars: number): { text: string; positive: boolean } {
+  if (stars >= 4) return { text: 'Strong', positive: true };
+  if (stars >= 2.5) return { text: 'Mixed', positive: false };
+  return { text: 'Tough', positive: false };
 }
 
 function clarityShort(c: WaterClarity): string {
@@ -202,9 +205,17 @@ export function RecommendedSpotCard({
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const score = getDriftGuideScore(data.conditions);
-  const tier = conditionTierLabel(score.stars);
-  const activity = activityLabel(score.stars);
+  const n = data.communityFishN ?? 0;
+  const iRaw = internalRawFromCounts(n, Math.min(n, Math.max(0, Math.ceil(n * 0.35))));
+  const composite = computeDriftGuideCompositeScore({
+    conditions: data.conditions,
+    internalRaw: iRaw,
+    communityFishN: n,
+    external: null,
+  });
+  const scoreStars = composite.stars;
+  const tier = conditionTierLabel(scoreStars);
+  const outlook = outlookLabel(scoreStars);
   const dist = formatDistanceLabel(data.distanceKm);
   const c = data.conditions;
   const flow = c.water.flow_cfs;
@@ -241,7 +252,7 @@ export function RecommendedSpotCard({
         <View style={styles.ratingColumn}>
           <View style={styles.ratingBlock}>
             <Ionicons name="star" size={14} color={colors.warning} />
-            <Text style={styles.ratingNum}>{score.stars.toFixed(1)}</Text>
+            <Text style={styles.ratingNum}>{scoreStars.toFixed(1)}</Text>
           </View>
         </View>
       </View>
@@ -263,9 +274,9 @@ export function RecommendedSpotCard({
         <MetricMini icon="weather-windy" label="Wind" value={windStr} colors={colors} styles={styles} />
         <MetricMini
           icon="chart-line"
-          label="Activity"
-          value={activity.text}
-          valueHighlight={activity.positive}
+          label="Outlook"
+          value={outlook.text}
+          valueHighlight={outlook.positive}
           colors={colors}
           styles={styles}
         />

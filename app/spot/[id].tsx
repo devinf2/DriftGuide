@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator,
   Platform, KeyboardAvoidingView, TextInput, Modal, Alert, TouchableOpacity,
 } from 'react-native';
+import * as Linking from 'expo-linking';
+import NetInfo from '@react-native-community/netinfo';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,12 +14,32 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
-import { getSpotFishingSummary, getSpotDetailedReport, getSpotHowToFish, askAI, getSeason, getTimeOfDay } from '@/src/services/ai';
+import {
+  getSpotFishingSummary,
+  getSpotDetailedReport,
+  getSpotHowToFish,
+  askAI,
+  getSeason,
+  getTimeOfDay,
+  type SpotFishingSummaryOptions,
+} from '@/src/services/ai';
+import type { GuideIntelSource, GuideLocationRecommendation } from '@/src/services/guideIntelContract';
+import { fetchCommunityFishTotalForLocation } from '@/src/services/catchAggregates';
+import {
+  computeDriftGuideCompositeScore,
+  internalRawFromCounts,
+} from '@/src/services/driftGuideScore';
+import { loadGuideIntelForLocation, saveGuideIntelForLocation } from '@/src/services/guideIntelCache';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import type { AccessPoint, LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
 import { fetchApprovedAccessPointsForLocations } from '@/src/services/accessPointService';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
+import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
+import { GuideLocationRecommendationCards } from '@/src/components/GuideLocationRecommendationCards';
+import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
+import { SpotTaggedText } from '@/src/components/SpotTaggedText';
+import { OfflineFallbackGuide } from '@/src/components/OfflineFallbackGuide';
 
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
@@ -142,13 +164,30 @@ export default function SpotFishingTripScreen() {
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [waterFlowData, setWaterFlowData] = useState<WaterFlowData | null>(null);
   const [conditionsTabLoading, setConditionsTabLoading] = useState(false);
-  const [aiMessages, setAiMessages] = useState<{ id: string; role: 'user' | 'ai'; text: string }[]>([]);
+  const [aiMessages, setAiMessages] = useState<
+    {
+      id: string;
+      role: 'user' | 'ai';
+      text: string;
+      linkedSpots?: { id: string; name: string }[];
+      ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
+      webSources?: GuideIntelSource[];
+      sourcesFetchedAt?: string;
+      locationRecommendation?: GuideLocationRecommendation | null;
+    }[]
+  >([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const aiScrollRef = useRef<ScrollView>(null);
   const [howToFish, setHowToFish] = useState<string | null>(null);
   const [howToFishLoading, setHowToFishLoading] = useState(false);
   const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
+  const [communityFishN, setCommunityFishN] = useState(0);
+  const [summarySources, setSummarySources] = useState<GuideIntelSource[]>([]);
+  const [summarySignal, setSummarySignal] = useState<number | null>(null);
+  const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const [spotNetOn, setSpotNetOn] = useState(true);
 
   const location = id ? getLocationById(id) : undefined;
 
@@ -197,6 +236,16 @@ export default function SpotFishingTripScreen() {
   }, []);
 
   useEffect(() => {
+    const sub = NetInfo.addEventListener((s) => {
+      setSpotNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+    });
+    void NetInfo.fetch().then((s) => {
+      setSpotNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+    });
+    return () => sub();
+  }, []);
+
+  useEffect(() => {
     if (!location) {
       setApprovedAccessPoints([]);
       return;
@@ -211,34 +260,135 @@ export default function SpotFishingTripScreen() {
     let cancelled = false;
     setLoading(true);
     setConditions(null);
+    setSummarySources([]);
+    setSummarySignal(null);
+    setSummaryFetchedAt(null);
+    setSourcesExpanded(false);
 
-    fetchLocationConditions(location, locations).then(c => {
-      if (!cancelled) {
-        setConditions(c);
-        setLoading(false);
+    void (async () => {
+      const cond = await fetchLocationConditions(location, locations);
+      if (cancelled) return;
+      setConditions(cond);
+      setLoading(false);
 
-        setSummaryLoading(true);
-        getSpotFishingSummary(location.name, c).then(s => {
-          if (!cancelled) {
-            setReport(s.report);
-            setTopFlies(s.topFlies);
-            setBestTime(s.bestTime);
-            setSummaryLoading(false);
-          }
-        });
+      const parentLoc = location.parent_location_id
+        ? locations.find((l) => l.id === location.parent_location_id)
+        : null;
+      const optLat = location.latitude ?? parentLoc?.latitude ?? null;
+      const optLng = location.longitude ?? parentLoc?.longitude ?? null;
+      const meta = (location.metadata as Record<string, string> | null)?.usgs_station_id ?? null;
+
+      const [online, n, cached] = await Promise.all([
+        NetInfo.fetch().then((s) => Boolean(s.isConnected && s.isInternetReachable !== false)),
+        fetchCommunityFishTotalForLocation(id),
+        loadGuideIntelForLocation(id),
+      ]);
+      if (cancelled) return;
+      setCommunityFishN(n);
+
+      const opts: SpotFishingSummaryOptions = {
+        latitude: optLat,
+        longitude: optLng,
+        usgsSiteId: meta,
+        communityFishN: n,
+      };
+
+      const applySummary = (s: {
+        report: string;
+        topFlies: string[];
+        bestTime: string;
+        sources?: GuideIntelSource[];
+        fishingQualitySignal?: number | null;
+        fetchedAt?: string;
+      }) => {
+        setReport(s.report);
+        setTopFlies(s.topFlies);
+        setBestTime(s.bestTime);
+        setSummarySources(s.sources ?? []);
+        setSummarySignal(s.fishingQualitySignal ?? null);
+        setSummaryFetchedAt(s.fetchedAt ?? null);
+      };
+
+      setSummaryLoading(true);
+
+      if (online) {
+        const s = await getSpotFishingSummary(location.name, cond, opts);
+        if (cancelled) return;
+        applySummary(s);
+        await saveGuideIntelForLocation(id, s);
+        setSummaryLoading(false);
+        return;
       }
-    });
 
-    return () => { cancelled = true; };
+      if (cached?.report) {
+        applySummary(cached);
+        setSummaryLoading(false);
+        return;
+      }
+
+      const s = await getSpotFishingSummary(location.name, cond, opts);
+      if (cancelled) return;
+      applySummary(s);
+      setSummaryLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [id, location?.id, locations]);
 
-  const score = conditions ? getDriftGuideScore(conditions) : null;
+  const conditionsScore = useMemo(
+    () => (conditions ? getDriftGuideScore(conditions) : null),
+    [conditions],
+  );
+
+  const composite = useMemo(() => {
+    if (!conditions) return null;
+    const n = communityFishN;
+    const iRaw = internalRawFromCounts(n, Math.min(n, Math.max(0, Math.ceil(n * 0.35))));
+    return computeDriftGuideCompositeScore({
+      conditions,
+      internalRaw: iRaw,
+      communityFishN: n,
+      external: { fishingQualitySignal: summarySignal, fetchedAt: summaryFetchedAt },
+    });
+  }, [conditions, communityFishN, summarySignal, summaryFetchedAt]);
+
+  const displayStars = composite?.stars ?? 0;
+  const showSpotOfflineGuide = !spotNetOn && !summaryFetchedAt;
+
+  const externalStale = useMemo(() => {
+    if (!summaryFetchedAt) return false;
+    const t = new Date(summaryFetchedAt).getTime();
+    if (Number.isNaN(t)) return true;
+    const maxAge = 5 * 24 * 60 * 60 * 1000;
+    return Date.now() - t > maxAge;
+  }, [summaryFetchedAt]);
+
+  const driftGuideScoreInfoMessage = useMemo(
+    () =>
+      summaryFetchedAt
+        ? `Updated ${new Date(summaryFetchedAt).toLocaleDateString()}`
+        : 'Weather, recent catches, and regional signals',
+    [summaryFetchedAt],
+  );
+
   const isLoading = loading || !location;
 
   const parent = location?.parent_location_id && locations.length ? locations.find(l => l.id === location.parent_location_id) : null;
   const lat = location?.latitude ?? parent?.latitude ?? null;
   const lng = location?.longitude ?? parent?.longitude ?? null;
   const stationId = (location?.metadata as Record<string, string> | null)?.usgs_station_id;
+
+  const spotSummaryOptions: SpotFishingSummaryOptions = useMemo(
+    () => ({
+      latitude: lat,
+      longitude: lng,
+      usgsSiteId: stationId ?? null,
+      communityFishN,
+    }),
+    [lat, lng, stationId, communityFishN],
+  );
 
   const spotMapLocations = useMemo(() => {
     if (!location) return [];
@@ -313,11 +463,11 @@ export default function SpotFishingTripScreen() {
     if (!location || !conditions) return;
     setHowToFishLoading(true);
     setHowToFish(null);
-    getSpotHowToFish(location.name, conditions).then((text) => {
+    getSpotHowToFish(location.name, conditions, spotSummaryOptions).then((text) => {
       setHowToFish(text);
       setHowToFishLoading(false);
     }).catch(() => setHowToFishLoading(false));
-  }, [location?.id, conditions]);
+  }, [location?.id, conditions, spotSummaryOptions]);
 
   useEffect(() => {
     if (activeTab === 'ai' && location && conditions) fetchHowToFish();
@@ -351,7 +501,19 @@ export default function SpotFishingTripScreen() {
         referenceDate: now,
       });
       const answer = await askAI(context, q);
-      setAiMessages(prev => [...prev, { id: String(Date.now() + 1), role: 'ai', text: answer }]);
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now() + 1),
+          role: 'ai',
+          text: answer.text,
+          linkedSpots: context.guideLinkedSpots,
+          ambiguousSpots: context.guideLocationAmbiguous,
+          webSources: answer.sources,
+          sourcesFetchedAt: answer.fetchedAt,
+          locationRecommendation: answer.locationRecommendation,
+        },
+      ]);
     } catch {
       setAiMessages(prev => [...prev, { id: String(Date.now() + 1), role: 'ai', text: 'Sorry, I couldn’t get an answer. Try again.' }]);
     } finally {
@@ -382,7 +544,7 @@ export default function SpotFishingTripScreen() {
     if (!location || !conditions) return;
     setDetailedReportLoading(true);
     setDetailedReport(null);
-    getSpotDetailedReport(location.name, conditions).then(text => {
+    getSpotDetailedReport(location.name, conditions, spotSummaryOptions).then(text => {
       setDetailedReport(text);
       setDetailedReportLoading(false);
     }).catch(() => setDetailedReportLoading(false));
@@ -540,19 +702,29 @@ export default function SpotFishingTripScreen() {
 
       {activeTab === 'overview' && (
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
-        {/* Labels row: DriftGuide Rating | Best time to fish */}
+        {/* Labels row: DriftGuide Score | Best time to fish */}
         <View style={styles.tileLabelsRow}>
-          <Text style={styles.tileLabelLeft}>DriftGuide Rating</Text>
+          <View style={styles.tileLabelLeftWrap}>
+            <Text style={styles.tileLabelLeft}>DriftGuide Score</Text>
+            <Pressable
+              onPress={() => Alert.alert('DriftGuide Score', driftGuideScoreInfoMessage)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="About DriftGuide Score"
+            >
+              <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+            </Pressable>
+          </View>
           <Text style={styles.tileLabelRight}>Best time to fish</Text>
         </View>
-        {/* Tiles row: stars + fire | best time value */}
+        {/* Tiles row: composite stars + fire (conditions) | best time value */}
         <View style={styles.tilesRow}>
-          {score !== null && (
+          {composite !== null && (
             <View style={[styles.tile, styles.scoreTile]}>
               <View style={styles.starsRow}>
                 {[0, 1, 2, 3, 4].map((i) => {
-                  const fullStars = Math.floor(score.stars);
-                  const partial = score.stars - fullStars;
+                  const fullStars = Math.floor(displayStars);
+                  const partial = displayStars - fullStars;
                   const isFull = i < fullStars;
                   const isPartial = i === fullStars && partial > 0.05;
                   if (isFull) {
@@ -570,7 +742,7 @@ export default function SpotFishingTripScreen() {
                   }
                   return <Ionicons key={i} name="star-outline" size={22} color={colors.textInverse} />;
                 })}
-                {score.showFire && (
+                {conditionsScore?.showFire === true && (
                   <Ionicons name="flame" size={20} color={colors.warning} style={styles.fireIcon} />
                 )}
               </View>
@@ -631,6 +803,52 @@ export default function SpotFishingTripScreen() {
           ) : (
             <Text style={styles.reportPlaceholder}>No report available.</Text>
           )}
+          {externalStale && summarySources.length > 0 ? (
+            <Text style={styles.staleNote}>
+              This saved briefing is older than 5 days — the outlook leans on conditions and community logs until you refresh online.
+            </Text>
+          ) : null}
+          {summarySources.length > 0 ? (
+            <>
+              <Pressable
+                style={styles.sourcesToggle}
+                onPress={() => setSourcesExpanded((e) => !e)}
+                accessibilityRole="button"
+                accessibilityLabel={sourcesExpanded ? 'Hide sources' : 'Show sources'}
+              >
+                <Text style={styles.sourcesToggleText}>
+                  Sources ({summarySources.length}){sourcesExpanded ? '' : ' — tap to expand'}
+                </Text>
+                <Ionicons
+                  name={sourcesExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={colors.secondary}
+                />
+              </Pressable>
+              {sourcesExpanded
+                ? summarySources.map((src, idx) => (
+                    <Pressable
+                      key={`${src.url}-${idx}`}
+                      style={styles.sourceRow}
+                      onPress={() => void Linking.openURL(src.url)}
+                      accessibilityRole="link"
+                    >
+                      <Text style={styles.sourceTitle} numberOfLines={2}>
+                        {src.title}
+                      </Text>
+                      {src.excerpt ? (
+                        <Text style={styles.sourceExcerpt} numberOfLines={4}>
+                          {src.excerpt}
+                        </Text>
+                      ) : null}
+                      <Text style={[styles.sourceExcerpt, { marginTop: 4 }]} numberOfLines={1}>
+                        {src.url}
+                      </Text>
+                    </Pressable>
+                  ))
+                : null}
+            </>
+          ) : null}
           {report && conditions && !detailedReport && !detailedReportLoading && (
             <Pressable style={styles.moreInfoButton} onPress={handleMoreInfo}>
               <Text style={styles.moreInfoButtonText}>More info</Text>
@@ -695,6 +913,12 @@ export default function SpotFishingTripScreen() {
       {activeTab === 'ai' && (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={120}>
           <ScrollView ref={aiScrollRef} style={styles.tabScroll} contentContainerStyle={styles.aiScrollContent} keyboardShouldPersistTaps="handled">
+            {showSpotOfflineGuide ? <OfflineFallbackGuide /> : null}
+            {!spotNetOn ? (
+              <Text style={styles.aiOfflineHint}>
+                You're offline — reconnect for live answers. Saved report and conditions still apply.
+              </Text>
+            ) : null}
             {/* Best time to fish */}
             <Text style={[styles.guideSectionLabel, styles.guideSectionLabelFirst]}>Best time to fish</Text>
             <View style={styles.guideCard}>
@@ -748,10 +972,35 @@ export default function SpotFishingTripScreen() {
               )}
             </View>
 
-            <Text style={styles.aiContextNote}>Ask a question about this spot. AI uses current conditions and location.</Text>
+            <Text style={styles.aiContextNote}>
+              {spotNetOn
+                ? 'Ask a question about this spot. The guide uses current conditions, location, and your DriftGuide logs when available.'
+                : 'Reconnect to ask new questions.'}
+            </Text>
             {aiMessages.map((msg) => (
               <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}>
-                <Text style={[styles.bubbleText, msg.role === 'user' && styles.bubbleTextUser]}>{msg.text}</Text>
+                {msg.role === 'user' ? (
+                  <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{msg.text}</Text>
+                ) : (
+                  <SpotTaggedText text={msg.text} baseStyle={styles.bubbleText} />
+                )}
+                {msg.role === 'ai' && msg.locationRecommendation ? (
+                  <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+                ) : null}
+                {msg.role === 'ai' ? (
+                  <GuideChatLinkedSpots
+                    linkedSpots={msg.linkedSpots}
+                    ambiguous={msg.ambiguousSpots}
+                    colors={colors}
+                  />
+                ) : null}
+                {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
+                  <GuideChatWebSources
+                    sources={msg.webSources}
+                    fetchedAt={msg.sourcesFetchedAt}
+                    colors={colors}
+                  />
+                ) : null}
               </View>
             ))}
             {aiLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: Spacing.sm }} />}
@@ -759,15 +1008,19 @@ export default function SpotFishingTripScreen() {
           <View style={styles.aiInputRow}>
             <TextInput
               style={styles.aiInput}
-              placeholder="Ask about this spot…"
+              placeholder={spotNetOn ? 'Ask about this spot…' : 'Offline — reconnect to chat…'}
               placeholderTextColor={colors.textTertiary}
               value={aiInput}
               onChangeText={setAiInput}
-              editable={!aiLoading}
+              editable={spotNetOn && !aiLoading}
               multiline
               maxLength={500}
             />
-            <Pressable style={styles.aiSendButton} onPress={handleAskAI} disabled={!aiInput.trim() || aiLoading}>
+            <Pressable
+              style={styles.aiSendButton}
+              onPress={handleAskAI}
+              disabled={!spotNetOn || !aiInput.trim() || aiLoading}
+            >
               <Ionicons name="send" size={20} color={colors.textInverse} />
             </Pressable>
           </View>
@@ -919,13 +1172,16 @@ function createSpotStyles(colors: ThemeColors) {
     gap: Spacing.md,
     marginBottom: Spacing.xs,
   },
-  tileLabelLeft: {
+  tileLabelLeftWrap: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  tileLabelLeft: {
     fontSize: FontSize.xs,
     fontWeight: '600',
     color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
   },
   tileLabelRight: {
     flex: 1,
@@ -1070,6 +1326,41 @@ function createSpotStyles(colors: ThemeColors) {
     fontSize: FontSize.md,
     color: colors.textTertiary,
     fontStyle: 'italic',
+  },
+  staleNote: {
+    fontSize: FontSize.xs,
+    color: colors.warning,
+    marginTop: Spacing.sm,
+    lineHeight: 18,
+  },
+  sourcesToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  sourcesToggleText: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: colors.secondary,
+  },
+  sourceRow: {
+    marginTop: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  sourceTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  sourceExcerpt: {
+    marginTop: 4,
+    fontSize: FontSize.xs,
+    color: colors.textSecondary,
+    lineHeight: 18,
   },
   moreInfoButton: {
     flexDirection: 'row',
@@ -1287,6 +1578,12 @@ function createSpotStyles(colors: ThemeColors) {
     fontSize: FontSize.sm,
     color: colors.textTertiary,
     marginTop: Spacing.sm,
+  },
+  aiOfflineHint: {
+    fontSize: FontSize.sm,
+    color: colors.textSecondary,
+    marginBottom: Spacing.md,
+    lineHeight: 20,
   },
   aiContextNote: {
     fontSize: FontSize.xs,

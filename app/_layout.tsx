@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
+import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -55,6 +56,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return (
     <>
       {session ? <SyncOnConnectivity /> : null}
+      {session ? <GlobalOfflineBanner /> : null}
       {children}
     </>
   );
@@ -156,14 +158,17 @@ export default function RootLayout() {
   const [loaded, error] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
+  const authLoading = useAuthStore((s) => s.isLoading);
 
   useEffect(() => {
     if (error) throw error;
   }, [error]);
 
   useEffect(() => {
-    if (loaded) SplashScreen.hideAsync();
-  }, [loaded]);
+    if (loaded && !authLoading) {
+      void SplashScreen.hideAsync();
+    }
+  }, [loaded, authLoading]);
 
   if (!loaded) return null;
 

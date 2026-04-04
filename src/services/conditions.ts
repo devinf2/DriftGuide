@@ -101,10 +101,11 @@ const RATING_POINTS: Record<ConditionRating, number> = {
 
 /** Rate flow from CFS when no baseline is available. Generic bands for wadeable rivers. */
 function rateFlowFromCfs(flowCfs: number): ConditionRating {
-  if (flowCfs < 80) return 'fair';   // very low, fish concentrated
+  if (flowCfs < 40) return 'poor'; // critically low or dewatered risk
+  if (flowCfs < 120) return 'fair';
   if (flowCfs <= 2000) return 'good';
   if (flowCfs <= 4500) return 'fair';
-  return 'poor';                     // very high, wading unsafe
+  return 'poor'; // very high, wading unsafe
 }
 
 /** Effective water rating: combine clarity with flow when flow data exists (use worse of the two). */
@@ -140,7 +141,7 @@ export function getDriftGuideScore(conditions: LocationConditions): DriftGuideSc
     const normalized = weightedSum / maxWeighted;
     const stars = Math.max(0, Math.min(5, Math.round(normalized * 5 * 10) / 10));
     return {
-      stars: stars < 0.1 ? 0.5 : stars,
+      stars,
       showFire: false,
     };
   }
@@ -160,7 +161,7 @@ export function getDriftGuideScore(conditions: LocationConditions): DriftGuideSc
   const stars = Math.max(0, Math.min(5, Math.round(normalized * 5 * 10) / 10)); // 1 decimal, e.g. 3.4
 
   return {
-    stars: stars < 0.1 ? 0.5 : stars, // at least half a star if any conditions
+    stars,
     showFire: stars >= 4.75,
   };
 }

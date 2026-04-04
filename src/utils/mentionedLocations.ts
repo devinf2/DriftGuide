@@ -11,6 +11,46 @@ export function extractComparisonPhrases(text: string): string[] {
   return chunks.filter((p) => p.length > 2);
 }
 
+const PLACE_STOPWORDS = /^(me|us|you|the|a|an|this|that|home|here|night|morning|evening|today|tomorrow)$/i;
+
+/**
+ * Pulls likely water/area names from patterns like "fish at strawberry", "at the Provo", "on Jordanelle".
+ * Lets `filterLocationsByQuery` match without scoring the whole question token-by-token (which fails on "where…").
+ */
+export function extractPlaceHintsFromQuestion(question: string): string[] {
+  const q = question.trim();
+  const out: string[] = [];
+  const reAt = /\bat\s+([a-zA-Z0-9][a-zA-Z0-9\s,'-]{1,56})(?=\s*[?.!,]|$)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = reAt.exec(q)) !== null) {
+    let p = m[1].trim().replace(/\s+/g, ' ');
+    p = p.replace(/^the\s+/i, '').trim();
+    if (p.length >= 3 && !PLACE_STOPWORDS.test(p)) out.push(p);
+  }
+  const reOnNear = /\b(?:near|on)\s+(?:the\s+)?([a-zA-Z0-9][a-zA-Z0-9\s,'-]{1,56})(?=\s*[?.!,]|$)/gi;
+  while ((m = reOnNear.exec(q)) !== null) {
+    let p = m[1].trim().replace(/\s+/g, ' ');
+    p = p.replace(/^the\s+/i, '').trim();
+    if (p.length >= 3 && !PLACE_STOPWORDS.test(p)) out.push(p);
+  }
+  /** "thinking about strawberry reservoir", "wondering about the Provo", etc. — seeds parent→child expansion when "at" is missing. */
+  const reThinkingAbout =
+    /\b(?:thinking|wondering|curious)\s+about\s+(?:the\s+)?([a-zA-Z0-9][a-zA-Z0-9\s,'-]{2,56})(?=\s*[?.!,]|$)/gi;
+  while ((m = reThinkingAbout.exec(q)) !== null) {
+    let p = m[1].trim().replace(/\s+/g, ' ');
+    p = p.replace(/^the\s+/i, '').trim();
+    if (p.length >= 4 && !PLACE_STOPWORDS.test(p)) out.push(p);
+  }
+  const reGoThere =
+    /\bgo\s+(?:fish(?:ing)?\s+)?(?:at|on|to)\s+(?:the\s+)?([a-zA-Z0-9][a-zA-Z0-9\s,'-]{2,56})(?=\s*[?.!,]|$)/gi;
+  while ((m = reGoThere.exec(q)) !== null) {
+    let p = m[1].trim().replace(/\s+/g, ' ');
+    p = p.replace(/^the\s+/i, '').trim();
+    if (p.length >= 4 && !PLACE_STOPWORDS.test(p)) out.push(p);
+  }
+  return [...new Set(out)];
+}
+
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -63,6 +103,7 @@ export function findMentionedLocations(
   allLocations: Location[],
   userLat?: number | null,
   userLng?: number | null,
+  options?: { proximityWhenNoMatch?: boolean },
 ): { locations: Location[]; usedProximityFallback: boolean } {
   const phrases = extractComparisonPhrases(question);
   const candidates = new Map<string, { loc: Location; score: number }>();
@@ -77,6 +118,9 @@ export function findMentionedLocations(
 
   for (const phrase of phrases) {
     bump(filterLocationsByQuery(allLocations, phrase), 1000);
+  }
+  for (const hint of extractPlaceHintsFromQuestion(question)) {
+    bump(filterLocationsByQuery(allLocations, hint), 960);
   }
   bump(filterLocationsByQuery(allLocations, question), 200);
 
@@ -93,8 +137,13 @@ export function findMentionedLocations(
   let ordered = [...candidates.values()].sort((a, b) => b.score - a.score).map((x) => x.loc);
 
   let usedProximityFallback = false;
-  if (ordered.length === 0 && userLat != null && userLng != null) {
-    ordered = nearestCatalogLocations(allLocations, userLat, userLng, 5);
+  if (
+    ordered.length === 0 &&
+    userLat != null &&
+    userLng != null &&
+    options?.proximityWhenNoMatch === true
+  ) {
+    ordered = nearestCatalogLocations(allLocations, userLat, userLng, 10);
     usedProximityFallback = true;
   } else if (userLat != null && userLng != null && ordered.length > 0) {
     ordered = [...ordered].sort((a, b) => {

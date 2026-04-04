@@ -2,7 +2,21 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
-import { Trip, TripEvent, FlyChangeData, CatchData, NoteData, FishingType, WeatherData, WaterFlowData, Location, NextFlyRecommendation, EventConditionsSnapshot, SessionType } from '@/src/types';
+import {
+  Trip,
+  TripEvent,
+  FlyChangeData,
+  CatchData,
+  NoteData,
+  FishingType,
+  WeatherData,
+  WaterFlowData,
+  Location,
+  NextFlyRecommendation,
+  EventConditionsSnapshot,
+  SessionType,
+  type AIQueryWebSource,
+} from '@/src/types';
 import { getMoonPhase } from '@/src/utils/moonPhase';
 import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/utils/tripGps';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
@@ -87,7 +101,7 @@ interface TripState {
   addNote: (text: string, latitude?: number | null, longitude?: number | null) => void;
   addBite: (latitude?: number | null, longitude?: number | null) => void;
   addFishOn: (latitude?: number | null, longitude?: number | null) => void;
-  addAIQuery: (question: string, response: string) => void;
+  addAIQuery: (question: string, response: string, webSources?: AIQueryWebSource[]) => void;
   updateWeatherCache: (weather: WeatherData) => void;
   updateNextFlyRecommendation: () => void;
   fetchConditions: () => Promise<void>;
@@ -942,7 +956,7 @@ export const useTripStore = create<TripState>()(
         }));
       },
 
-      addAIQuery: (question, response) => {
+      addAIQuery: (question, response, webSources) => {
         const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
         if (!activeTrip || isTripPaused) return;
 
@@ -951,7 +965,11 @@ export const useTripStore = create<TripState>()(
           trip_id: activeTrip.id,
           event_type: 'ai_query',
           timestamp: new Date().toISOString(),
-          data: { question, response },
+          data: {
+            question,
+            response,
+            ...(webSources && webSources.length > 0 ? { webSources } : {}),
+          },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),
           latitude: null,
           longitude: null,

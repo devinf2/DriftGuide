@@ -1,5 +1,18 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert, Image, Platform, Modal, Dimensions } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  Modal,
+  Dimensions,
+  Linking,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
@@ -572,6 +585,18 @@ function AIGuideTab({ trip, events }: { trip: Trip; events: TripEvent[] }) {
                     <Text style={styles.aiAnswerText}>{data.response}</Text>
                   </View>
                 )}
+                {data.webSources && data.webSources.length > 0 ? (
+                  <View style={styles.aiSourcesWrap}>
+                    <Text style={styles.aiSourcesLabel}>Web sources</Text>
+                    {data.webSources.slice(0, 10).map((s, i) => (
+                      <Pressable key={`${s.url}-${i}`} onPress={() => void Linking.openURL(s.url)}>
+                        <Text style={styles.aiSourceLink} numberOfLines={2}>
+                          {s.title || s.url}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
                 <Text style={styles.aiQATime}>{formatEventTime(event.timestamp)}</Text>
               </View>
             );
@@ -1323,6 +1348,25 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     flex: 1,
     lineHeight: 20,
+  },
+  aiSourcesWrap: {
+    marginTop: Spacing.xs,
+    paddingTop: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    gap: Spacing.xs,
+  },
+  aiSourcesLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: Colors.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  aiSourceLink: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    textDecorationLine: 'underline',
   },
   aiQATime: {
     fontSize: FontSize.xs,

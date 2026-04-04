@@ -13,6 +13,10 @@ const HERO_MIN_HEIGHT = 152;
 
 type Props = {
   userFirstName?: string | null;
+  /** While home hot spots / briefing are loading */
+  briefingLoading?: boolean;
+  /** Number of nearby waters we ranked (0 if none) */
+  rankedWatersCount?: number;
 };
 
 function timeGreeting(): string {
@@ -36,7 +40,11 @@ function capitalizeWord(s: string): string {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-export function FishHomeIntro({ userFirstName }: Props) {
+export function FishHomeIntro({
+  userFirstName,
+  briefingLoading = false,
+  rankedWatersCount = 0,
+}: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(
     () =>
@@ -123,7 +131,11 @@ export function FishHomeIntro({ userFirstName }: Props) {
   const dateStr = formatTodayLong();
   const greetingLine = timeGreeting();
 
-  const blurb = `I've pulled today's fishing reports and conditions for your area. Surface activity looks strong — great day to hit the water. Here's what I've got for you:`;
+  const blurb = briefingLoading
+    ? 'Checking live weather, flow, and regional hatch notes for your area…'
+    : rankedWatersCount > 0
+      ? `I've pulled live conditions and DriftGuide community context for ${rankedWatersCount} nearby water${rankedWatersCount === 1 ? '' : 's'}. Here's what looks strongest right now:`
+      : 'Turn on location or browse the map to rank nearby waters. You can still ask the guide anything below.';
 
   return (
     <DriftGuideMessage>
