@@ -391,7 +391,9 @@ Deno.serve(async (req: Request) => {
     if (action === "fly_recommendation") {
       const promptUser = String(body.promptUser ?? "");
       const text = await openaiChat(
-        guideSystem("Respond with ONLY valid JSON for fly recommendation."),
+        guideSystem(
+          "Respond with ONLY valid JSON for fly recommendation. Prefer flies from the angler's fly box when they fit conditions; if none fit well, recommend the best pattern anyway (may be outside the box) and explain briefly in reason.",
+        ),
         promptUser,
         280,
         0.6,
@@ -550,7 +552,9 @@ Deno.serve(async (req: Request) => {
     if (action === "fly_of_the_day") {
       const promptUser = String(body.promptUser ?? "");
       const raw = await openaiChat(
-        guideSystem("Respond with ONLY valid JSON for one fly."),
+        guideSystem(
+          "Respond with ONLY valid JSON for one fly. Prefer the angler's fly box when it fits conditions; otherwise recommend the best fly anyway.",
+        ),
         promptUser,
         180,
         0.6,

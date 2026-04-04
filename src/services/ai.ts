@@ -292,7 +292,13 @@ function buildFlyRecommendationPrompt(context: AIContext): string {
   }
 
   if (context.userFlies && context.userFlies.length > 0) {
-    lines.push('', "--- Angler's fly box (ONLY recommend flies from this list; use closest match if no exact fit) ---");
+    lines.push('', "--- Angler's fly box (default: pick from here when it makes sense) ---");
+    lines.push(
+      'Priority: when one or more of these flies fits current season, water, weather, and what has been tried on this trip, recommend from this list using the exact pattern name (and size/color when listed).',
+    );
+    lines.push(
+      'Not a hard rule: if every box fly is a poor match (wrong tactic, season, flow, clarity, or hatch timing), ignore the box and recommend the best fly or two-fly rig from general knowledge — including patterns not listed. Say briefly in "reason" when your pick is outside the box and why.',
+    );
     context.userFlies.forEach(f => {
       const parts = [f.name];
       if (f.size) parts.push(`#${f.size}`);
@@ -703,7 +709,11 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
       body: JSON.stringify({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'You are an expert fly fishing guide. Respond with ONLY valid JSON.' },
+          {
+            role: 'system',
+            content:
+              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Prefer the angler\'s fly box when it fits conditions; if none fit well, recommend the best pattern anyway (may be outside the box) and say so briefly in reason.',
+          },
           { role: 'user', content: buildFlyRecommendationPrompt(context) },
         ],
         max_tokens: 250,
@@ -1611,7 +1621,10 @@ export async function getFlyOfTheDay(
     lines.push(`Local success: ${options.locationSuccessSummary}`);
   }
   if (options?.userFlies && options.userFlies.length > 0) {
-    lines.push('', "Angler's fly box (ONLY recommend from this list):");
+    lines.push('', "Angler's fly box (prefer these when they fit conditions; otherwise recommend the best fly anyway):");
+    lines.push(
+      'If no box fly is a good match for today, pick from general knowledge and note briefly in reason that it may not be in the box.',
+    );
     options.userFlies.forEach(f => {
       lines.push(`- ${f.name}${f.size ? ` #${f.size}` : ''}${f.color ? ` (${f.color})` : ''}`);
     });
@@ -1660,10 +1673,14 @@ export async function getFlyOfTheDay(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
+        body: JSON.stringify({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'You are an expert fly fishing guide. Respond with ONLY valid JSON.' },
+          {
+            role: 'system',
+            content:
+              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Prefer the angler\'s fly box when it fits; if not, recommend the best fly anyway.',
+          },
           { role: 'user', content: promptUser },
         ],
         max_tokens: 150,
