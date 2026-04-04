@@ -182,6 +182,11 @@ export type CatchDetailsModalProps = {
   deferCloudWrites?: boolean;
   /** Add mode: pre-fill gallery (e.g. import past trips). */
   initialAddPhotoUris?: string[];
+  /**
+   * Add mode: EXIF aggregate from import photos — seeds map pin and capture time so we don't replace
+   * photo GPS with the device's current location.
+   */
+  importPhotoMetaSeed?: PhotoExifMetadata | null;
 };
 
 export function CatchDetailsModal({
@@ -205,6 +210,7 @@ export function CatchDetailsModal({
   onPickPhoto: onPickPhotoProp,
   deferCloudWrites = false,
   initialAddPhotoUris,
+  importPhotoMetaSeed = null,
 }: CatchDetailsModalProps) {
   const [catchFlyName, setCatchFlyName] = useState('');
   const [catchFlySize, setCatchFlySize] = useState<number | null>(null);
@@ -237,7 +243,7 @@ export function CatchDetailsModal({
   const [flyNameSearch, setFlyNameSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [coordRecenterTick, setCoordRecenterTick] = useState(0);
-  /** Until true, map uses editingEvent coords so we don't flash the previous catch's pin. */
+  /** Until true, map uses `editTargetCatch` coords so we don't flash the previous catch's pin. */
   const [editPinFormSynced, setEditPinFormSynced] = useState(false);
   const [gpsFillBusy, setGpsFillBusy] = useState(false);
 
@@ -262,6 +268,14 @@ export function CatchDetailsModal({
     const filtered = flyNamesWithOther.filter((n) => n.toLowerCase().includes(q));
     return filtered.includes('Other') ? filtered : [...filtered, 'Other'];
   }, [flyNamesWithOther, flyNameSearch]);
+
+  /** Prefer the live row from `allEvents` so lat/lon match the store after sync (menu can hold a stale ref). */
+  const editTargetCatch = useMemo(() => {
+    if (mode !== 'edit' || !editingEvent || editingEvent.event_type !== 'catch') return null;
+    return (
+      allEvents.find((e) => e.id === editingEvent.id && e.event_type === 'catch') ?? editingEvent
+    );
+  }, [mode, editingEvent, allEvents]);
 
   const catchFlyDropdownOptions: { label: string; value: string | number }[] =
     catchFlyDropdownOpen === null
@@ -352,15 +366,48 @@ export function CatchDetailsModal({
 
   /** Edit: load before paint so lat/lon fields and map show the catch immediately (avoids empty fields until interaction). */
   useLayoutEffect(() => {
-    if (!visible || mode !== 'edit' || !editingEvent) return;
-    loadFormForEdit(editingEvent);
-  }, [visible, mode, editingEvent?.id, loadFormForEdit]);
+    if (!visible || mode !== 'edit' || !editTargetCatch) return;
+    loadFormForEdit(editTargetCatch);
+  }, [
+    visible,
+    mode,
+    editTargetCatch?.id,
+    editTargetCatch?.latitude,
+    editTargetCatch?.longitude,
+    loadFormForEdit,
+  ]);
+
+  useEffect(() => {
+    if (!visible) setEditPinFormSynced(false);
+  }, [visible]);
 
   useEffect(() => {
     if (!visible || mode !== 'add') return;
     resetFormForAdd();
     if (initialAddPhotoUris && initialAddPhotoUris.length > 0) {
       setCatchPhotoUris([...initialAddPhotoUris]);
+    }
+    const seed = importPhotoMetaSeed;
+    const seedGpsOk =
+      seed != null &&
+      seed.latitude != null &&
+      seed.longitude != null &&
+      Number.isFinite(seed.latitude) &&
+      Number.isFinite(seed.longitude);
+    const seedTimeOk = seed?.takenAt != null && !Number.isNaN(seed.takenAt.getTime());
+    if (seed != null && (seedGpsOk || seedTimeOk)) {
+      setPhotoExifMeta({
+        takenAt: seedTimeOk ? seed!.takenAt : null,
+        latitude: seed!.latitude,
+        longitude: seed!.longitude,
+      });
+    }
+    if (seedGpsOk) {
+      setPinLat(seed!.latitude);
+      setPinLon(seed!.longitude);
+      setLatText(String(seed!.latitude));
+      setLonText(String(seed!.longitude));
+      return;
     }
     (async () => {
       try {
@@ -378,7 +425,7 @@ export function CatchDetailsModal({
         /* optional */
       }
     })();
-  }, [visible, mode, resetFormForAdd, initialAddPhotoUris]);
+  }, [visible, mode, resetFormForAdd, initialAddPhotoUris, importPhotoMetaSeed]);
 
   useEffect(() => {
     if (!visible || mode !== 'add' || !catchFlyName?.trim() || !getPresentationForFly) return;
@@ -387,7 +434,7 @@ export function CatchDetailsModal({
 
   useEffect(() => {
     setCoordRecenterTick(0);
-  }, [editingEvent?.id]);
+  }, [editTargetCatch?.id]);
 
   const syncPinFromText = useCallback(() => {
     const la = latText.trim() ? Number(latText.trim()) : NaN;
@@ -441,12 +488,12 @@ export function CatchDetailsModal({
   }, [mode]);
 
   const mapDisplayLat =
-    mode === 'edit' && editingEvent && !editPinFormSynced
-      ? editingEvent.latitude ?? null
+    mode === 'edit' && editTargetCatch && !editPinFormSynced
+      ? editTargetCatch.latitude ?? null
       : pinLat;
   const mapDisplayLon =
-    mode === 'edit' && editingEvent && !editPinFormSynced
-      ? editingEvent.longitude ?? null
+    mode === 'edit' && editTargetCatch && !editPinFormSynced
+      ? editTargetCatch.longitude ?? null
       : pinLon;
 
   const handleCatchFlyDropdownSelect = (value: string | number) => {
@@ -637,6 +684,7 @@ export function CatchDetailsModal({
         });
         onClose();
       } else if (mode === 'edit' && editingEvent && onSubmitEdit) {
+        const targetCatch = editTargetCatch ?? editingEvent;
         const newLocalUris = catchPhotoUris.filter((u) => !isRemoteStorageUrl(u));
         if (!deferCloudWrites && newLocalUris.length > 0 && !isConnected) {
           Alert.alert('Offline', 'Connect to the internet to add new photos.');
@@ -652,7 +700,7 @@ export function CatchDetailsModal({
           for (const u of initialEditRemoteUrlsRef.current) {
             if (!catchPhotoUris.includes(u)) {
               try {
-                await deleteCatchPhotoByUrl(userId, editingEvent.id, u);
+                await deleteCatchPhotoByUrl(userId, targetCatch.id, u);
               } catch (e) {
                 console.warn('[CatchDetailsModal] deleteCatchPhotoByUrl', e);
               }
@@ -660,7 +708,7 @@ export function CatchDetailsModal({
           }
 
           if (newLocalUris.length > 0) {
-            const syncOk = await upsertCatchEventToCloud(trip, editingEvent, allEvents);
+            const syncOk = await upsertCatchEventToCloud(trip, targetCatch, allEvents);
             if (!syncOk) {
               Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again.');
               setSubmitting(false);
@@ -687,8 +735,8 @@ export function CatchDetailsModal({
                   fly_size: (useDropper ? dropper!.size : primary.size) ?? undefined,
                   fly_color: (useDropper ? dropper!.color : primary.color) ?? undefined,
                   fly_id: useDropper ? dropper!.fly_id : primary.fly_id,
-                  captured_at: photoExifMeta?.takenAt?.toISOString() ?? editingEvent.timestamp,
-                  catchId: editingEvent.id,
+                  captured_at: photoExifMeta?.takenAt?.toISOString() ?? targetCatch.timestamp,
+                  catchId: targetCatch.id,
                   displayOrder: finalUrls.length,
                 },
                 { isOnline: true },
@@ -709,7 +757,7 @@ export function CatchDetailsModal({
           note: catchNote.trim() || null,
           photo_url: finalUrls[0] ?? null,
           photo_urls: finalUrls.length ? finalUrls : null,
-          active_fly_event_id: (editingEvent.data as CatchData).active_fly_event_id,
+          active_fly_event_id: (targetCatch.data as CatchData).active_fly_event_id,
           caught_on_fly: catchCaughtOnFly,
           quantity: qtyAdd,
           depth_ft: depthNum != null && Number.isFinite(depthNum) ? depthNum : null,
@@ -738,7 +786,7 @@ export function CatchDetailsModal({
 
         const nextEvents = mergeEditCatchEvents(
           allEvents,
-          editingEvent,
+          targetCatch,
           primary,
           dropper,
           catchData,
@@ -1142,7 +1190,7 @@ export function CatchDetailsModal({
                     onCoordinateChange={onCoordinateChange}
                     height={220}
                     interactionMode="pan_center"
-                    focusRequestKey={`${editingEvent?.id ?? 'edit'}-${coordRecenterTick}`}
+                    focusRequestKey={`${editTargetCatch?.id ?? editingEvent?.id ?? 'edit'}-${coordRecenterTick}`}
                     mapFallbackCenter={mapFallbackCenter}
                     hintPosition="below"
                   />

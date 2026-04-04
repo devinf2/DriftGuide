@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { STEP1_NEARBY_CATALOG_LIST_CAP } from '@/src/constants/locationThresholds';
 import {
   View,
   Text,
@@ -24,6 +25,7 @@ import { useTripStore } from '@/src/stores/tripStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import {
   addCommunityLocation,
+  haversineDistance,
   isWithinPinParentReuseThreshold,
   searchNearbyRootParentCandidates,
 } from '@/src/services/locationService';
@@ -90,10 +92,9 @@ export default function FishNowScreen() {
   const [pinCoords, setPinCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [mapFocusNonce, setMapFocusNonce] = useState(0);
   const initialGpsSyncedRef = useRef(false);
-  const [candidates, setCandidates] = useState<NearbyLocationResult[]>([]);
+  const [nearbyCatalog, setNearbyCatalog] = useState<NearbyLocationResult[]>([]);
   const [detailsParentId, setDetailsParentId] = useState<string | null>(null);
   const [pickerFlowStep, setPickerFlowStep] = useState<PinParentFlowStep>(1);
-
   const [name, setName] = useState('');
   const [locationType, setLocationType] = useState<LocationType | null>(null);
   const [typePickerOpen, setTypePickerOpen] = useState(false);
@@ -105,10 +106,10 @@ export default function FishNowScreen() {
     if (fromStore?.latitude != null && fromStore.longitude != null) {
       return { lat: fromStore.latitude, lng: fromStore.longitude };
     }
-    const fromCand = candidates.find((c) => c.id === detailsParentId);
+    const fromCand = nearbyCatalog.find((c) => c.id === detailsParentId);
     if (fromCand) return { lat: fromCand.latitude, lng: fromCand.longitude };
     return null;
-  }, [detailsParentId, locations, candidates]);
+  }, [detailsParentId, locations, nearbyCatalog]);
 
   const closePinToSelectedParent = useMemo(() => {
     if (detailsParentId == null || selectedParentGeo == null) return false;
@@ -131,10 +132,10 @@ export default function FishNowScreen() {
     (parentId: string): Location | null => {
       const fromStore = locations.find((l) => l.id === parentId);
       if (fromStore) return fromStore;
-      const fromCand = candidates.find((c) => c.id === parentId);
+      const fromCand = nearbyCatalog.find((c) => c.id === parentId);
       return fromCand ? nearbyResultToLocation(fromCand) : null;
     },
-    [locations, candidates],
+    [locations, nearbyCatalog],
   );
 
   useEffect(() => {
@@ -165,9 +166,12 @@ export default function FishNowScreen() {
               const rows = await searchNearbyRootParentCandidates(
                 DEV_FALLBACK_COORDS.latitude,
                 DEV_FALLBACK_COORDS.longitude,
+                undefined,
+                undefined,
+                STEP1_NEARBY_CATALOG_LIST_CAP,
               );
               if (cancelled) return;
-              setCandidates(rows);
+              setNearbyCatalog(rows);
               setPhase('pick_parent');
             }
             return;
@@ -188,9 +192,15 @@ export default function FishNowScreen() {
         }
         setUserCoords({ latitude, longitude });
         setPhase('loading_parents');
-        const rows = await searchNearbyRootParentCandidates(latitude, longitude);
+        const rows = await searchNearbyRootParentCandidates(
+          latitude,
+          longitude,
+          undefined,
+          undefined,
+          STEP1_NEARBY_CATALOG_LIST_CAP,
+        );
         if (cancelled) return;
-        setCandidates(rows);
+        setNearbyCatalog(rows);
         setPhase('pick_parent');
       } catch {
         if (__DEV__) {
@@ -203,13 +213,16 @@ export default function FishNowScreen() {
               const rows = await searchNearbyRootParentCandidates(
                 DEV_FALLBACK_COORDS.latitude,
                 DEV_FALLBACK_COORDS.longitude,
+                undefined,
+                undefined,
+                STEP1_NEARBY_CATALOG_LIST_CAP,
               );
               if (cancelled) return;
-              setCandidates(rows);
+              setNearbyCatalog(rows);
               setPhase('pick_parent');
             } catch {
               if (!cancelled) {
-                setCandidates([]);
+                setNearbyCatalog([]);
                 setPhase('pick_parent');
               }
             }
@@ -260,10 +273,34 @@ export default function FishNowScreen() {
         void startOnExistingLocation(fromStore ?? nearbyResultToLocation(c));
         return;
       }
-      setDetailsParentId(c.id);
-      setName('');
-      setLocationType(c.type);
-      setPickerFlowStep(2);
+      const km = haversineDistance(anchor.latitude, anchor.longitude, c.latitude, c.longitude);
+      const mi = km * 0.621371;
+      const miRounded = mi >= 10 ? Math.round(mi) : Math.round(mi * 10) / 10;
+      const placeLabel = c.name.length > 40 ? `${c.name.slice(0, 37)}…` : c.name;
+      Alert.alert(
+        'Pin is farther than 1 mile away',
+        `Your map pin is about ${miRounded} mi from “${placeLabel}”. Start the trip at this catalog place, or save your pin as a new spot.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Use this place',
+            onPress: () => {
+              const fromStore = locations.find((l) => l.id === c.id);
+              void startOnExistingLocation(fromStore ?? nearbyResultToLocation(c));
+            },
+          },
+          {
+            text: 'Save as new spot',
+            style: 'default',
+            onPress: () => {
+              setDetailsParentId(null);
+              setName('');
+              setLocationType(null);
+              setPickerFlowStep(2);
+            },
+          },
+        ],
+      );
     },
     [pinCoords, userCoords, locations, startOnExistingLocation],
   );
@@ -277,22 +314,22 @@ export default function FishNowScreen() {
 
   const handleBackFromSpotStep = useCallback(() => {
     if (phase === 'busy') return;
-    if (candidates.length === 0) {
+    if (nearbyCatalog.length === 0) {
       router.back();
       return;
     }
     setPickerFlowStep(1);
     setDetailsParentId(null);
-  }, [phase, candidates.length, router]);
+  }, [phase, nearbyCatalog.length, router]);
 
   useEffect(() => {
     if (phase !== 'pick_parent') return;
-    if (candidates.length > 0) return;
+    if (nearbyCatalog.length > 0) return;
     setPickerFlowStep(2);
     setDetailsParentId(null);
     setName('');
     setLocationType(null);
-  }, [phase, candidates.length]);
+  }, [phase, nearbyCatalog.length]);
 
   const handleStartWithNewSpot = useCallback(async () => {
     const anchor = pinCoords ?? userCoords;
@@ -441,10 +478,21 @@ export default function FishNowScreen() {
             mapFlex={1}
             bottomPanelFlex={1}
             step={pickerFlowStep}
-            candidates={candidates}
+            candidates={nearbyCatalog}
             onPressCandidate={handlePickParent}
             notPartOfListLabel="No — save as its own place"
             onPressNotPartOfList={handleStandalone}
+            driftGuideSearchLocations={locations}
+            searchProximityLngLat={
+              userCoords ? [userCoords.longitude, userCoords.latitude] : null
+            }
+            onPickMapGeocodeResult={(f) => {
+              const [lng, lat] = f.center;
+              if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                setPinCoords({ latitude: lat, longitude: lng });
+                setMapFocusNonce((n) => n + 1);
+              }
+            }}
             showSpotDetailFields={showDetailsSpotFields}
             name={name}
             onNameChange={setName}

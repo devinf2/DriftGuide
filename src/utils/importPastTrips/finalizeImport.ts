@@ -4,6 +4,7 @@ import { syncTripToCloud } from '@/src/services/sync';
 import type { CatchData, FishingType, Location, Trip, TripEvent } from '@/src/types';
 import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 import type { ImportPhoto, ImportTripGroup } from '@/src/stores/importPastTripsStore';
+import { aggregateImportPhotoMeta } from '@/src/utils/importPastTrips/importPhotoMetaAggregate';
 import { sortEventsByTime, totalFishFromEvents } from '@/src/utils/journalTimeline';
 import { enrichCatchEventsWithHistoricalConditions } from '@/src/utils/importPastTrips/enrichImportConditions';
 import { parseISO } from 'date-fns';
@@ -47,8 +48,23 @@ export function buildCompletedTripForImport(
       : new Date(baseDay.getTime() + 3600000).toISOString();
 
   const loc: Location | undefined = group.location ?? undefined;
-  const lat = loc?.latitude ?? null;
-  const lng = loc?.longitude ?? null;
+  const tripPhotoMeta = aggregateImportPhotoMeta(photos, group.photoIds);
+  const latFromLoc = loc?.latitude ?? null;
+  const lngFromLoc = loc?.longitude ?? null;
+  const latOk = latFromLoc != null && Number.isFinite(latFromLoc);
+  const lngOk = lngFromLoc != null && Number.isFinite(lngFromLoc);
+  const lat =
+    latOk && lngOk
+      ? latFromLoc
+      : tripPhotoMeta.latitude != null && tripPhotoMeta.longitude != null
+        ? tripPhotoMeta.latitude
+        : latFromLoc;
+  const lng =
+    latOk && lngOk
+      ? lngFromLoc
+      : tripPhotoMeta.latitude != null && tripPhotoMeta.longitude != null
+        ? tripPhotoMeta.longitude
+        : lngFromLoc;
 
   return {
     id: group.draftTripId,

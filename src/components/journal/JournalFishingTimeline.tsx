@@ -391,7 +391,14 @@ export function JournalFishingTimeline({
     const actions: RowAction[] = [];
 
     if (event.event_type === 'catch') {
-      actions.push({ label: 'Edit fish…', onPress: () => { closeRowMenu(); setCatchModal(event); } });
+      actions.push({
+        label: 'Edit fish…',
+        onPress: () => {
+          closeRowMenu();
+          const fresh = events.find((e) => e.id === event.id && e.event_type === 'catch') ?? event;
+          setCatchModal(fresh);
+        },
+      });
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
       actions.push({ label: 'Add fish above', onPress: () => void insertFish(index, 'above') });
@@ -449,7 +456,7 @@ export function JournalFishingTimeline({
       onPress: () => confirmDelete(event),
     });
     return actions;
-  }, [rowActions, closeRowMenu, insertNote, insertFish, insertFlyChange, confirmDelete, onRequestEditTripPin]);
+  }, [rowActions, events, closeRowMenu, insertNote, insertFish, insertFlyChange, confirmDelete, onRequestEditTripPin]);
 
   return (
     <View style={styles.root}>

@@ -678,7 +678,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
                     <Pressable key={c.id} style={styles.parentLinkOption} onPress={() => commitNewLocation(c.id)}>
                       <View style={styles.parentLinkOptionText}>
                         <Text style={styles.parentLinkOptionName} numberOfLines={2}>
-                          Part of {c.name}
+                          {c.name}
                         </Text>
                         <Text style={styles.parentLinkOptionMeta}>{formatProximityKm(c.distance_km)}</Text>
                       </View>

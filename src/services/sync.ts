@@ -564,6 +564,46 @@ export async function deleteTripFromCloud(tripId: string): Promise<boolean> {
   }
 }
 
+/** When `trip_events` rows lack GPS, copy from `catches` (same id) so edit UI and maps stay consistent. */
+async function mergeCatchCoordsFromCatchesTable(events: TripEvent[]): Promise<TripEvent[]> {
+  const needIds = events
+    .filter((e) => {
+      if (e.event_type !== 'catch') return false;
+      const la = e.latitude != null ? Number(e.latitude) : NaN;
+      const lo = e.longitude != null ? Number(e.longitude) : NaN;
+      return !Number.isFinite(la) || !Number.isFinite(lo);
+    })
+    .map((e) => e.id);
+  if (needIds.length === 0) return events;
+
+  const { data: rows, error } = await supabase
+    .from('catches')
+    .select('id, latitude, longitude')
+    .in('id', needIds);
+
+  if (error || !rows?.length) return events;
+
+  const coordById = new Map<string, { la: number; lo: number }>();
+  for (const r of rows as { id: string; latitude: number | null; longitude: number | null }[]) {
+    const la = r.latitude != null ? Number(r.latitude) : NaN;
+    const lo = r.longitude != null ? Number(r.longitude) : NaN;
+    if (Number.isFinite(la) && Number.isFinite(lo)) {
+      coordById.set(r.id, { la, lo });
+    }
+  }
+  if (coordById.size === 0) return events;
+
+  return events.map((ev) => {
+    if (ev.event_type !== 'catch') return ev;
+    const curLa = ev.latitude != null ? Number(ev.latitude) : NaN;
+    const curLo = ev.longitude != null ? Number(ev.longitude) : NaN;
+    if (Number.isFinite(curLa) && Number.isFinite(curLo)) return ev;
+    const c = coordById.get(ev.id);
+    if (!c) return ev;
+    return { ...ev, latitude: c.la, longitude: c.lo };
+  });
+}
+
 export async function fetchTripEvents(tripId: string): Promise<TripEvent[]> {
   try {
     const { data, error } = await supabase
@@ -573,7 +613,8 @@ export async function fetchTripEvents(tripId: string): Promise<TripEvent[]> {
       .order('timestamp', { ascending: true });
 
     if (error) throw error;
-    return (data as TripEvent[]) || [];
+    const events = (data as TripEvent[]) || [];
+    return mergeCatchCoordsFromCatchesTable(events);
   } catch (error) {
     console.error('Error fetching events:', error);
     return [];

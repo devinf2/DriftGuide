@@ -3,9 +3,11 @@ import {
   type PinParentFlowStep,
 } from '@/src/components/location/LocationPinParentTwoStepFlow';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   addCommunityLocation,
+  haversineDistance,
   isWithinPinParentReuseThreshold,
 } from '@/src/services/locationService';
 import type { Location, LocationType, NearbyLocationResult } from '@/src/types';
@@ -104,13 +106,6 @@ function createStyles(colors: ThemeColors) {
       textAlign: 'center',
       marginTop: Spacing.md,
     },
-    footerCancel: {
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.border,
-      paddingVertical: Spacing.md,
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-    },
     cancelText: {
       fontSize: FontSize.md,
       fontWeight: '600',
@@ -160,7 +155,7 @@ type Props = {
 export function ImportTripLocationFlowModal({
   visible,
   onClose,
-  candidates,
+  candidates: nearbyFromServer,
   loading,
   anchorLat,
   anchorLng,
@@ -173,6 +168,7 @@ export function ImportTripLocationFlowModal({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
+  const { locations, fetchLocations } = useLocationStore();
 
   const sheetHeight = useMemo(
     () => Math.round(windowHeight * SHEET_HEIGHT_RATIO),
@@ -186,7 +182,6 @@ export function ImportTripLocationFlowModal({
 
   const [flowStep, setFlowStep] = useState<PinParentFlowStep>(1);
   const [candidateRowsEnabled, setCandidateRowsEnabled] = useState(false);
-  const [pendingParent, setPendingParent] = useState<NearbyLocationResult | null>(null);
   const [mapFocusNonce, setMapFocusNonce] = useState(0);
   const createFormInitRef = useRef(false);
   const autoSkippedPickParentRef = useRef(false);
@@ -201,26 +196,13 @@ export function ImportTripLocationFlowModal({
 
   const anchorOk = anchorLat != null && anchorLng != null && Number.isFinite(anchorLat) && Number.isFinite(anchorLng);
 
-  const closePinToPendingParent = useMemo(() => {
-    if (pendingParent == null) return false;
-    if (!Number.isFinite(pinLat) || !Number.isFinite(pinLng)) return false;
-    return isWithinPinParentReuseThreshold(
-      pinLat,
-      pinLng,
-      pendingParent.latitude,
-      pendingParent.longitude,
-    );
-  }, [pendingParent, pinLat, pinLng]);
-
-  const showSpotDetailFields = useMemo(
-    () => pendingParent == null || !closePinToPendingParent,
-    [pendingParent, closePinToPendingParent],
-  );
+  useEffect(() => {
+    if (visible) void fetchLocations();
+  }, [visible, fetchLocations]);
 
   useEffect(() => {
     if (!visible) {
       setFlowStep(1);
-      setPendingParent(null);
       setSaving(false);
       setName('');
       setLocationType(null);
@@ -231,7 +213,6 @@ export function ImportTripLocationFlowModal({
       return;
     }
     setFlowStep(1);
-    setPendingParent(null);
     setSaving(false);
     setName('');
     setLocationType(null);
@@ -253,14 +234,14 @@ export function ImportTripLocationFlowModal({
       setCandidateRowsEnabled(false);
       return;
     }
-    if (loading || candidates.length === 0) {
+    if (loading || nearbyFromServer.length === 0) {
       setCandidateRowsEnabled(true);
       return;
     }
     setCandidateRowsEnabled(false);
     const t = setTimeout(() => setCandidateRowsEnabled(true), CANDIDATE_PRESS_ENABLE_DELAY_MS);
     return () => clearTimeout(t);
-  }, [visible, loading, candidates.length]);
+  }, [visible, loading, nearbyFromServer.length]);
 
   useEffect(() => {
     if (flowStep !== 2) {
@@ -269,30 +250,55 @@ export function ImportTripLocationFlowModal({
     }
     if (createFormInitRef.current) return;
     createFormInitRef.current = true;
-    setLocationType(pendingParent?.type ?? null);
-  }, [flowStep, pendingParent]);
+    setLocationType(null);
+  }, [flowStep]);
 
   useEffect(() => {
     if (!visible || loading || !anchorOk) return;
-    if (candidates.length > 0) return;
+    if (nearbyFromServer.length > 0) return;
     if (autoSkippedPickParentRef.current) return;
     autoSkippedPickParentRef.current = true;
     setFlowStep(2);
-    setPendingParent(null);
-  }, [visible, loading, anchorOk, candidates.length]);
+  }, [visible, loading, anchorOk, nearbyFromServer.length]);
 
+  /** List row / catalog pin: within 1 mi of photo GPS → attach that place; farther → ask. */
   const handlePickCandidate = useCallback(
     (c: NearbyLocationResult) => {
-      if (!Number.isFinite(pinLat) || !Number.isFinite(pinLng)) return;
-      if (isWithinPinParentReuseThreshold(pinLat, pinLng, c.latitude, c.longitude)) {
+      if (
+        !anchorOk ||
+        anchorLat == null ||
+        anchorLng == null ||
+        isWithinPinParentReuseThreshold(anchorLat, anchorLng, c.latitude, c.longitude)
+      ) {
         onComplete(nearbyResultToLocation(c), c.id);
         onClose();
         return;
       }
-      setPendingParent(c);
-      setFlowStep(2);
+      const km = haversineDistance(anchorLat, anchorLng, c.latitude, c.longitude);
+      const mi = km * 0.621371;
+      const miRounded = mi >= 10 ? Math.round(mi) : Math.round(mi * 10) / 10;
+      const placeLabel = c.name.length > 40 ? `${c.name.slice(0, 37)}…` : c.name;
+      Alert.alert(
+        'Photo location is farther than 1 mile away',
+        `Your photos are about ${miRounded} mi from “${placeLabel}”. Use this catalog place for the import, or save the map pin (photo location) as a new spot.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Use this place',
+            onPress: () => {
+              onComplete(nearbyResultToLocation(c), c.id);
+              onClose();
+            },
+          },
+          {
+            text: 'Save as new spot',
+            style: 'default',
+            onPress: () => setFlowStep(2),
+          },
+        ],
+      );
     },
-    [pinLat, pinLng, onComplete, onClose],
+    [anchorOk, anchorLat, anchorLng, onComplete, onClose],
   );
 
   const handleStandalone = useCallback(() => {
@@ -300,34 +306,18 @@ export function ImportTripLocationFlowModal({
       Alert.alert('Sign in required', 'Sign in to save a new place for this import.');
       return;
     }
-    setPendingParent(null);
     setFlowStep(2);
   }, [userId]);
 
   const handleStep2Back = useCallback(() => {
     if (saving) return;
     setFlowStep(1);
-    setPendingParent(null);
     createFormInitRef.current = false;
   }, [saving]);
 
   const handleFormSubmit = useCallback(async () => {
     if (!userId) return;
     if (!Number.isFinite(pinLat) || !Number.isFinite(pinLng)) return;
-
-    if (
-      pendingParent &&
-      isWithinPinParentReuseThreshold(
-        pinLat,
-        pinLng,
-        pendingParent.latitude,
-        pendingParent.longitude,
-      )
-    ) {
-      onComplete(nearbyResultToLocation(pendingParent), pendingParent.id);
-      onClose();
-      return;
-    }
 
     if (!isConnected) {
       Alert.alert('Offline', 'Saving a new place requires a connection.');
@@ -350,7 +340,7 @@ export function ImportTripLocationFlowModal({
         pinLng,
         userId,
         isPublic,
-        pendingParent?.id ?? null,
+        null,
       );
       if (!newLoc) {
         Alert.alert(
@@ -369,7 +359,6 @@ export function ImportTripLocationFlowModal({
     userId,
     pinLat,
     pinLng,
-    pendingParent,
     isConnected,
     name,
     locationType,
@@ -380,7 +369,7 @@ export function ImportTripLocationFlowModal({
   ]);
 
   const step1EmptyHint =
-    !loading && candidates.length === 0
+    !loading && nearbyFromServer.length === 0
       ? 'No nearby locations found. You can still save this trip as its own place using the map pin from your photos (or add places from the Map tab).'
       : null;
 
@@ -419,13 +408,25 @@ export function ImportTripLocationFlowModal({
                     edgeToEdgeMap={false}
                     containerStyle={{ flex: 1, minHeight: 0 }}
                     step={flowStep}
-                    candidates={candidates}
+                    candidates={nearbyFromServer}
                     onPressCandidate={handlePickCandidate}
                     notPartOfListLabel="No — save as its own place"
                     onPressNotPartOfList={handleStandalone}
                     step1EmptyHint={step1EmptyHint}
-                    step1CandidatesDisabled={!candidateRowsEnabled && candidates.length > 0}
-                    showSpotDetailFields={showSpotDetailFields}
+                    step1CandidatesDisabled={!candidateRowsEnabled && nearbyFromServer.length > 0}
+                    driftGuideSearchLocations={locations}
+                    searchProximityLngLat={
+                      anchorOk ? [anchorLng!, anchorLat!] : null
+                    }
+                    onPickMapGeocodeResult={(f) => {
+                      const [lng, lat] = f.center;
+                      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        setPinLat(lat);
+                        setPinLng(lng);
+                        setMapFocusNonce((n) => n + 1);
+                      }
+                    }}
+                    showSpotDetailFields={true}
                     name={name}
                     onNameChange={setName}
                     locationType={locationType}
@@ -437,14 +438,12 @@ export function ImportTripLocationFlowModal({
                     onPressPrimary={() => void handleFormSubmit()}
                     primaryBusy={saving}
                     interactionDisabled={saving}
-                    onPressStep2Back={candidates.length > 0 ? handleStep2Back : undefined}
+                    onPressStep2Back={nearbyFromServer.length > 0 ? handleStep2Back : undefined}
                     bottomInsetPadding={Spacing.sm}
                     step1ListSurface="canvas"
+                    primaryButtonPlacement="footer"
                   />
                 </View>
-                <Pressable style={styles.footerCancel} onPress={onClose} disabled={saving}>
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </Pressable>
               </>
             ) : (
               <View style={styles.loading}>

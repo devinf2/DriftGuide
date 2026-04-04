@@ -1,6 +1,7 @@
 import type { CatchDetailsSubmitAdd } from '@/src/components/catch/CatchDetailsModal';
 import type { FlyChangeData } from '@/src/types';
 import type { ImportPhoto, ImportTripGroup } from '@/src/stores/importPastTripsStore';
+import { aggregateImportPhotoMeta } from '@/src/utils/importPastTrips/importPhotoMetaAggregate';
 import { parseISO } from 'date-fns';
 
 /** Placeholder fly so timeline / sync have a linked fly_change; user can edit later. */
@@ -28,20 +29,23 @@ export function buildMinimalCatchPayloadForImport(
 ): CatchDetailsSubmitAdd {
   const ordered = orderPhotoIdsByTripOrder(group, photoIds);
   const uris = ordered.map((id) => photos.find((p) => p.id === id)?.uri).filter(Boolean) as string[];
-  const taken = ordered
-    .map((id) => photos.find((p) => p.id === id)?.meta?.takenAt)
-    .filter((t): t is Date => t != null && !Number.isNaN(t.getTime()));
+  const agg = aggregateImportPhotoMeta(photos, ordered);
   const key = group.tripDateKey;
   const baseFromKey =
     key && key !== '__unknown__' ? parseISO(`${key}T12:00:00`) : new Date();
   const baseDay = Number.isNaN(baseFromKey.getTime()) ? new Date() : baseFromKey;
-  const captured =
-    taken.length > 0 ? new Date(Math.min(...taken.map((t) => t.getTime()))) : baseDay;
+  const captured = agg.takenAt ?? baseDay;
   const iso = captured.toISOString();
 
   const loc = group.location;
-  const lat = loc?.latitude != null && Number.isFinite(loc.latitude) ? loc.latitude : null;
-  const lon = loc?.longitude != null && Number.isFinite(loc.longitude) ? loc.longitude : null;
+  const latFromLoc =
+    loc?.latitude != null && Number.isFinite(loc.latitude) ? loc.latitude : null;
+  const lonFromLoc =
+    loc?.longitude != null && Number.isFinite(loc.longitude) ? loc.longitude : null;
+  const lat =
+    agg.latitude != null && agg.longitude != null ? agg.latitude : latFromLoc;
+  const lon =
+    agg.latitude != null && agg.longitude != null ? agg.longitude : lonFromLoc;
 
   return {
     primary: { ...MINIMAL_PRIMARY_FLY },

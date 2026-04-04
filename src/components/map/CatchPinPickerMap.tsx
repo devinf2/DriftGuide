@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
@@ -22,6 +22,32 @@ function roundZoom(z: number): number {
 function clampZoom(z: number): number {
   return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
 }
+
+const MARKER_PRESS_LOCK_MS = 450;
+const MARKER_COORD_LOCK_EPS = 1e-5;
+let lastCatalogPinPress: { lng: number; lat: number; t: number } | null = null;
+
+function runCatalogPinPressOnce(coordinate: [number, number], handler: () => void) {
+  const t = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const [lng, lat] = coordinate;
+  if (
+    lastCatalogPinPress &&
+    t < lastCatalogPinPress.t + MARKER_PRESS_LOCK_MS &&
+    Math.abs(lat - lastCatalogPinPress.lat) < MARKER_COORD_LOCK_EPS &&
+    Math.abs(lng - lastCatalogPinPress.lng) < MARKER_COORD_LOCK_EPS
+  ) {
+    return;
+  }
+  lastCatalogPinPress = { lng, lat, t };
+  handler();
+}
+
+export type CatchPinCatalogMarker = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+};
 
 function mapAttributionBesideZoomControls(
   showZoomControls: boolean,
@@ -75,6 +101,11 @@ export type CatchPinPickerMapProps = {
   showBasemapSwitcher?: boolean;
   /** When false, hides the caption above/below the map. */
   showHint?: boolean;
+  /** Catalog / nearby water pins (tap to select). Shown under the center pin in pan_center mode. */
+  catalogMarkers?: CatchPinCatalogMarker[];
+  onCatalogMarkerPress?: (id: string) => void;
+  /** Highlights a catalog pin after selection (optional). */
+  selectedCatalogMarkerId?: string | null;
 };
 
 /**
@@ -101,6 +132,9 @@ export function CatchPinPickerMap({
   mapStyle: mapStyleProp,
   showBasemapSwitcher = true,
   showHint = true,
+  catalogMarkers,
+  onCatalogMarkerPress,
+  selectedCatalogMarkerId = null,
 }: CatchPinPickerMapProps) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
@@ -253,6 +287,35 @@ export function CatchPinPickerMap({
             </View>
           </PointAnnotation>
         ) : null}
+        {catalogMarkers && catalogMarkers.length > 0 && onCatalogMarkerPress
+          ? catalogMarkers.map((p) => {
+              const selected = selectedCatalogMarkerId === p.id;
+              const coordPair: [number, number] = [p.longitude, p.latitude];
+              const title = p.name ?? 'Location';
+              const inner: ReactNode = (
+                <MaterialIcons
+                  name="place"
+                  size={selected ? 30 : 24}
+                  color={selected ? Colors.success : Colors.textSecondary}
+                />
+              );
+              return (
+                <PointAnnotation
+                  key={`cat-${p.id}`}
+                  id={`catalog-loc-${p.id}`}
+                  coordinate={coordPair}
+                  title={title}
+                  onSelected={() =>
+                    runCatalogPinPressOnce(coordPair, () => onCatalogMarkerPress(p.id))
+                  }
+                >
+                  <View collapsable={false} pointerEvents="box-none">
+                    {inner}
+                  </View>
+                </PointAnnotation>
+              );
+            })
+          : null}
       </MapView>
       {isPanCenter ? (
         <View style={styles.centerPinOverlay} pointerEvents="none">

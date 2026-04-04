@@ -5,6 +5,7 @@ import {
 } from '@/src/components/catch/CatchDetailsModal';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { fetchFlies } from '@/src/services/flyService';
+import { STEP1_NEARBY_CATALOG_LIST_CAP } from '@/src/constants/locationThresholds';
 import { searchNearbyRootParentCandidates } from '@/src/services/locationService';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import {
@@ -17,6 +18,7 @@ import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { CatchData, Fly, Location, NearbyLocationResult, TripEvent } from '@/src/types';
 import { extractPhotoMetadataFromPickerAsset } from '@/src/utils/imageExif';
+import { aggregateImportPhotoMeta } from '@/src/utils/importPastTrips/importPhotoMetaAggregate';
 import { getFlyForCatch } from '@/src/services/sync';
 import {
   buildCompletedTripForImport,
@@ -49,15 +51,9 @@ const STEP_TITLES = ['Upload', 'Trips', 'Tag catches', 'Review'] as const;
 const TOTAL_STEPS = STEP_TITLES.length;
 
 function computeAnchor(photoIds: string[], photos: ImportPhoto[]): { lat: number; lng: number } | null {
-  const pts = photoIds
-    .map((id) => photos.find((p) => p.id === id))
-    .filter(Boolean)
-    .map((p) => p!.meta)
-    .filter((m) => m.latitude != null && m.longitude != null);
-  if (pts.length === 0) return null;
-  const lat = pts.reduce((s, p) => s + (p.latitude as number), 0) / pts.length;
-  const lng = pts.reduce((s, p) => s + (p.longitude as number), 0) / pts.length;
-  return { lat, lng };
+  const m = aggregateImportPhotoMeta(photos, photoIds);
+  if (m.latitude == null || m.longitude == null) return null;
+  return { lat: m.latitude, lng: m.longitude };
 }
 
 function groupDisplayLabel(tripDateKey: string, photos: ImportPhoto[], photoIds: string[]): string {
@@ -540,7 +536,13 @@ export default function ImportPastTripsScreen() {
       setLocLoading(true);
       setLocCandidates([]);
       try {
-        const rows = await searchNearbyRootParentCandidates(anchor.lat, anchor.lng);
+        const rows = await searchNearbyRootParentCandidates(
+          anchor.lat,
+          anchor.lng,
+          undefined,
+          undefined,
+          STEP1_NEARBY_CATALOG_LIST_CAP,
+        );
         setLocCandidates(rows);
       } catch {
         setLocCandidates([]);
@@ -571,6 +573,14 @@ export default function ImportPastTripsScreen() {
         uri: asset.uri,
         meta: extractPhotoMetadataFromPickerAsset(asset),
       }));
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        const withGps = next.filter((p) => p.meta.latitude != null && p.meta.longitude != null).length;
+        console.log('[importPast] pickPhotos', {
+          count: next.length,
+          withParsedLatLng: withGps,
+          withoutLatLng: next.length - withGps,
+        });
+      }
       appendPhotos(next);
     } finally {
       setPicking(false);
@@ -605,6 +615,11 @@ export default function ImportPastTripsScreen() {
   const initialAddUris = useMemo(() => {
     if (!catchUi || catchUi.mode !== 'add') return undefined;
     return catchUi.photoIds.map((id) => photos.find((p) => p.id === id)?.uri).filter(Boolean) as string[];
+  }, [catchUi, photos]);
+
+  const catchImportMetaSeed = useMemo(() => {
+    if (!catchUi || catchUi.mode !== 'add') return null;
+    return aggregateImportPhotoMeta(photos, catchUi.photoIds);
   }, [catchUi, photos]);
 
   const goBackInWizard = useCallback(() => {
@@ -1502,6 +1517,7 @@ export default function ImportPastTripsScreen() {
           seedDropper={seedDropperForModal ?? undefined}
           deferCloudWrites={catchUi.mode === 'edit'}
           initialAddPhotoUris={initialAddUris}
+          importPhotoMetaSeed={catchImportMetaSeed}
           onSubmitAdd={async (payload: CatchDetailsSubmitAdd) => {
             addCatchFromPayload(catchUi.groupId, catchUi.photoIds, payload);
             setCatchUi(null);

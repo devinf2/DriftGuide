@@ -389,7 +389,10 @@ export default function TripDashboardScreen() {
 
   const handleEditCatch = useCallback((ev: TripEvent) => {
     if (isTripPaused) return;
-    setCatchUIMode(ev);
+    const fresh = useTripStore
+      .getState()
+      .events.find((e) => e.id === ev.id && e.event_type === 'catch');
+    setCatchUIMode(fresh ?? ev);
   }, [isTripPaused]);
 
   const handleCatchSubmitAdd = useCallback(

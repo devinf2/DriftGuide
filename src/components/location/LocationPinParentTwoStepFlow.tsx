@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -9,15 +9,23 @@ import {
   Switch,
   Platform,
   ActivityIndicator,
+  Keyboard,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
-import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
+import { useMapStyleLocationSearch } from '@/src/hooks/useMapStyleLocationSearch';
+import type { MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
+import {
+  PARENT_CANDIDATE_MAX_RADIUS_KM,
+  PIN_PARENT_MAP_ROOT_CAP,
+} from '@/src/constants/locationThresholds';
 import { haversineDistance } from '@/src/services/locationService';
-import type { LocationType, NearbyLocationResult } from '@/src/types';
+import type { Location, LocationType, NearbyLocationResult } from '@/src/types';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 
 export type PinParentFlowStep = 1 | 2;
 
@@ -81,7 +89,41 @@ export type LocationPinParentTwoStepFlowProps = {
    * `surface` — rows match card surface (default; full-screen Fish now).
    */
   step1ListSurface?: 'surface' | 'canvas';
+
+  /**
+   * Map-tab parity search (In DriftGuide + Map suggestions). Pass `locations` from the store;
+   * omit to hide the field.
+   */
+  driftGuideSearchLocations?: Location[] | null;
+  /** Mapbox `proximity` as [lng, lat] — e.g. GPS or photo anchor. */
+  searchProximityLngLat?: [number, number] | null;
+  /** After picking a Map suggestion: recenters pin; flow fills the search field like the Map tab. */
+  onPickMapGeocodeResult?: (feature: MapboxGeocodeFeature) => void;
+
+  /**
+   * `inScroll` (default) — step-2 primary CTA inside the scroll panel (Fish now).
+   * `footer` — primary CTA fixed under the scroll panel (e.g. import sheet replaces separate Cancel row).
+   */
+  primaryButtonPlacement?: 'inScroll' | 'footer';
 };
+
+function locationToNearbyCandidate(
+  loc: Location,
+  refLat: number,
+  refLng: number,
+): NearbyLocationResult | null {
+  if (loc.latitude == null || loc.longitude == null) return null;
+  return {
+    id: loc.id,
+    name: loc.name,
+    type: loc.type,
+    latitude: loc.latitude,
+    longitude: loc.longitude,
+    status: loc.status || 'verified',
+    distance_km: haversineDistance(refLat, refLng, loc.latitude, loc.longitude),
+    name_similarity: 0,
+  };
+}
 
 /**
  * Map with center pin on top; bottom half switches between
@@ -125,17 +167,72 @@ export function LocationPinParentTwoStepFlow({
   step1CandidatesDisabled = false,
   containerStyle,
   step1ListSurface = 'surface',
+  driftGuideSearchLocations = null,
+  searchProximityLngLat = null,
+  onPickMapGeocodeResult,
+  primaryButtonPlacement = 'inScroll',
 }: LocationPinParentTwoStepFlowProps) {
-  const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { colors, resolvedScheme } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const busy = primaryBusy || interactionDisabled;
   const rowDisabled = busy || step1CandidatesDisabled;
+  const [highlightCatalogPinId, setHighlightCatalogPinId] = useState<string | null>(null);
+
+  const driftSearchEnabled = driftGuideSearchLocations != null;
+  const mapSearch = useMapStyleLocationSearch(
+    driftGuideSearchLocations ?? [],
+    searchProximityLngLat ?? null,
+    driftSearchEnabled,
+  );
+
+  /** Anchor for radius filter: photo/GPS fallback center, else current pin (matches Fish now / import). */
+  const anchorLng = mapFallbackCenter?.[0] ?? longitude;
+  const anchorLat = mapFallbackCenter?.[1] ?? latitude;
+
+  const mapPins = useMemo(() => {
+    const merge = new Map<string, NearbyLocationResult>();
+    for (const c of candidates) {
+      merge.set(c.id, c);
+    }
+    for (const loc of activeLocationsOnly(driftGuideSearchLocations ?? [])) {
+      if (loc.latitude == null || loc.longitude == null) continue;
+      const n = locationToNearbyCandidate(loc, anchorLat, anchorLng);
+      if (!n) continue;
+      if (n.distance_km > PARENT_CANDIDATE_MAX_RADIUS_KM) continue;
+      if (!merge.has(n.id)) merge.set(n.id, n);
+    }
+    return Array.from(merge.values())
+      .sort((a, b) => a.distance_km - b.distance_km)
+      .slice(0, PIN_PARENT_MAP_ROOT_CAP);
+  }, [candidates, driftGuideSearchLocations, anchorLat, anchorLng]);
+
   const columnStyle = edgeToEdgeMap ? [styles.column, { marginHorizontal: -Spacing.lg }] : styles.column;
   const mapSectionStyle =
     mapFixedHeight != null
       ? [styles.mapSection, { height: mapFixedHeight, flex: 0 }]
       : [styles.mapSection, { flex: mapFlex }];
   const listRowBg = step1ListSurface === 'canvas' ? colors.background : colors.surface;
+
+  const primaryInScroll = step === 2 && primaryButtonPlacement !== 'footer';
+  const primaryInFooter = step === 2 && primaryButtonPlacement === 'footer';
+
+  const primaryButtonEl = (
+    <Pressable
+      style={[
+        styles.primaryBtn,
+        primaryInFooter && styles.primaryBtnFooter,
+        busy && styles.primaryBtnDisabled,
+      ]}
+      onPress={onPressPrimary}
+      disabled={busy}
+    >
+      {primaryBusy ? (
+        <ActivityIndicator color={colors.textInverse} />
+      ) : (
+        <Text style={styles.primaryBtnText}>{primaryButtonLabel}</Text>
+      )}
+    </Pressable>
+  );
 
   return (
     <View style={[columnStyle, containerStyle]}>
@@ -152,6 +249,26 @@ export function LocationPinParentTwoStepFlow({
             showBasemapSwitcher={false}
             showHint={false}
             containerStyle={styles.mapInner}
+            catalogMarkers={
+              mapPins.length > 0
+                ? mapPins.map((c) => ({
+                    id: c.id,
+                    latitude: c.latitude,
+                    longitude: c.longitude,
+                    name: c.name,
+                  }))
+                : undefined
+            }
+            onCatalogMarkerPress={
+              mapPins.length > 0
+                ? (id) => {
+                    setHighlightCatalogPinId(id);
+                    const c = mapPins.find((x) => x.id === id);
+                    if (c) onPressCandidate(c);
+                  }
+                : undefined
+            }
+            selectedCatalogMarkerId={highlightCatalogPinId}
           />
         </View>
       </View>
@@ -164,6 +281,99 @@ export function LocationPinParentTwoStepFlow({
           { paddingHorizontal: Spacing.lg, paddingBottom: bottomInsetPadding },
         ]}
       >
+        {driftSearchEnabled ? (
+          <View style={styles.mapSearchBlock}>
+            <TextInput
+              style={[
+                styles.mapSearchInput,
+                mapSearch.searchAtRest
+                  ? styles.mapSearchInputIdle
+                  : mapSearch.searchInputFocused
+                    ? styles.mapSearchInputEditing
+                    : styles.mapSearchInputFilled,
+                !mapSearch.searchAtRest && styles.mapSearchInputCompact,
+              ]}
+              placeholder="Search Locations"
+              placeholderTextColor={
+                resolvedScheme === 'dark' ? '#CBD5E1' : colors.textSecondary
+              }
+              value={mapSearch.searchText}
+              onChangeText={mapSearch.setSearchText}
+              onFocus={mapSearch.onSearchFocus}
+              onBlur={mapSearch.onSearchBlur}
+              returnKeyType="done"
+              editable={!busy}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {mapSearch.showSearchSuggestions ? (
+              <View style={[styles.suggestionsPanel, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+                <ScrollView
+                  style={styles.suggestionsScroll}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled
+                >
+                  {mapSearch.savedLocationMatches.length > 0 ? (
+                    <>
+                      <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
+                      {mapSearch.savedLocationMatches.map((loc) => (
+                        <Pressable
+                          key={`loc-${loc.id}`}
+                          style={styles.suggestionRow}
+                          onPress={() => {
+                            const c = locationToNearbyCandidate(loc, latitude, longitude);
+                            if (!c) return;
+                            mapSearch.setSearchText(loc.name);
+                            mapSearch.closeSuggestionsKeepText();
+                            Keyboard.dismiss();
+                            setHighlightCatalogPinId(c.id);
+                            onPressCandidate(c);
+                          }}
+                          disabled={busy}
+                        >
+                          <Ionicons name="location-outline" size={16} color={colors.primary} />
+                          <Text style={styles.suggestionTitle} numberOfLines={2}>
+                            {loc.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </>
+                  ) : null}
+                  {mapSearch.mapSuggestionsLoading ? (
+                    <View style={styles.suggestionsLoadingRow}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                      <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
+                    </View>
+                  ) : null}
+                  {!mapSearch.mapSuggestionsLoading && mapSearch.mapSuggestions.length > 0 ? (
+                    <>
+                      <Text style={styles.suggestionsSectionLabel}>Map suggestions</Text>
+                      {mapSearch.mapSuggestions.map((f) => (
+                        <Pressable
+                          key={f.id}
+                          style={styles.suggestionRow}
+                          onPress={() => {
+                            if (!onPickMapGeocodeResult) return;
+                            mapSearch.setSearchText(f.place_name);
+                            mapSearch.closeSuggestionsKeepText();
+                            Keyboard.dismiss();
+                            onPickMapGeocodeResult(f);
+                          }}
+                          disabled={busy || !onPickMapGeocodeResult}
+                        >
+                          <Ionicons name="location-outline" size={16} color={colors.primary} />
+                          <Text style={styles.suggestionTitle} numberOfLines={2}>
+                            {f.place_name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </>
+                  ) : null}
+                </ScrollView>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         {step === 1 ? (
           <>
             <Text style={styles.step1Title}>{step1Title}</Text>
@@ -178,12 +388,15 @@ export function LocationPinParentTwoStepFlow({
                     <Pressable
                       key={c.id}
                       style={[styles.parentRow, { backgroundColor: listRowBg }]}
-                      onPress={() => onPressCandidate(c)}
+                      onPress={() => {
+                        setHighlightCatalogPinId(c.id);
+                        onPressCandidate(c);
+                      }}
                       disabled={rowDisabled}
                     >
                       <View style={styles.parentRowText}>
                         <Text style={styles.parentRowName} numberOfLines={2}>
-                          Part of {c.name}
+                          {c.name}
                         </Text>
                         <Text style={styles.parentRowMeta}>{formatProximityKm(rowKm)}</Text>
                       </View>
@@ -246,20 +459,13 @@ export function LocationPinParentTwoStepFlow({
                 </View>
               </>
             ) : null}
-            <Pressable
-              style={[styles.primaryBtn, busy && styles.primaryBtnDisabled]}
-              onPress={onPressPrimary}
-              disabled={busy}
-            >
-              {primaryBusy ? (
-                <ActivityIndicator color={colors.textInverse} />
-              ) : (
-                <Text style={styles.primaryBtnText}>{primaryButtonLabel}</Text>
-              )}
-            </Pressable>
+            {primaryInScroll ? primaryButtonEl : null}
           </>
         )}
       </ScrollView>
+      {primaryInFooter ? (
+        <View style={[styles.primaryFooter, { paddingHorizontal: Spacing.lg }]}>{primaryButtonEl}</View>
+      ) : null}
     </View>
   );
 }
@@ -270,7 +476,21 @@ function formatProximityKm(km: number): string {
   return `${km < 10 ? km.toFixed(1) : Math.round(km)} km away`;
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
+  const glass = {
+    idle:
+      scheme === 'dark'
+        ? { bg: 'rgba(30, 41, 59, 0.72)', border: 'rgba(51, 65, 85, 0.85)' }
+        : { bg: 'rgba(255, 255, 255, 0.42)', border: 'rgba(226, 232, 240, 0.65)' },
+    editing:
+      scheme === 'dark'
+        ? { bg: 'rgba(30, 41, 59, 0.88)', border: 'rgba(71, 85, 105, 0.95)' }
+        : { bg: 'rgba(255, 255, 255, 0.58)', border: 'rgba(226, 232, 240, 0.85)' },
+    filled:
+      scheme === 'dark'
+        ? { bg: 'rgba(51, 65, 85, 0.92)', border: 'rgba(100, 116, 139, 0.95)' }
+        : { bg: 'rgba(255, 255, 255, 0.8)', border: 'rgba(226, 232, 240, 0.95)' },
+  };
   return StyleSheet.create({
     column: {
       flex: 1,
@@ -293,6 +513,90 @@ function createStyles(colors: ThemeColors) {
     },
     panelContent: {
       paddingTop: Spacing.md,
+    },
+    mapSearchBlock: {
+      alignSelf: 'stretch',
+      marginBottom: Spacing.md,
+      zIndex: 4,
+    },
+    mapSearchInput: {
+      width: '100%',
+      borderRadius: BorderRadius.md,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+      borderWidth: 1,
+    },
+    mapSearchInputIdle: {
+      backgroundColor: glass.idle.bg,
+      borderColor: glass.idle.border,
+    },
+    mapSearchInputEditing: {
+      backgroundColor: glass.editing.bg,
+      borderColor: glass.editing.border,
+    },
+    mapSearchInputFilled: {
+      backgroundColor: glass.filled.bg,
+      borderColor: glass.filled.border,
+    },
+    mapSearchInputCompact: {
+      paddingVertical: 5,
+      paddingHorizontal: 12,
+      fontSize: FontSize.sm,
+      borderRadius: BorderRadius.sm,
+    },
+    suggestionsPanel: {
+      marginTop: Spacing.xs,
+      maxHeight: 187,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 4,
+    },
+    suggestionsScroll: {
+      maxHeight: 187,
+    },
+    suggestionsSectionLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textTertiary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      paddingHorizontal: Spacing.sm,
+      paddingTop: Spacing.xs,
+      paddingBottom: 2,
+    },
+    suggestionsLoadingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: Spacing.sm,
+    },
+    suggestionsLoadingText: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+    },
+    suggestionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+      paddingVertical: 6,
+      paddingHorizontal: Spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderLight,
+    },
+    suggestionTitle: {
+      flex: 1,
+      fontSize: FontSize.sm,
+      color: colors.text,
+      fontWeight: '500',
+      lineHeight: 18,
     },
     step1Title: {
       fontSize: FontSize.lg,
@@ -417,12 +721,19 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       marginRight: Spacing.sm,
     },
+    primaryFooter: {
+      flexShrink: 0,
+      paddingTop: Spacing.md,
+    },
     primaryBtn: {
       marginTop: Spacing.xl,
       backgroundColor: colors.primary,
       borderRadius: BorderRadius.md,
       paddingVertical: Spacing.md,
       alignItems: 'center',
+    },
+    primaryBtnFooter: {
+      marginTop: 0,
     },
     primaryBtnDisabled: {
       opacity: 0.7,

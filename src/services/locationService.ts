@@ -122,17 +122,26 @@ async function fetchRootParentCandidatesForRadius(
   lng: number,
   excludeLocationId: string | null,
   radiusKm: number,
+  maxResults: number,
 ): Promise<NearbyLocationResult[]> {
+  const maxR = Number(radiusKm);
+  const rpcLimit = Math.min(200, Math.max(1, Math.floor(maxResults)));
   try {
     const { data, error } = await supabase.rpc('search_nearby_root_locations', {
       search_lat: lat,
       search_lng: lng,
       exclude_location_id: excludeLocationId,
       radius_km: radiusKm,
+      max_results: rpcLimit,
     });
 
     if (!error && Array.isArray(data) && data.length > 0) {
-      return data as NearbyLocationResult[];
+      const rows = (data as NearbyLocationResult[])
+        .filter((r) => Number(r.distance_km) <= maxR)
+        .slice(0, maxResults);
+      if (rows.length > 0) {
+        return rows;
+      }
     }
     if (error) {
       console.warn('search_nearby_root_locations RPC failed, using client search:', error.message);
@@ -141,27 +150,29 @@ async function fetchRootParentCandidatesForRadius(
     console.warn('search_nearby_root_locations RPC threw:', e);
   }
 
-  return clientSideRootParentSearch(lat, lng, excludeLocationId, radiusKm);
+  return clientSideRootParentSearch(lat, lng, excludeLocationId, radiusKm, maxResults);
 }
 
 /**
- * Top-level locations (no parent) nearest to a point within `PARENT_CANDIDATE_MAX_RADIUS_KM` (~100 mi).
- * Pass `excludeLocationId` to omit one row (e.g. just created). Tries RPC, then client Haversine.
- * Does not return roots beyond `maxRadiusKm`; empty array means caller should skip pick-parent UI.
+ * Nearest catalog locations by distance within `PARENT_CANDIDATE_MAX_RADIUS_KM` (~100 mi), including
+ * child spots (rows with `parent_location_id` set). Pass `excludeLocationId` to omit one row.
+ * Tries RPC, then client Haversine. Empty array means caller should skip pick-parent UI.
  */
 export async function searchNearbyRootParentCandidates(
   lat: number,
   lng: number,
   excludeLocationId?: string | null,
   maxRadiusKm: number = PARENT_CANDIDATE_MAX_RADIUS_KM,
+  /** Max rows returned, ordered by distance. Default 3 for short lists; map flows may merge more client-side. */
+  maxResults: number = 3,
 ): Promise<NearbyLocationResult[]> {
   const exclude = excludeLocationId ?? null;
-  let rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, maxRadiusKm);
+  let rows = await fetchRootParentCandidatesForRadius(lat, lng, exclude, maxRadiusKm, maxResults);
   const maxR = Number(maxRadiusKm);
   if (Number.isFinite(maxR)) {
-    rows = rows.filter(r => Number(r.distance_km) <= maxR);
+    rows = rows.filter((r) => Number(r.distance_km) <= maxR);
   }
-  return rows.slice(0, 3);
+  return rows.slice(0, maxResults);
 }
 
 async function clientSideRootParentSearch(
@@ -169,12 +180,12 @@ async function clientSideRootParentSearch(
   lng: number,
   excludeLocationId: string | null,
   radiusKm: number,
+  maxResults: number,
 ): Promise<NearbyLocationResult[]> {
   let q = supabase
     .from('locations')
     .select('*')
     .is('deleted_at', null)
-    .is('parent_location_id', null)
     .not('latitude', 'is', null)
     .not('longitude', 'is', null);
 
@@ -199,7 +210,7 @@ async function clientSideRootParentSearch(
     }))
     .filter(loc => loc.distance_km <= radiusKm)
     .sort((a, b) => a.distance_km - b.distance_km)
-    .slice(0, 3);
+    .slice(0, maxResults);
 }
 
 /** Soft-delete a location the current user created (sets deleted_at / deleted_by). */
