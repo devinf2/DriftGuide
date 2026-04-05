@@ -23,6 +23,7 @@ import { getFlyForCatch } from '@/src/services/sync';
 import {
   buildCompletedTripForImport,
   finalizeImportGroup,
+  batchFinalizeImport,
 } from '@/src/utils/importPastTrips/finalizeImport';
 import { format, parseISO } from 'date-fns';
 import { useRouter } from 'expo-router';
@@ -250,6 +251,17 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '600',
       textAlign: 'center',
     },
+    step1RemoveBtn: {
+      position: 'absolute',
+      top: 4,
+      right: 4,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     primaryBtn: {
       backgroundColor: colors.primary,
       paddingVertical: Spacing.md,
@@ -270,9 +282,10 @@ function createStyles(colors: ThemeColors) {
     thumb: { width: 64, height: 64, borderRadius: BorderRadius.sm, marginRight: Spacing.sm },
     step3CatchThumbStrip: {
       flexDirection: 'row',
-      alignItems: 'center',
+      flexWrap: 'wrap',
       gap: 6,
       marginBottom: Spacing.sm,
+      width: 36 * 2 + 6,
     },
     step3CatchThumbCell: {
       position: 'relative',
@@ -452,6 +465,7 @@ export default function ImportPastTripsScreen() {
   const photos = useImportPastTripsStore((s) => s.photos);
   const groups = useImportPastTripsStore((s) => s.groups);
   const appendPhotos = useImportPastTripsStore((s) => s.appendPhotos);
+  const removePhoto = useImportPastTripsStore((s) => s.removePhoto);
   const prepareStep2FromPhotos = useImportPastTripsStore((s) => s.prepareStep2FromPhotos);
   const splitGroup = useImportPastTripsStore((s) => s.splitGroup);
   const mergeIntoGroup = useImportPastTripsStore((s) => s.mergeIntoGroup);
@@ -466,6 +480,7 @@ export default function ImportPastTripsScreen() {
   const materializeMinimalCatchesForAllGroups = useImportPastTripsStore(
     (s) => s.materializeMinimalCatchesForAllGroups,
   );
+  const deleteCatchAndResetPhotos = useImportPastTripsStore((s) => s.deleteCatchAndResetPhotos);
   const updateGroupEventsAfterEdit = useImportPastTripsStore((s) => s.updateGroupEventsAfterEdit);
   const activeGroupIdForStep4 = useImportPastTripsStore((s) => s.activeGroupIdForStep4);
   const setActiveGroupForStep4 = useImportPastTripsStore((s) => s.setActiveGroupForStep4);
@@ -635,19 +650,18 @@ export default function ImportPastTripsScreen() {
     if (!user?.id) return;
     materializeMinimalCatchesForAllGroups();
     const freshGroups = useImportPastTripsStore.getState().groups;
+    const freshPhotos = useImportPastTripsStore.getState().photos;
     if (!step4Valid(freshGroups)) {
       Alert.alert('Incomplete', 'Mark each photo as scenery or fish before importing.');
       return;
     }
     setImporting(true);
     try {
-      for (const g of freshGroups) {
-        const res = await finalizeImportGroup(g, photos, user.id, fishingType, isConnected);
-        if (!res.ok) {
-          Alert.alert('Import', res.message);
-          setImporting(false);
-          return;
-        }
+      const res = await batchFinalizeImport(freshGroups, freshPhotos, user.id, fishingType, isConnected);
+      if (!res.ok) {
+        Alert.alert('Import', res.message);
+        setImporting(false);
+        return;
       }
       reset();
       router.replace('/journal');
@@ -658,7 +672,6 @@ export default function ImportPastTripsScreen() {
     }
   }, [
     user?.id,
-    photos,
     fishingType,
     isConnected,
     reset,
@@ -720,6 +733,13 @@ export default function ImportPastTripsScreen() {
                       {formatPhotoTakenLabel(p.meta.takenAt)}
                     </Text>
                   </View>
+                  <Pressable
+                    style={styles.step1RemoveBtn}
+                    onPress={() => removePhoto(p.id)}
+                    hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                  >
+                    <Ionicons name="close" size={14} color="#fff" />
+                  </Pressable>
                 </View>
               </View>
             ))}
@@ -829,14 +849,13 @@ export default function ImportPastTripsScreen() {
     selectedPhotoIdsForAction.length >= 2 &&
     selectedPhotoIdsForAction.every((pid) => {
       const st = activeGroup.photoStates[pid];
-      return !st || st.kind === 'untagged';
+      return !st || st.kind === 'untagged' || st.kind === 'catch';
     });
 
   const renderStep3 = () => (
     <>
       <Text style={{ color: colors.textSecondary, marginBottom: Spacing.md }}>
-        Mark Scenery vs Fish. Fish become photo-only catches when you tap Review (no form). Optional: Edit details anytime.
-        Select two or more untagged fish, then Combine selected to merge into one catch.
+        Tag each photo as Fish or Scenery. Tap to select, then Combine Fish to merge.
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
         <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
@@ -862,7 +881,7 @@ export default function ImportPastTripsScreen() {
               const selected = selectedPhotoIdsForAction.includes(pid);
               const isScenery = true;
               return (
-                <View
+                <Pressable
                   key={pid}
                   style={[
                     styles.card,
@@ -870,8 +889,9 @@ export default function ImportPastTripsScreen() {
                       paddingVertical: Spacing.sm,
                       paddingHorizontal: Spacing.md,
                     },
-                    selected && { borderColor: colors.primary },
+                    selected && { borderColor: colors.primary, borderWidth: 2 },
                   ]}
+                  onPress={() => togglePhotoSelectForCombine(pid)}
                 >
                   <View style={styles.fishSceneryToggle}>
                     <Pressable
@@ -907,25 +927,11 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: Spacing.sm,
-                    }}
-                  >
-                    <Pressable
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0 }}
-                      onPress={() => togglePhotoSelectForCombine(pid)}
-                    >
-                      {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
-                      <View style={{ flex: 1, minWidth: 0, marginLeft: ph ? Spacing.sm : 0 }}>
-                        <Text style={{ color: colors.text, fontWeight: '700' }}>Scenery</Text>
-                        <Text style={styles.muted}>Not a catch photo</Text>
-                      </View>
-                    </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm }}>
+                    {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
+                    <Text style={{ color: colors.text, fontWeight: '700', flex: 1 }}>Scenery</Text>
                   </View>
-                </View>
+                </Pressable>
               );
             }
 
@@ -944,7 +950,7 @@ export default function ImportPastTripsScreen() {
                 });
               };
               return (
-                <View
+                <Pressable
                   key={pid}
                   style={[
                     styles.card,
@@ -952,8 +958,9 @@ export default function ImportPastTripsScreen() {
                       paddingVertical: Spacing.sm,
                       paddingHorizontal: Spacing.md,
                     },
-                    selected && { borderColor: colors.primary },
+                    selected && { borderColor: colors.primary, borderWidth: 2 },
                   ]}
+                  onPress={() => togglePhotoSelectForCombine(pid)}
                 >
                   <View style={styles.fishSceneryToggle}>
                     <Pressable
@@ -977,24 +984,8 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                  <Step3CatchDetailsSummary catchEvent={undefined} events={activeGroup.events} styles={styles} />
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: Spacing.sm,
-                    }}
-                  >
-                    <Pressable
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0 }}
-                      onPress={() => togglePhotoSelectForCombine(pid)}
-                    >
-                      {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
-                      <View style={{ flex: 1, minWidth: 0, marginLeft: ph ? Spacing.sm : 0 }}>
-                        <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
-                        <Text style={[styles.muted, { marginTop: Spacing.xs }]}>Edit details to change</Text>
-                      </View>
-                    </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm }}>
+                    <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
                     <Pressable
                       onPress={openEditDetails}
                       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
@@ -1004,7 +995,13 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                </View>
+                  <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                    {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Step3CatchDetailsSummary catchEvent={undefined} events={activeGroup.events} styles={styles} />
+                    </View>
+                  </View>
+                </Pressable>
               );
             }
 
@@ -1030,7 +1027,7 @@ export default function ImportPastTripsScreen() {
               const pid = photoIds[0];
               const ph = photos.find((p) => p.id === pid);
               return (
-                <View
+                <Pressable
                   key={pid}
                   style={[
                     styles.card,
@@ -1038,7 +1035,9 @@ export default function ImportPastTripsScreen() {
                       paddingVertical: Spacing.sm,
                       paddingHorizontal: Spacing.md,
                     },
+                    cardSelected && { borderColor: colors.primary, borderWidth: 2 },
                   ]}
+                  onPress={() => togglePhotoSelectForCombine(pid)}
                 >
                   <View style={styles.fishSceneryToggle}>
                     <Pressable
@@ -1062,21 +1061,8 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                  <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: Spacing.sm,
-                    }}
-                  >
-                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0 }}>
-                      {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
-                      <View style={{ flex: 1, minWidth: 0, marginLeft: ph ? Spacing.sm : 0 }}>
-                        <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
-                        <Text style={[styles.muted, { marginTop: Spacing.xs }]}>Edit details to change</Text>
-                      </View>
-                    </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm }}>
+                    <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
                     <Pressable
                       onPress={openEditDetails}
                       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
@@ -1086,12 +1072,18 @@ export default function ImportPastTripsScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                </View>
+                  <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                    {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
+                    </View>
+                  </View>
+                </Pressable>
               );
             }
 
             return (
-              <View
+              <Pressable
                 key={catchEventId}
                 style={[
                   styles.card,
@@ -1099,8 +1091,11 @@ export default function ImportPastTripsScreen() {
                     paddingVertical: Spacing.sm,
                     paddingHorizontal: Spacing.md,
                   },
-                  cardSelected && { borderColor: colors.primary },
+                  cardSelected && { borderColor: colors.primary, borderWidth: 2 },
                 ]}
+                onPress={() => {
+                  for (const pid of photoIds) togglePhotoSelectForCombine(pid);
+                }}
               >
                 <View
                   style={{
@@ -1111,67 +1106,60 @@ export default function ImportPastTripsScreen() {
                   }}
                 >
                   <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
-                  <Pressable
-                    onPress={openEditDetails}
-                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                  >
-                    <Text style={{ color: colors.primary, fontWeight: '600', fontSize: FontSize.sm }}>
-                      Edit details
-                    </Text>
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.md }}>
+                    <Pressable
+                      onPress={() => deleteCatchAndResetPhotos(activeGroup.id, catchEventId)}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: FontSize.sm }}>
+                        Separate
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={openEditDetails}
+                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                    >
+                      <Text style={{ color: colors.primary, fontWeight: '600', fontSize: FontSize.sm }}>
+                        Edit details
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
-                <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
-                <View style={styles.step3CatchThumbStrip}>
-                  {(() => {
-                    const n = photoIds.length;
-                    const showPlusOnFourth = n > 4;
-                    const extraCount = n - 4;
-                    const slots = Math.min(4, n);
-                    return Array.from({ length: slots }, (_, i) => {
-                      const pid = photoIds[i];
-                      const ph = photos.find((p) => p.id === pid);
-                      const showOverlay = showPlusOnFourth && i === 3;
-                      return (
-                        <View key={pid} style={styles.step3CatchThumbCell}>
-                          {ph ? (
-                            <Image source={{ uri: ph.uri }} style={styles.step3CatchThumbImg} />
-                          ) : null}
-                          {showOverlay ? (
-                            <View style={styles.step3CatchThumbOverlay} pointerEvents="none">
-                              <Text style={styles.step3CatchThumbMoreText}>+{extraCount}</Text>
+                <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                  <View>
+                    <View style={styles.step3CatchThumbStrip}>
+                      {(() => {
+                        const n = photoIds.length;
+                        const showPlus = n >= 5;
+                        const extraCount = n - 3;
+                        const slots = Math.min(4, n);
+                        return Array.from({ length: slots }, (_, i) => {
+                          const pid = photoIds[i];
+                          const ph = photos.find((p) => p.id === pid);
+                          const showOverlay = showPlus && i === 3;
+                          return (
+                            <View key={pid} style={styles.step3CatchThumbCell}>
+                              {ph ? (
+                                <Image source={{ uri: ph.uri }} style={styles.step3CatchThumbImg} />
+                              ) : null}
+                              {showOverlay ? (
+                                <View style={styles.step3CatchThumbOverlay} pointerEvents="none">
+                                  <Text style={styles.step3CatchThumbMoreText}>+{extraCount}</Text>
+                                </View>
+                              ) : null}
                             </View>
-                          ) : null}
-                        </View>
-                      );
-                    });
-                  })()}
+                          );
+                        });
+                      })()}
+                    </View>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
+                  </View>
                 </View>
-              </View>
+              </Pressable>
             );
           })}
-          {activeGroup.photoIds.length > 1 ? (
-            <Pressable
-              style={[
-                styles.primaryBtn,
-                { marginTop: Spacing.md },
-                !step3CombineEnabled ? { opacity: 0.4 } : null,
-              ]}
-              disabled={!step3CombineEnabled}
-              onPress={() => {
-                const sel = selectedPhotoIdsForAction.filter((pid) => {
-                  const st = activeGroup.photoStates[pid];
-                  return !st || st.kind === 'untagged';
-                });
-                if (sel.length < 2) {
-                  Alert.alert('Combine', 'Select at least two untagged fish photos.');
-                  return;
-                }
-                addMinimalCatchForPhotoIds(activeGroup.id, sel);
-              }}
-            >
-              <Text style={styles.primaryBtnText}>Combine selected</Text>
-            </Pressable>
-          ) : null}
         </>
       )}
     </>
@@ -1225,44 +1213,81 @@ export default function ImportPastTripsScreen() {
 
   const renderWizardFooter = () => (
     <View style={[styles.wizardFooter, { paddingBottom: Spacing.md + insets.bottom }]}>
-      <View style={styles.wizardFooterRow}>
-        <Pressable style={[styles.secondaryBtn, { marginTop: 0, flex: 1 }]} onPress={goBackInWizard}>
-          <Text style={{ color: colors.text, fontWeight: '600' }}>Back</Text>
+      {step === 1 ? (
+        <Pressable
+          style={[
+            styles.primaryBtn,
+            { marginTop: 0 },
+            photos.length === 0 && { opacity: 0.5 },
+          ]}
+          disabled={photos.length === 0 || picking}
+          onPress={() => {
+            prepareStep2FromPhotos();
+            setStep(2);
+          }}
+        >
+          <Text style={styles.primaryBtnText}>Next</Text>
         </Pressable>
-        {step === 1 ? (
+      ) : null}
+      {step === 2 ? (
+        <Pressable
+          style={[styles.primaryBtn, { marginTop: 0 }]}
+          onPress={() => {
+            if (!step3Valid(groups)) {
+              Alert.alert('Location required', 'Choose a location for every trip.');
+              return;
+            }
+            setStep(3);
+          }}
+        >
+          <Text style={styles.primaryBtnText}>Next</Text>
+        </Pressable>
+      ) : null}
+      {step === 3 ? (
+        <View style={styles.wizardFooterRow}>
+          {activeGroup && activeGroup.photoIds.length > 1 ? (
+            <Pressable
+              style={[
+                styles.secondaryBtn,
+                { marginTop: 0, flex: 1 },
+                step3CombineEnabled && { backgroundColor: colors.primary + '22', borderColor: colors.primary },
+              ]}
+              disabled={!step3CombineEnabled}
+              onPress={() => {
+                if (!activeGroup) return;
+                const sel = selectedPhotoIdsForAction.filter((pid) => {
+                  const st = activeGroup.photoStates[pid];
+                  return !st || st.kind === 'untagged' || st.kind === 'catch';
+                });
+                if (sel.length < 2) {
+                  Alert.alert('Combine', 'Select at least two fish photos.');
+                  return;
+                }
+                const catchIdsToBreak = new Set<string>();
+                for (const pid of sel) {
+                  const st = activeGroup.photoStates[pid];
+                  if (st?.kind === 'catch') catchIdsToBreak.add(st.catchEventId);
+                }
+                for (const cid of catchIdsToBreak) {
+                  deleteCatchAndResetPhotos(activeGroup.id, cid);
+                }
+                addMinimalCatchForPhotoIds(activeGroup.id, sel);
+              }}
+            >
+              <Text style={{ color: step3CombineEnabled ? colors.primary : colors.textSecondary, fontWeight: '600' }}>
+                Combine Fish
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable
-            style={[
-              styles.primaryBtn,
-              { flex: 2, marginTop: 0 },
-              photos.length === 0 && { opacity: 0.5 },
-            ]}
-            disabled={photos.length === 0 || picking}
+            style={[styles.primaryBtn, { marginTop: 0, flex: 1 }]}
             onPress={() => {
-              prepareStep2FromPhotos();
-              setStep(2);
-            }}
-          >
-            <Text style={styles.primaryBtnText}>Next</Text>
-          </Pressable>
-        ) : null}
-        {step === 2 ? (
-          <Pressable
-            style={[styles.primaryBtn, { flex: 2, marginTop: 0 }]}
-            onPress={() => {
-              if (!step3Valid(groups)) {
-                Alert.alert('Location required', 'Choose a location for every trip.');
+              const activeIdx = groups.findIndex((g) => g.id === activeGroupIdForStep4);
+              if (activeIdx < groups.length - 1) {
+                setActiveGroupForStep4(groups[activeIdx + 1].id);
+                clearPhotoSelection();
                 return;
               }
-              setStep(3);
-            }}
-          >
-            <Text style={styles.primaryBtnText}>Next</Text>
-          </Pressable>
-        ) : null}
-        {step === 3 ? (
-          <Pressable
-            style={[styles.primaryBtn, { flex: 2, marginTop: 0 }]}
-            onPress={() => {
               materializeMinimalCatchesForAllGroups();
               const nextGroups = useImportPastTripsStore.getState().groups;
               if (!step4Valid(nextGroups)) {
@@ -1272,25 +1297,33 @@ export default function ImportPastTripsScreen() {
               setStep(4);
             }}
           >
-            <Text style={styles.primaryBtnText}>Review</Text>
+            <Text style={styles.primaryBtnText}>
+              {(() => {
+                const activeIdx = groups.findIndex((g) => g.id === activeGroupIdForStep4);
+                if (activeIdx < groups.length - 1) {
+                  return `Next day`;
+                }
+                return 'Review';
+              })()}
+            </Text>
           </Pressable>
-        ) : null}
-        {step === 4 ? (
-          <Pressable
-            style={[styles.primaryBtn, { flex: 2, marginTop: 0 }]}
-            onPress={() => void handleImportAll()}
-            disabled={importing}
-          >
-            {importing ? (
-              <ActivityIndicator color={colors.textInverse} />
-            ) : (
-              <Text style={styles.primaryBtnText}>
-                Import {groups.length} trip{groups.length !== 1 ? 's' : ''}
-              </Text>
-            )}
-          </Pressable>
-        ) : null}
-      </View>
+        </View>
+      ) : null}
+      {step === 4 ? (
+        <Pressable
+          style={[styles.primaryBtn, { marginTop: 0 }]}
+          onPress={() => void handleImportAll()}
+          disabled={importing}
+        >
+          {importing ? (
+            <ActivityIndicator color={colors.textInverse} />
+          ) : (
+            <Text style={styles.primaryBtnText}>
+              Import {groups.length} trip{groups.length !== 1 ? 's' : ''}
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
     </View>
   );
 

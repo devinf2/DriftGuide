@@ -14,6 +14,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -99,6 +100,12 @@ export function ProfilePhotoLibrarySection() {
   useEffect(() => {
     loadPhotos();
   }, [loadPhotos]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadPhotos();
+    }, [loadPhotos]),
+  );
 
   useEffect(() => {
     if (!addPhotoUri || !user?.id) return;

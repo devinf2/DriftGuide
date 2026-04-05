@@ -160,6 +160,15 @@ export default function ProfileScreen() {
 
   return (
     <Fragment>
+      {insets.top > 0 && (
+        <View
+          style={[
+            styles.safeAreaFill,
+            { height: insets.top },
+          ]}
+          pointerEvents="none"
+        />
+      )}
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
@@ -362,6 +371,14 @@ export default function ProfileScreen() {
 
 function createProfileStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    safeAreaFill: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.background,
+      zIndex: 10,
+    },
     container: { flex: 1, backgroundColor: colors.background },
     content: {
       paddingHorizontal: Spacing.md,

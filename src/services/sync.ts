@@ -538,6 +538,33 @@ export async function fetchPlannedTripsFromCloud(userId: string): Promise<Trip[]
 
 export async function deleteTripFromCloud(tripId: string): Promise<boolean> {
   try {
+    // Remove photos linked to this trip from storage + photos table
+    const { data: photos } = await supabase
+      .from('photos')
+      .select('id, url')
+      .eq('trip_id', tripId);
+
+    if (photos && photos.length > 0) {
+      const storagePaths = photos
+        .map((p: { url: string }) => {
+          try {
+            const u = new URL(p.url);
+            const match = u.pathname.match(/\/storage\/v1\/object\/public\/[^/]+\/(.+)/);
+            return match ? match[1] : null;
+          } catch { return null; }
+        })
+        .filter(Boolean) as string[];
+
+      if (storagePaths.length > 0) {
+        await supabase.storage.from('photos').remove(storagePaths).catch(() => {});
+      }
+
+      await supabase
+        .from('photos')
+        .delete()
+        .eq('trip_id', tripId);
+    }
+
     const { error: eventsError } = await supabase
       .from('trip_events')
       .delete()
