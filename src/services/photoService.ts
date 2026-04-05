@@ -239,6 +239,25 @@ export async function uploadFlyPhoto(userId: string, uri: string): Promise<strin
   return publicUrlData.publicUrl;
 }
 
+/**
+ * Upload a local file to Supabase Storage and return the public URL.
+ * Does NOT insert a row into the photos table (caller handles that via RPC or direct insert).
+ */
+export async function uploadPhotoToStorage(
+  userId: string,
+  uri: string,
+): Promise<{ path: string; url: string }> {
+  const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
+  const path = `photos/${userId}/${uuidv4()}.${ext}`;
+  const body = await readFileAsArrayBuffer(uri);
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, body, { contentType: getMimeType(ext), upsert: false });
+  if (uploadError) throw uploadError;
+  const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(uploadData.path);
+  return { path: uploadData.path, url: publicUrlData.publicUrl };
+}
+
 function getMimeType(ext: string): string {
   switch (ext) {
     case 'jpg':

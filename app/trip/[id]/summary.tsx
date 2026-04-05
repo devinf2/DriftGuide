@@ -193,9 +193,13 @@ export default function TripSummaryScreen() {
 
   const handleDeleteTrip = () => {
     if (!id) return;
+    const photoCount = tripPhotos.length;
+    const photoWarning = photoCount > 0
+      ? `\n\n${photoCount} photo${photoCount === 1 ? '' : 's'} associated with this trip will be permanently deleted.`
+      : '';
     Alert.alert(
       'Delete Trip',
-      `Remove this trip from your journal? This cannot be undone.`,
+      `Remove this trip from your journal? This cannot be undone.${photoWarning}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {

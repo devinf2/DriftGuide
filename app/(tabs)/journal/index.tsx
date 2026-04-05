@@ -19,7 +19,7 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format, isAfter, startOfMonth, startOfWeek, startOfYear } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Dimensions,
@@ -134,7 +134,7 @@ function JournalTripCarousel({
   );
 }
 
-function JournalTripGridCard({
+const JournalTripGridCard = memo(function JournalTripGridCard({
   trip,
   imageUrls,
   cardWidth,
@@ -183,7 +183,16 @@ function JournalTripGridCard({
       </View>
     </Pressable>
   );
-}
+}, (prev, next) => {
+  if (prev.trip.id !== next.trip.id) return false;
+  if (prev.trip.total_fish !== next.trip.total_fish) return false;
+  if (prev.cardWidth !== next.cardWidth) return false;
+  if (prev.imageUrls.length !== next.imageUrls.length) return false;
+  for (let i = 0; i < prev.imageUrls.length; i++) {
+    if (prev.imageUrls[i] !== next.imageUrls[i]) return false;
+  }
+  return true;
+});
 
 interface LocationGroup {
   locationId: string;
@@ -255,6 +264,14 @@ export default function JournalScreen() {
     await loadJournalData();
     setRefreshing(false);
   }, [loadJournalData]);
+
+  const tripPhotoUrlsMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const trip of allTrips) {
+      map[trip.id] = imageUrlsForTrip(trip.id, allPhotos);
+    }
+    return map;
+  }, [allTrips, allPhotos]);
 
   const filteredTrips = useMemo(() => {
     if (dateRange === 'all') return allTrips;
@@ -445,14 +462,14 @@ export default function JournalScreen() {
     ({ item }: { item: Trip }) => (
       <JournalTripGridCard
         trip={item}
-        imageUrls={imageUrlsForTrip(item.id, allPhotos)}
+        imageUrls={tripPhotoUrlsMap[item.id] ?? []}
         cardWidth={cardWidth}
         onPress={() => router.push(`/journal/${item.id}`)}
         colors={colors}
         styles={styles}
       />
     ),
-    [allPhotos, cardWidth, router, colors, styles],
+    [tripPhotoUrlsMap, cardWidth, router, colors, styles],
   );
 
   if (loading) {

@@ -49,6 +49,7 @@ interface ImportPastTripsState {
   reset: () => void;
   setStep: (step: number) => void;
   appendPhotos: (more: ImportPhoto[]) => void;
+  removePhoto: (photoId: string) => void;
   prepareStep2FromPhotos: () => void;
   splitGroup: (groupId: string, photoIdsToMove: string[]) => void;
   /** Moves all photos from `fromGroupId` into `intoGroupId`, then removes the source group. */
@@ -139,6 +140,11 @@ export const useImportPastTripsStore = create<ImportPastTripsState>((set, get) =
   appendPhotos: (more) =>
     set((state) => ({
       photos: [...state.photos, ...more],
+    })),
+
+  removePhoto: (photoId) =>
+    set((state) => ({
+      photos: state.photos.filter((p) => p.id !== photoId),
     })),
 
   prepareStep2FromPhotos: () => {
