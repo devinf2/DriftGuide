@@ -35,7 +35,7 @@ import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 
-type TabKey = 'fishing' | 'photos' | 'conditions' | 'ai' | 'map';
+type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
 
 /** After `router.replace` (e.g. survey → summary), there may be no stack entry — `back()` throws in dev. */
 function exitTripSummary(router: ReturnType<typeof useRouter>) {
@@ -74,6 +74,7 @@ export default function TripSummaryScreen() {
   /** Map tab: catch pin tapped when there is no photo (full-screen flow uses `fullScreenPhoto`) */
   const [mapCatchDetailEvent, setMapCatchDetailEvent] = useState<TripEvent | null>(null);
   const [keepOfflinePinned, setKeepOfflinePinned] = useState(false);
+  const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
 
   useEffect(() => {
     setJournalEditMode(false);
@@ -377,6 +378,23 @@ export default function TripSummaryScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={tripAiSummaryModalVisible}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
+        onRequestClose={() => setTripAiSummaryModalVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top', 'bottom']}>
+          <View style={styles.summaryAiModalHeader}>
+            <Text style={styles.summaryAiModalTitle}>Trip guide</Text>
+            <Pressable onPress={() => setTripAiSummaryModalVisible(false)} hitSlop={12}>
+              <Text style={styles.summaryAiModalDone}>Done</Text>
+            </Pressable>
+          </View>
+          <AIGuideTab trip={trip} events={events} />
+        </SafeAreaView>
+      </Modal>
+
       {/* Header */}
       <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
         <Pressable onPress={() => exitTripSummary(router)}>
@@ -448,13 +466,12 @@ export default function TripSummaryScreen() {
         />
       </View>
 
-      {/* Tab Bar — same 5 tabs as active trip: Fishing, Photos, Conditions, AI Guide, Map */}
+      {/* Tab Bar — aligned with active trip: Fishing, Photos, Conditions, Map (trip guide is a modal) */}
       <View style={styles.tabBar}>
         {([
           { key: 'fishing' as TabKey, label: 'Fishing' },
           { key: 'photos' as TabKey, label: 'Photos' },
           { key: 'conditions' as TabKey, label: 'Conditions' },
-          { key: 'ai' as TabKey, label: 'AI Guide' },
           { key: 'map' as TabKey, label: 'Map' },
         ]).map((tab) => (
           <Pressable
@@ -562,7 +579,6 @@ export default function TripSummaryScreen() {
           })()}
         </ConditionsTab>
       )}
-      {activeTab === 'ai' && <AIGuideTab trip={trip} events={events} />}
       {activeTab === 'map' && (
         <SummaryMapTab
           trip={trip}
@@ -584,6 +600,15 @@ export default function TripSummaryScreen() {
           onPersist={persistTripPins}
         />
       )}
+
+      <Pressable
+        style={[styles.summaryAiFab, { bottom: Spacing.lg + insets.bottom }]}
+        onPress={() => setTripAiSummaryModalVisible(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Open trip guide"
+      >
+        <MaterialIcons name="chat" size={26} color={Colors.textInverse} />
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -835,6 +860,42 @@ function getEventDescription(event: TripEvent): string {
 /* ─── Styles ─── */
 
 const styles = StyleSheet.create({
+  summaryAiFab: {
+    position: 'absolute',
+    right: Spacing.md,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.28,
+    shadowRadius: 4,
+    zIndex: 20,
+  },
+  summaryAiModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  summaryAiModalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  summaryAiModalDone: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
   container: {
     flex: 1,
     backgroundColor: Colors.background,

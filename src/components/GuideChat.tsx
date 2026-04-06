@@ -224,7 +224,7 @@ export default function GuideChat({
 
   const sendMessage = async () => {
     const question = input.trim();
-    if (!question || loading || !netOn) return;
+    if (!question || loading) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -308,7 +308,7 @@ export default function GuideChat({
         {!netOn && messages.length === 0 ? <OfflineFallbackGuide /> : null}
         {!netOn ? (
           <Text style={styles.offlineChatHint}>
-            Reconnect for live answers from the guide. The tips above work without a signal.
+            Offline: replies use your trip, cached conditions, and saved catalog only. Reconnect for live AI and fresh data.
           </Text>
         ) : null}
 
@@ -352,17 +352,17 @@ export default function GuideChat({
           value={input}
           onChangeText={setInput}
           placeholder={
-            netOn ? 'Ask the AI Guide about fishing, tips, etc.' : 'Offline — reconnect to chat…'
+            netOn ? 'Ask the AI Guide about fishing, tips, etc.' : 'Offline guide — ask using saved data…'
           }
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
-          editable={netOn && !loading}
+          editable={!loading}
         />
         <Pressable
-          style={[styles.sendButton, (!input.trim() || loading || !netOn) && styles.sendButtonDisabled]}
+          style={[styles.sendButton, (!input.trim() || loading) && styles.sendButtonDisabled]}
           onPress={sendMessage}
-          disabled={!input.trim() || loading || !netOn}
+          disabled={!input.trim() || loading}
         >
           <Text style={styles.sendButtonText}>Ask</Text>
         </Pressable>
