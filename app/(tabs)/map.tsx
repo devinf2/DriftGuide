@@ -32,6 +32,11 @@ import {
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { useAuthStore } from '@/src/stores/authStore';
+import { loadOfflineLocationsSnapshot } from '@/src/services/offlineLocationSnapshot';
+import { mergeLocationsById } from '@/src/utils/mergeLocations';
 
 /** Reserve right edge for Mapbox’s top-right compass (diameter + margin). */
 const MAP_SEARCH_COMPASS_CLEARANCE = 52;
@@ -215,9 +220,13 @@ function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
 export default function MapTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
+  const { isConnected } = useNetworkStatus();
+  const user = useAuthStore((s) => s.user);
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const { locations, fetchLocations } = useLocationStore();
+  const [offlineSnap, setOfflineSnap] = useState<Location[]>([]);
   const setMapAddLocationSheetActive = useAddLocationFlowStore((s) => s.setMapSheetActive);
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -247,6 +256,19 @@ export default function MapTabScreen() {
     useCallback(() => {
       if (locations.length === 0) void fetchLocations();
     }, [locations.length, fetchLocations]),
+  );
+
+  useEffect(() => {
+    if (isConnected || !user?.id) {
+      setOfflineSnap([]);
+      return;
+    }
+    void loadOfflineLocationsSnapshot(user.id).then(setOfflineSnap);
+  }, [isConnected, user?.id]);
+
+  const mapDisplayLocations = useMemo(
+    () => mergeLocationsById(locations, offlineSnap),
+    [locations, offlineSnap],
   );
 
   useEffect(() => {
@@ -321,9 +343,9 @@ export default function MapTabScreen() {
   const savedLocationMatches = useMemo(
     () =>
       searchText.trim().length >= 2
-        ? filterLocationsByQuery(activeLocationsOnly(locations), searchText)
+        ? filterLocationsByQuery(activeLocationsOnly(mapDisplayLocations), searchText)
         : [],
-    [locations, searchText],
+    [mapDisplayLocations, searchText],
   );
 
   const showSearchSuggestions =
@@ -386,7 +408,7 @@ export default function MapTabScreen() {
   const catalogMarkers = useMemo(
     () =>
       buildCatalogMapboxMarkers(
-        locations,
+        mapDisplayLocations,
         (loc) => {
           if (addingLocation) endAddLocation();
           router.push(`/spot/${loc.id}`);
@@ -399,7 +421,7 @@ export default function MapTabScreen() {
         },
       ),
     [
-      locations,
+      mapDisplayLocations,
       router,
       addingLocation,
       endAddLocation,
@@ -480,7 +502,7 @@ export default function MapTabScreen() {
         style={[
           styles.headerOverlay,
           {
-            paddingTop: insets.top + Spacing.sm,
+            paddingTop: effectiveTop + Spacing.sm,
             paddingLeft: Spacing.lg + insets.left,
             paddingRight: Spacing.lg + insets.right,
           },

@@ -57,7 +57,7 @@ export interface AIContext {
   recentEvents: TripEvent[];
   timeOfDay: string;
   season: string;
-  /** User's fly box — prefer recommending from these when appropriate */
+  /** User's fly box — context for the model; recommendations are not limited to these patterns */
   userFlies?: Fly[] | null;
   /**
    * DriftGuide DB context: matched catalog waters + community & user catch aggregates.
@@ -292,12 +292,12 @@ function buildFlyRecommendationPrompt(context: AIContext): string {
   }
 
   if (context.userFlies && context.userFlies.length > 0) {
-    lines.push('', "--- Angler's fly box (default: pick from here when it makes sense) ---");
+    lines.push('', "--- Angler's fly box (for reference only — not a limit) ---");
     lines.push(
-      'Priority: when one or more of these flies fits current season, water, weather, and what has been tried on this trip, recommend from this list using the exact pattern name (and size/color when listed).',
+      'These are flies they own. Use the list to align size/color when you recommend a pattern they also have, but choose the single best fly or two-fly rig for conditions and this trip even if it is NOT in the box.',
     );
     lines.push(
-      'Not a hard rule: if every box fly is a poor match (wrong tactic, season, flow, clarity, or hatch timing), ignore the box and recommend the best fly or two-fly rig from general knowledge — including patterns not listed. Say briefly in "reason" when your pick is outside the box and why.',
+      'Do not restrict recommendations to this list. If the best answer is a pattern they do not own, recommend it anyway and mention in "reason" that they may need to tie one on or add it to the box.',
     );
     context.userFlies.forEach(f => {
       const parts = [f.name];
@@ -309,7 +309,12 @@ function buildFlyRecommendationPrompt(context: AIContext): string {
   }
 
   lines.push('', 'Respond with ONLY valid JSON. For a single fly: {"pattern": "Name", "size": 18, "color": "Color", "reason": "Brief reason", "confidence": 0.8}');
-  lines.push('For a two-fly rig add: "pattern2", "size2", "color2" (e.g. dry + dropper). Example: {"pattern": "Parachute Adams", "size": 16, "color": "Gray", "pattern2": "Zebra Midge", "size2": 20, "color2": "Black", "reason": "Dry-dropper for morning", "confidence": 0.85}');
+  lines.push(
+    'For a two-fly rig add: "pattern2", "size2", "color2" (e.g. dry + dropper). Example: {"pattern": "Parachute Adams", "size": 16, "color": "Gray", "pattern2": "Zebra Midge", "size2": 20, "color2": "Black", "reason": "Dry-dropper for morning", "confidence": 0.85}',
+  );
+  lines.push(
+    'Default: when the angler has only ONE fly on the rig and conditions suit a visible dry or hopper (morning through evening, non-winter), include pattern2 as a small nymph or midge dropper unless a single-fly switch is clearly better. Omit pattern2 only when two flies would be redundant.',
+  );
 
   return lines.join('\n');
 }
@@ -547,6 +552,123 @@ function applyUserFlyCatalogToRecommendation(rec: NextFlyRecommendation, userFli
   return out;
 }
 
+/**
+ * When conflict resolution replaces the primary fly, keep the model's dropper if it does not duplicate
+ * the rig or the new primary (names only; size/color ignored).
+ */
+function mergeOriginalDropperIfClean(
+  next: NextFlyRecommendation,
+  original: NextFlyRecommendation,
+  currentPrimaryLabel: string | null,
+  currentSecondaryLabel: string | null,
+): NextFlyRecommendation {
+  const d = original.pattern2?.trim();
+  if (!d) return next;
+  if (flyPatternsMatch(d, currentPrimaryLabel) || flyPatternsMatch(d, currentSecondaryLabel)) return next;
+  if (flyPatternsMatch(d, next.pattern)) return next;
+  return {
+    ...next,
+    pattern2: original.pattern2,
+    size2: original.size2 ?? null,
+    color2: original.color2 ?? null,
+    fly_id2: original.fly_id2,
+    fly_color_id2: original.fly_color_id2,
+    fly_size_id2: original.fly_size_id2,
+  };
+}
+
+function pickNymphishFromBoxExcluding(
+  userFlies: Fly[] | null | undefined,
+  excludePatterns: (string | null | undefined)[],
+): { pattern: string; size: number; color: string } | null {
+  if (!userFlies?.length) return null;
+  const hints = ['midge', 'nymph', 'pt', 'pheasant', 'copper', 'zebra', 'perdigon', 'jig', 'hare', 'stone'];
+  for (const f of userFlies) {
+    const n = f.name.toLowerCase();
+    if (!hints.some((h) => n.includes(h))) continue;
+    if (excludePatterns.some((ex) => flyPatternsMatch(f.name, ex))) continue;
+    return { pattern: f.name, size: f.size ?? 18, color: f.color ?? 'Natural' };
+  }
+  return null;
+}
+
+/** Pick a practical dropper nymph that is not the same pattern as the point fly (normalized name compare). */
+function pickSyntheticDropperPatternExcluding(
+  primaryPattern: string,
+  userFlies: Fly[] | null | undefined,
+): { pattern: string; size: number; color: string } {
+  const exclude = [primaryPattern];
+  const fromBox = pickNymphishFromBoxExcluding(userFlies, exclude);
+  if (fromBox) return fromBox;
+  const fallbacks: { pattern: string; size: number; color: string }[] = [
+    { pattern: 'Zebra Midge', size: 20, color: 'Black' },
+    { pattern: 'Copper John', size: 18, color: 'Red' },
+    { pattern: 'Pheasant Tail', size: 18, color: 'Natural' },
+    { pattern: 'Brassie', size: 20, color: 'Natural' },
+    { pattern: 'San Juan Worm', size: 14, color: 'Pink' },
+  ];
+  for (const fb of fallbacks) {
+    if (!flyPatternsMatch(fb.pattern, primaryPattern)) return fb;
+  }
+  return { pattern: 'Zebra Midge', size: 22, color: 'Black' };
+}
+
+/**
+ * When Try Next has no server dropper, add a synthetic dropper for display/actions (e.g. user opened the dropper row).
+ * Ignores season / time-of-day gates so the banner can show Primary + Dropper immediately.
+ */
+export function mergeTryNextWithSyntheticDropperIfMissing(
+  rec: NextFlyRecommendation,
+  userFlies: Fly[] | null | undefined,
+): NextFlyRecommendation {
+  if (rec.pattern2?.trim()) {
+    return applyUserFlyCatalogToRecommendation(rec, userFlies ?? null);
+  }
+  const pick = pickSyntheticDropperPatternExcluding(rec.pattern, userFlies);
+  const baseReason = rec.reason.trim();
+  const sep = baseReason.endsWith('.') ? '' : '.';
+  const merged: NextFlyRecommendation = {
+    ...rec,
+    pattern2: pick.pattern,
+    size2: pick.size,
+    color2: pick.color,
+    reason: `${baseReason}${sep} Add ${pick.pattern} as a short dropper below your point fly.`,
+  };
+  return applyUserFlyCatalogToRecommendation(merged, userFlies ?? null);
+}
+
+/**
+ * If Try Next has no dropper but the angler is on a single fly, add a practical dropper so the picker can
+ * show Primary + Dropper actions (matches product expectation for dry-dropper windows).
+ */
+/** Exported for offline trip recommendation path (trip store) so Try Next matches online enrichment. */
+export function enrichTryNextWithSuggestedDropper(rec: NextFlyRecommendation, ctx: AIContext): NextFlyRecommendation {
+  let r = { ...rec };
+  if (r.pattern2?.trim() || ctx.currentFly2?.trim()) {
+    return applyUserFlyCatalogToRecommendation(r, ctx.userFlies ?? null);
+  }
+  if (ctx.season === 'winter') {
+    return applyUserFlyCatalogToRecommendation(r, ctx.userFlies ?? null);
+  }
+  const tod = ctx.timeOfDay;
+  const slot =
+    tod === 'early morning' || tod === 'late morning' || tod === 'afternoon' || tod === 'evening';
+  if (!slot) {
+    return applyUserFlyCatalogToRecommendation(r, ctx.userFlies ?? null);
+  }
+  const pick = pickSyntheticDropperPatternExcluding(r.pattern, ctx.userFlies);
+  const baseReason = r.reason.trim();
+  const sep = baseReason.endsWith('.') ? '' : '.';
+  r = {
+    ...r,
+    pattern2: pick.pattern,
+    size2: pick.size,
+    color2: pick.color,
+    reason: `${baseReason}${sep} Add ${pick.pattern} as a short dropper below your point fly.`,
+  };
+  return applyUserFlyCatalogToRecommendation(r, ctx.userFlies ?? null);
+}
+
 /** If "try next" repeats the rig (ignoring size/color), swap using trip catch history, fly box, or generic alternates. */
 function resolveTryNextIfConflictsRig(
   rec: NextFlyRecommendation,
@@ -576,8 +698,38 @@ function resolveTryNextIfConflictsRig(
         reason: `${pattern} fooled fish earlier on this trip — worth switching to it.`,
         confidence: Math.min(0.88, rec.confidence + 0.05),
       };
-      return applyUserFlyCatalogToRecommendation(next, userFlies ?? null);
+      return applyUserFlyCatalogToRecommendation(
+        mergeOriginalDropperIfClean(next, rec, currentPrimaryLabel, currentSecondaryLabel),
+        userFlies ?? null,
+      );
     }
+  }
+
+  /** Condition-style alternates first so Try Next is not effectively limited to the angler's box when the model duplicates the rig. */
+  const FALLBACK_ALTS: readonly { pattern: string; size: number; color: string; reason: string }[] = [
+    { pattern: 'RS2', size: 22, color: 'Gray', reason: 'Different silhouette and profile — good when you need a real change.' },
+    { pattern: 'Zebra Midge', size: 20, color: 'Black', reason: 'Small subsurface change-up that often draws strikes.' },
+    { pattern: 'Pheasant Tail Nymph', size: 18, color: 'Natural', reason: 'Classic nymph profile as an alternative to what is on the line.' },
+    { pattern: 'Copper John', size: 16, color: 'Copper', reason: 'Weight and flash — a distinct look from most dries and soft hackles.' },
+  ];
+
+  for (const alt of FALLBACK_ALTS) {
+    if (exclude.has(normalizeFlyPatternKey(alt.pattern))) continue;
+    return applyUserFlyCatalogToRecommendation(
+      mergeOriginalDropperIfClean(
+        {
+          pattern: alt.pattern,
+          size: alt.size,
+          color: alt.color,
+          reason: alt.reason,
+          confidence: 0.68,
+        },
+        rec,
+        currentPrimaryLabel,
+        currentSecondaryLabel,
+      ),
+      userFlies ?? null,
+    );
   }
 
   if (userFlies?.length) {
@@ -594,39 +746,26 @@ function resolveTryNextIfConflictsRig(
         fly_color_id: f.fly_color_id ?? undefined,
         fly_size_id: f.fly_size_id ?? undefined,
       };
-      return next;
+      return applyUserFlyCatalogToRecommendation(
+        mergeOriginalDropperIfClean(next, rec, currentPrimaryLabel, currentSecondaryLabel),
+        userFlies ?? null,
+      );
     }
   }
 
-  const FALLBACK_ALTS: readonly { pattern: string; size: number; color: string; reason: string }[] = [
-    { pattern: 'RS2', size: 22, color: 'Gray', reason: 'Different silhouette and profile — good when you need a real change.' },
-    { pattern: 'Zebra Midge', size: 20, color: 'Black', reason: 'Small subsurface change-up that often draws strikes.' },
-    { pattern: 'Pheasant Tail Nymph', size: 18, color: 'Natural', reason: 'Classic nymph profile as an alternative to what is on the line.' },
-    { pattern: 'Copper John', size: 16, color: 'Copper', reason: 'Weight and flash — a distinct look from most dries and soft hackles.' },
-  ];
-
-  for (const alt of FALLBACK_ALTS) {
-    if (exclude.has(normalizeFlyPatternKey(alt.pattern))) continue;
-    return applyUserFlyCatalogToRecommendation(
-      {
-        pattern: alt.pattern,
-        size: alt.size,
-        color: alt.color,
-        reason: alt.reason,
-        confidence: 0.68,
-      },
-      userFlies ?? null,
-    );
-  }
-
   return applyUserFlyCatalogToRecommendation(
-    {
-      pattern: 'Soft Hackle',
-      size: 16,
-      color: 'Partridge',
-      reason: 'Movement on the swing or a soft dead-drift can break a stale pattern.',
-      confidence: 0.65,
-    },
+    mergeOriginalDropperIfClean(
+      {
+        pattern: 'Soft Hackle',
+        size: 16,
+        color: 'Partridge',
+        reason: 'Movement on the swing or a soft dead-drift can break a stale pattern.',
+        confidence: 0.65,
+      },
+      rec,
+      currentPrimaryLabel,
+      currentSecondaryLabel,
+    ),
     userFlies ?? null,
   );
 }
@@ -639,6 +778,8 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
     context.userFlies ?? null,
     context.currentFly2 ?? null,
   );
+
+  const finish = (r: NextFlyRecommendation) => enrichTryNextWithSuggestedDropper(r, context);
 
   const regionLabel =
     context.guideRegionLabel ||
@@ -658,7 +799,7 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
   const contentFromEdge = edgeText?.trim() || null;
 
   if (!contentFromEdge && !(await canUseClientOpenAiFallback())) {
-    return fallback;
+    return finish(fallback);
   }
 
   const parseRec = (content: string): NextFlyRecommendation | null => {
@@ -692,11 +833,11 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
 
   if (contentFromEdge) {
     const fromEdge = parseRec(contentFromEdge);
-    if (fromEdge) return fromEdge;
+    if (fromEdge) return finish(fromEdge);
   }
 
   if (!(await canUseClientOpenAiFallback())) {
-    return fallback;
+    return finish(fallback);
   }
 
   try {
@@ -712,7 +853,7 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
           {
             role: 'system',
             content:
-              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Prefer the angler\'s fly box when it fits conditions; if none fit well, recommend the best pattern anyway (may be outside the box) and say so briefly in reason.',
+              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Recommend the best fly or two-fly rig for conditions and the trip — not limited to patterns in the angler\'s box. Use the box list only to match names/sizes when helpful; if the best pick is not in the box, say so briefly in reason.',
           },
           { role: 'user', content: buildFlyRecommendationPrompt(context) },
         ],
@@ -723,10 +864,10 @@ export async function getSmartFlyRecommendation(context: AIContext): Promise<Nex
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content?.trim();
-    if (!content) return fallback;
-    return parseRec(content) ?? fallback;
+    if (!content) return finish(fallback);
+    return finish(parseRec(content) ?? fallback);
   } catch {
-    return fallback;
+    return finish(fallback);
   }
 }
 
@@ -1621,9 +1762,9 @@ export async function getFlyOfTheDay(
     lines.push(`Local success: ${options.locationSuccessSummary}`);
   }
   if (options?.userFlies && options.userFlies.length > 0) {
-    lines.push('', "Angler's fly box (prefer these when they fit conditions; otherwise recommend the best fly anyway):");
+    lines.push('', "Angler's fly box (reference only — not a limit on what you may recommend):");
     lines.push(
-      'If no box fly is a good match for today, pick from general knowledge and note briefly in reason that it may not be in the box.',
+      'Pick the best pattern for today even if it is not listed; if it is outside the box, say so briefly in reason.',
     );
     options.userFlies.forEach(f => {
       lines.push(`- ${f.name}${f.size ? ` #${f.size}` : ''}${f.color ? ` (${f.color})` : ''}`);
@@ -1679,7 +1820,7 @@ export async function getFlyOfTheDay(
           {
             role: 'system',
             content:
-              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Prefer the angler\'s fly box when it fits; if not, recommend the best fly anyway.',
+              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Recommend the best fly for conditions — not limited to the angler\'s box; use the box list only when helpful.',
           },
           { role: 'user', content: promptUser },
         ],

@@ -3,8 +3,19 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Location } from '@/src/types';
 import { supabase } from '@/src/services/supabase';
+import {
+  filterLocationsByHomeState,
+  loadOfflineLocationsSnapshot,
+  saveOfflineLocationsSnapshot,
+} from '@/src/services/offlineLocationSnapshot';
+import { useAuthStore } from '@/src/stores/authStore';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly, isLocationActive } from '@/src/utils/locationVisibility';
+import { withTimeout } from '@/src/utils/promiseTimeout';
+import { mergeLocationsById } from '@/src/utils/mergeLocations';
+import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
+
+const LOCATION_FETCH_MS = 12_000;
 
 interface LocationState {
   locations: Location[];
@@ -35,17 +46,35 @@ export const useLocationStore = create<LocationState>()(
       fetchLocations: async () => {
         set({ isLoading: true });
         try {
-          const { data, error } = await supabase
-            .from('locations')
-            .select('*')
-            .is('deleted_at', null)
-            .order('name');
+          const { data, error } = await withTimeout(
+            (async () =>
+              supabase.from('locations').select('*').is('deleted_at', null).order('name'))(),
+            LOCATION_FETCH_MS,
+          );
 
           if (!error && data) {
-            set({ locations: activeLocationsOnly(data as Location[]) });
+            const list = activeLocationsOnly(data as Location[]);
+            set({ locations: list });
+            const uid = useAuthStore.getState().user?.id;
+            const home = useAuthStore.getState().profile?.home_state;
+            if (uid && home?.trim()) {
+              const forSnap = filterLocationsByHomeState(list, home);
+              await saveOfflineLocationsSnapshot(uid, forSnap);
+            }
+          } else {
+            throw new Error(error?.message ?? 'fetch failed');
           }
         } catch (error) {
           console.error('Error fetching locations:', error);
+          const uid = useAuthStore.getState().user?.id;
+          if (uid) {
+            const snap = await loadOfflineLocationsSnapshot(uid);
+            const dl = await getLocationsForOfflineStart();
+            const merged = mergeLocationsById(snap, dl);
+            if (merged.length) {
+              set({ locations: merged });
+            }
+          }
         } finally {
           set({ isLoading: false });
         }

@@ -43,11 +43,12 @@ import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox'
 import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
 import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
 import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/photoService';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -56,6 +57,7 @@ import {
   AIQueryData,
   CatchData,
   Fly,
+  FlyCatalog,
   FlyChangeData,
   NoteData,
   Photo,
@@ -74,7 +76,6 @@ import {
   timestampBetween,
   upsertEventSorted,
 } from '@/src/utils/journalTimeline';
-import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
 import { tripMapDefaultCenterCoordinate, tripMapDefaultZoom } from '@/src/utils/mapViewport';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -94,6 +95,7 @@ export default function TripDashboardScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { isConnected } = useNetworkStatus();
   const {
     activeTrip, events, fishCount, currentFly, currentFly2, nextFlyRecommendation,
@@ -108,7 +110,6 @@ export default function TripDashboardScreen() {
   const userProxRefForAI = useRef<[number, number] | null>(null);
 
   const [activeTab, setActiveTab] = useState<TabKey>('fish');
-  const [elapsed, setElapsed] = useState('0m');
   const [showFlyPicker, setShowFlyPicker] = useState(false);
   const [flyPickerEditEvent, setFlyPickerEditEvent] = useState<TripEvent | null>(null);
   const [showNoteInput, setShowNoteInput] = useState(false);
@@ -150,6 +151,7 @@ export default function TripDashboardScreen() {
   const aiScrollRef = useRef<ScrollView>(null);
 
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
+  const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
   const conditionsFetched = useRef(false);
   /** One automatic "select fly" prompt per trip id (dismiss without picking does not re-prompt). */
   const autoFlyPromptedForTripRef = useRef<string | null>(null);
@@ -165,27 +167,6 @@ export default function TripDashboardScreen() {
   const flyPickerNames = userFlies.length > 0
     ? [...new Set(userFlies.map(f => f.name))].sort()
     : FLY_NAMES;
-
-  useEffect(() => {
-    if (!activeTrip) return;
-    const tick = () => {
-      const s = useTripStore.getState();
-      const ms = getLiveFishingElapsedMs(
-        s.fishingElapsedMs,
-        s.fishingSegmentStartedAt,
-        s.isTripPaused,
-        s.activeTrip?.start_time ?? null,
-      );
-      setElapsed(formatFishingElapsedLabel(ms));
-    };
-    if (isTripPaused) {
-      tick();
-      return;
-    }
-    const interval = setInterval(tick, 1000);
-    tick();
-    return () => clearInterval(interval);
-  }, [activeTrip, isTripPaused]);
 
   useEffect(() => {
     if (activeTrip && !conditionsFetched.current) {
@@ -204,6 +185,14 @@ export default function TripDashboardScreen() {
       getFliesFromCache(activeTrip.user_id).then(setUserFlies);
     }
   }, [activeTrip?.user_id, isConnected]);
+
+  useEffect(() => {
+    fetchFlyCatalog()
+      .then(setFlyCatalog)
+      .catch(async () => {
+        setFlyCatalog(await loadFlyCatalogFromCache());
+      });
+  }, []);
 
   useEffect(() => {
     if (locations.length === 0) void fetchLocations();
@@ -763,7 +752,7 @@ export default function TripDashboardScreen() {
         statusBarTranslucent
         onRequestClose={() => setFullScreenPhoto(null)}
       >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
@@ -812,13 +801,10 @@ export default function TripDashboardScreen() {
       </Modal>
 
       {/* Header — extends into top safe area so status bar area is blue */}
-      <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
-        <View>
-          <Text style={styles.locationName}>
+      <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.locationName} numberOfLines={2}>
             {activeTrip.location?.name || 'Fishing Trip'}
-          </Text>
-          <Text style={[styles.timerText, isTripPaused && styles.timerTextPaused]}>
-            {isTripPaused ? `Paused \u00B7 ${elapsed}` : elapsed}
           </Text>
         </View>
         <View style={styles.headerRight}>
@@ -915,11 +901,12 @@ export default function TripDashboardScreen() {
         </>
       )}
 
+      {/* Trip rig picker: shared ChangeFlyPickerModal (My flies + catalog + Try next from tripStore) */}
       <ChangeFlyPickerModal
         visible={showFlyPicker}
         onClose={closeFlyPicker}
         userFlies={userFlies}
-        flyPickerNames={flyPickerNames}
+        flyCatalog={flyCatalog}
         seedKey={flyPickerEditEvent?.id ?? 'rig'}
         initialPrimary={flyPickerSeeds.primary}
         initialDropper={flyPickerSeeds.dropper}
@@ -2249,24 +2236,20 @@ function createTripDashboardStyles(colors: ThemeColors) {
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: colors.primary,
+  },
+  headerTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: Spacing.sm,
   },
   locationName: {
     fontSize: FontSize.lg,
     fontWeight: '700',
     color: colors.textInverse,
-  },
-  timerText: {
-    fontSize: FontSize.md,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 2,
-  },
-  timerTextPaused: {
-    color: 'rgba(255,255,255,0.95)',
-    fontWeight: '600',
   },
   headerRight: {
     flexDirection: 'row',

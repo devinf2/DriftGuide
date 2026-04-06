@@ -37,6 +37,8 @@ export interface Profile {
   created_at: string;
   /** Public Supabase Storage URL for profile image (photos bucket). */
   avatar_url?: string | null;
+  /** US home state (full name or 2-letter code) for offline catalog snapshot. */
+  home_state?: string | null;
 }
 
 export type AccessPointStatus = 'pending' | 'approved';

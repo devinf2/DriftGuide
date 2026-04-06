@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,6 +45,7 @@ export default function PickLocationMapScreen() {
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
   const presetLat = parseCoordParam(params.lat);
   const presetLng = parseCoordParam(params.lng);
@@ -225,7 +227,7 @@ export default function PickLocationMapScreen() {
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
-      <View style={[styles.planHeaderBar, { paddingTop: insets.top }]}>
+      <View style={[styles.planHeaderBar, { paddingTop: effectiveTop }]}>
         <View style={[styles.planHeaderSide, styles.planHeaderSideStart]}>
           <Pressable
             accessibilityRole="button"

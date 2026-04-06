@@ -7,11 +7,11 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
-  Image,
   Platform,
   Modal,
   Dimensions,
   Linking,
+  Switch,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,15 +29,28 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'ai' | 'map';
+
+/** After `router.replace` (e.g. survey → summary), there may be no stack entry — `back()` throws in dev. */
+function exitTripSummary(router: ReturnType<typeof useRouter>) {
+  if (router.canGoBack()) {
+    router.back();
+  } else {
+    router.replace('/journal');
+  }
+}
 
 export default function TripSummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
   const { deleteTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
@@ -60,10 +73,22 @@ export default function TripSummaryScreen() {
   const [tripPinModal, setTripPinModal] = useState<TripEndpointKind | null>(null);
   /** Map tab: catch pin tapped when there is no photo (full-screen flow uses `fullScreenPhoto`) */
   const [mapCatchDetailEvent, setMapCatchDetailEvent] = useState<TripEvent | null>(null);
+  const [keepOfflinePinned, setKeepOfflinePinned] = useState(false);
 
   useEffect(() => {
     setJournalEditMode(false);
     setTripPinModal(null);
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    isTripPinned(id).then((pinned) => {
+      if (!cancelled) setKeepOfflinePinned(pinned);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   useEffect(() => {
@@ -167,6 +192,24 @@ export default function TripSummaryScreen() {
     });
   }, [trip?.location?.name]);
 
+  const handleKeepOfflineChange = useCallback(
+    async (next: boolean) => {
+      if (!id || !user) return;
+      const current = await isTripPinned(id);
+      if (next === current) return;
+      try {
+        await togglePinTrip(id);
+        setKeepOfflinePinned(next);
+        if (isConnected) {
+          await reconcileTripPhotoCache(user.id);
+        }
+      } catch (e) {
+        Alert.alert('Could not update', (e as Error).message);
+      }
+    },
+    [id, user, isConnected],
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -183,7 +226,7 @@ export default function TripSummaryScreen() {
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Trip not found</Text>
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <Pressable style={styles.backButton} onPress={() => exitTripSummary(router)}>
             <Text style={styles.backButtonText}>Go Back</Text>
           </Pressable>
         </View>
@@ -209,7 +252,7 @@ export default function TripSummaryScreen() {
             setDeleting(true);
             try {
               await deleteTrip(id);
-              router.back();
+              exitTripSummary(router);
             } catch {
               Alert.alert('Error', 'Could not delete trip. Try again.');
             } finally {
@@ -231,7 +274,7 @@ export default function TripSummaryScreen() {
         statusBarTranslucent
         onRequestClose={() => setFullScreenPhoto(null)}
       >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
@@ -244,10 +287,10 @@ export default function TripSummaryScreen() {
               contentContainerStyle={[styles.fullScreenPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
               showsVerticalScrollIndicator={false}
             >
-              <Image
-                source={{ uri: fullScreenPhoto.url }}
+              <OfflineTripPhotoImage
+                remoteUri={fullScreenPhoto.url}
                 style={[styles.fullScreenPhotoImage, { width: Dimensions.get('window').width, height: Math.round(Dimensions.get('window').height * 0.55) }]}
-                resizeMode="contain"
+                contentFit="contain"
               />
               <View style={styles.fullScreenPhotoInfo}>
                 {fullScreenPhoto.location ? (
@@ -335,8 +378,8 @@ export default function TripSummaryScreen() {
       </Modal>
 
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
-        <Pressable onPress={() => router.back()}>
+      <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
+        <Pressable onPress={() => exitTripSummary(router)}>
           <MaterialIcons name="arrow-back" size={22} color={Colors.textInverse} />
         </Pressable>
         <View style={styles.headerCenter}>
@@ -387,6 +430,22 @@ export default function TripSummaryScreen() {
           </Text>
           <Text style={styles.statLabel}>Duration</Text>
         </View>
+      </View>
+
+      <View style={styles.keepOfflineCard}>
+        <View style={styles.keepOfflineTextCol}>
+          <Text style={styles.keepOfflineTitle}>Keep photos offline</Text>
+          <Text style={styles.keepOfflineHint}>
+            Always keep this trip&apos;s photos on this device. Otherwise we cache about your last four completed
+            trips automatically.
+          </Text>
+        </View>
+        <Switch
+          value={keepOfflinePinned}
+          onValueChange={handleKeepOfflineChange}
+          trackColor={{ false: Colors.border, true: Colors.primaryLight }}
+          thumbColor={Colors.surfaceElevated}
+        />
       </View>
 
       {/* Tab Bar — same 5 tabs as active trip: Fishing, Photos, Conditions, AI Guide, Map */}
@@ -642,7 +701,7 @@ function SummaryPhotosTab({
         <View style={styles.summaryPhotosGrid}>
           {tripPhotos.map((photo) => (
             <Pressable key={photo.id} onPress={() => onPhotoPress?.(photo)}>
-              <Image source={{ uri: photo.url }} style={styles.summaryPhotoThumb} />
+              <OfflineTripPhotoImage remoteUri={photo.url} style={styles.summaryPhotoThumb} contentFit="cover" />
             </Pressable>
           ))}
         </View>
@@ -871,6 +930,37 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 2,
+  },
+
+  keepOfflineCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.md,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    shadowColor: Colors.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  keepOfflineTextCol: {
+    flex: 1,
+  },
+  keepOfflineTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  keepOfflineHint: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: Spacing.xs,
+    lineHeight: 18,
   },
 
   tabBar: {

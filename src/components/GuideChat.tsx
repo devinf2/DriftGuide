@@ -21,6 +21,10 @@ import {
   View,
   type RefreshControlProps,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+/** Tab bar (icons + labels + safe padding) sits below the home scene; KAV must offset it or iOS adds excess bottom inset above the keyboard. */
+const TAB_SCENE_KEYBOARD_OFFSET_IOS = 56;
 
 export interface Message {
   id: string;
@@ -191,6 +195,7 @@ export default function GuideChat({
   listHeaderComponent,
   refreshControl,
 }: GuideChatProps) {
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -262,11 +267,16 @@ export default function GuideChat({
     }
   };
 
+  const keyboardVerticalOffsetIos =
+    variant === 'full'
+      ? contentTopPadding + TAB_SCENE_KEYBOARD_OFFSET_IOS
+      : Math.max(insets.top, 64);
+
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: contentTopPadding }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? keyboardVerticalOffsetIos : 0}
     >
       {variant === 'modal' && onClose && (
         <View style={styles.modalHeader}>

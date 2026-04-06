@@ -4,6 +4,7 @@ import {
   PARENT_CANDIDATE_MAX_RADIUS_KM,
 } from '@/src/constants/locationThresholds';
 import { Location, LocationType, NearbyLocationResult } from '@/src/types';
+import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 
 const EARTH_RADIUS_KM = 6371;
 
@@ -173,6 +174,39 @@ export async function searchNearbyRootParentCandidates(
     rows = rows.filter((r) => Number(r.distance_km) <= maxR);
   }
   return rows.slice(0, maxResults);
+}
+
+/**
+ * Same ordering/filter semantics as server `search_nearby_root_locations` (root rows only, Haversine).
+ * Use with an in-memory + offline snapshot catalog when Supabase is unreachable.
+ */
+export function rootParentCandidatesFromLocations(
+  rows: Location[],
+  lat: number,
+  lng: number,
+  excludeLocationId: string | null,
+  radiusKm: number,
+  maxResults: number,
+): NearbyLocationResult[] {
+  const maxR = Number(radiusKm);
+  const ex = excludeLocationId ?? null;
+  return activeLocationsOnly(rows)
+    .filter((loc) => loc.parent_location_id == null)
+    .filter((loc) => loc.latitude != null && loc.longitude != null)
+    .filter((loc) => !ex || loc.id !== ex)
+    .map((loc) => ({
+      id: loc.id,
+      name: loc.name,
+      type: loc.type,
+      latitude: loc.latitude!,
+      longitude: loc.longitude!,
+      status: loc.status || 'verified',
+      distance_km: haversineDistance(lat, lng, loc.latitude!, loc.longitude!),
+      name_similarity: 0,
+    }))
+    .filter((r) => r.distance_km <= maxR)
+    .sort((a, b) => a.distance_km - b.distance_km)
+    .slice(0, maxResults);
 }
 
 async function clientSideRootParentSearch(

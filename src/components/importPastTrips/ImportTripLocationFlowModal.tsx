@@ -379,7 +379,7 @@ export function ImportTripLocationFlowModal({
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.kavOuter}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+          keyboardVerticalOffset={0}
           pointerEvents="box-none"
         >
           <Pressable

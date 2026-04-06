@@ -18,12 +18,14 @@ import {
     Modal,
     Platform,
     Pressable,
+    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
     View,
 } from 'react-native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const R = BorderRadius.md;
@@ -62,6 +64,7 @@ export default function ProfileScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProfileStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const router = useRouter();
   const { user, profile, fetchProfile, updateProfileNames } = useAuthStore();
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -70,6 +73,18 @@ export default function ProfileScreen() {
   const [firstNameDraft, setFirstNameDraft] = useState('');
   const [lastNameDraft, setLastNameDraft] = useState('');
   const [savingName, setSavingName] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [photoLibraryRefreshSignal, setPhotoLibraryRefreshSignal] = useState(0);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchProfile();
+      setPhotoLibraryRefreshSignal((n) => n + 1);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchProfile]);
 
   useEffect(() => {
     if (nameModalOpen && profile) {
@@ -160,24 +175,35 @@ export default function ProfileScreen() {
 
   return (
     <Fragment>
-      {insets.top > 0 && (
+      {effectiveTop > 0 && (
         <View
           style={[
             styles.safeAreaFill,
-            { height: insets.top },
+            { height: effectiveTop },
           ]}
           pointerEvents="none"
         />
       )}
       <ScrollView
         style={styles.container}
+        alwaysBounceVertical
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: Spacing.md + insets.top,
+            flexGrow: 1,
+            paddingTop: Spacing.md + effectiveTop,
             paddingBottom: Spacing.lg + PLAN_TRIP_FAB_MAP_CLEARANCE,
           },
         ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+            progressViewOffset={effectiveTop + Spacing.md}
+          />
+        }
       >
         <View style={styles.headerCard}>
           <View style={styles.headerActions}>
@@ -251,7 +277,7 @@ export default function ProfileScreen() {
           <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
         </View>
 
-        <ProfilePhotoLibrarySection />
+        <ProfilePhotoLibrarySection refreshSignal={photoLibraryRefreshSignal} />
       </ScrollView>
 
       <Modal visible={nameModalOpen} transparent animationType="fade" onRequestClose={() => setNameModalOpen(false)}>
@@ -313,7 +339,7 @@ export default function ProfileScreen() {
           style={[
             styles.avatarPreviewBackdrop,
             {
-              paddingTop: insets.top + Spacing.md,
+              paddingTop: effectiveTop + Spacing.md,
               paddingBottom: insets.bottom + Spacing.md,
             },
           ]}

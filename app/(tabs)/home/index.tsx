@@ -19,6 +19,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function createHomeStyles(colors: ThemeColors) {
@@ -38,54 +39,57 @@ function createHomeStyles(colors: ThemeColors) {
       flex: 1,
       padding: Spacing.xl,
     },
-    pausedTripBanner: {
+    pausedTripCard: {
       backgroundColor: colors.surface,
-      borderRadius: BorderRadius.lg,
+      borderRadius: BorderRadius.md,
       borderWidth: 1,
       borderColor: colors.border,
-      padding: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
       marginBottom: Spacing.sm,
     },
+    pausedTripHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+    },
+    pausedTripMain: {
+      flex: 1,
+      minWidth: 0,
+    },
+    pausedTripTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: Spacing.sm,
+    },
     pausedTripLabel: {
-      fontSize: FontSize.xs,
+      fontSize: 10,
       fontWeight: '700',
       color: colors.warning,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
+      flexShrink: 0,
+    },
+    pausedTripSummary: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      flexShrink: 1,
+      minWidth: 0,
+      textAlign: 'right',
     },
     pausedTripTitle: {
-      fontSize: FontSize.xl,
+      fontSize: FontSize.md,
       fontWeight: '700',
       color: colors.text,
-      marginTop: Spacing.xs,
-    },
-    pausedTripSub: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      marginTop: Spacing.sm,
-      marginBottom: Spacing.md,
-      lineHeight: 20,
-    },
-    pausedTripStats: {
-      flexDirection: 'row',
-      gap: Spacing.lg,
-      marginBottom: Spacing.md,
-    },
-    pausedStat: {},
-    pausedStatValue: {
-      fontSize: FontSize.lg,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    pausedStatLabel: {
-      fontSize: FontSize.xs,
-      color: colors.textTertiary,
-      marginTop: 2,
+      marginTop: 4,
     },
     pausedTripActions: {
       flexDirection: 'row',
       gap: Spacing.sm,
       alignItems: 'center',
+      marginTop: Spacing.sm,
     },
     resumeTripBtn: {
       flex: 1,
@@ -95,23 +99,23 @@ function createHomeStyles(colors: ThemeColors) {
       gap: Spacing.xs,
       backgroundColor: colors.primary,
       borderRadius: BorderRadius.md,
-      paddingVertical: Spacing.md,
+      paddingVertical: Spacing.sm,
     },
     resumeTripBtnText: {
       color: colors.textInverse,
-      fontSize: FontSize.md,
+      fontSize: FontSize.sm,
       fontWeight: '700',
     },
     endTripFromHomeBtn: {
-      paddingVertical: Spacing.md,
-      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
       borderRadius: BorderRadius.md,
       borderWidth: 1,
       borderColor: colors.error,
     },
     endTripFromHomeBtnText: {
       color: colors.error,
-      fontSize: FontSize.md,
+      fontSize: FontSize.sm,
       fontWeight: '600',
     },
     activeTripCard: {
@@ -162,6 +166,7 @@ function createHomeStyles(colors: ThemeColors) {
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createHomeStyles(colors), [colors]);
   const {
@@ -302,7 +307,7 @@ export default function HomeScreen() {
 
   if (activeTrip && !isTripPaused) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={[styles.container, { paddingTop: effectiveTop }]}>
         <View style={styles.activeTripWrapper}>
           <Pressable
             style={styles.activeTripCard}
@@ -336,26 +341,31 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       {activeTrip && isTripPaused && (
-        <View style={[styles.pausedWrap, { paddingTop: insets.top + Spacing.md, paddingHorizontal: Spacing.xl }]}>
-          <View style={styles.pausedTripBanner}>
-            <Text style={styles.pausedTripLabel}>Trip paused</Text>
-            <Text style={styles.pausedTripTitle} numberOfLines={1}>
-              {activeTrip.location?.name || 'Fishing Trip'}
-            </Text>
-            <Text style={styles.pausedTripSub}>Resume or end when you’re back on the water.</Text>
-            <View style={styles.pausedTripStats}>
-              <View style={styles.pausedStat}>
-                <Text style={styles.pausedStatValue}>{elapsed}</Text>
-                <Text style={styles.pausedStatLabel}>Fishing time</Text>
+        <View style={[styles.pausedWrap, { paddingTop: effectiveTop + Spacing.sm, paddingHorizontal: Spacing.xl }]}>
+          <View style={styles.pausedTripCard}>
+            <Pressable
+              style={styles.pausedTripHeader}
+              onPress={() => router.push(`/trip/${activeTrip.id}`)}
+              accessibilityRole="button"
+              accessibilityLabel={`Paused trip, ${activeTrip.location?.name || 'Fishing Trip'}`}
+              accessibilityHint="Opens trip dashboard"
+            >
+              <View style={styles.pausedTripMain}>
+                <View style={styles.pausedTripTopRow}>
+                  <Text style={styles.pausedTripLabel}>Trip paused</Text>
+                  <Text style={styles.pausedTripSummary} numberOfLines={1}>
+                    {elapsed} · {fishCount === 1 ? '1 fish' : `${fishCount} fish`}
+                  </Text>
+                </View>
+                <Text style={styles.pausedTripTitle} numberOfLines={1}>
+                  {activeTrip.location?.name || 'Fishing Trip'}
+                </Text>
               </View>
-              <View style={styles.pausedStat}>
-                <Text style={styles.pausedStatValue}>{fishCount}</Text>
-                <Text style={styles.pausedStatLabel}>Fish</Text>
-              </View>
-            </View>
+              <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textTertiary} />
+            </Pressable>
             <View style={styles.pausedTripActions}>
               <Pressable style={styles.resumeTripBtn} onPress={handleResumeTrip}>
-                <MaterialCommunityIcons name="play" size={22} color={colors.textInverse} />
+                <MaterialCommunityIcons name="play" size={20} color={colors.textInverse} />
                 <Text style={styles.resumeTripBtnText}>Resume</Text>
               </Pressable>
               <Pressable style={styles.endTripFromHomeBtn} onPress={handleEndTripFromHome}>

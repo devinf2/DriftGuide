@@ -8,6 +8,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -40,6 +41,7 @@ import { GuideLocationRecommendationCards } from '@/src/components/GuideLocation
 import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
 import { SpotTaggedText } from '@/src/components/SpotTaggedText';
 import { OfflineFallbackGuide } from '@/src/components/OfflineFallbackGuide';
+import { buildOfflineSpotGuide } from '@/src/services/offlineSpotGuide';
 
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
@@ -146,6 +148,7 @@ export default function SpotFishingTripScreen() {
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
   const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
   const [creatorMenu, setCreatorMenu] = useState<LocationCreatorManageState | null>(null);
@@ -326,7 +329,7 @@ export default function SpotFishingTripScreen() {
         return;
       }
 
-      const s = await getSpotFishingSummary(location.name, cond, opts);
+      const s = buildOfflineSpotGuide(location, cond);
       if (cancelled) return;
       applySummary(s);
       setSummaryLoading(false);
@@ -608,7 +611,7 @@ export default function SpotFishingTripScreen() {
               const ok = await softDeleteCommunityLocation(id);
               if (ok) {
                 await fetchLocations();
-                router.back();
+                handleHeaderBack();
               } else {
                 Alert.alert('Could not delete', USED_SPOT_MESSAGE);
               }
@@ -617,7 +620,7 @@ export default function SpotFishingTripScreen() {
         ],
       );
     });
-  }, [id, runCreatorActionIfAllowed, fetchLocations, router]);
+  }, [id, runCreatorActionIfAllowed, fetchLocations, handleHeaderBack]);
 
   const spotHeaderTitle = location?.name ?? 'Fishing Trip';
   const showSpotCreatorMenu = creatorMenu?.isCreator === true;
@@ -627,7 +630,7 @@ export default function SpotFishingTripScreen() {
       <View style={styles.container}>
         <SpotModalHeader
           title="Fishing Trip"
-          topInset={insets.top}
+          topInset={effectiveTop}
           showMenu={false}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
@@ -644,7 +647,7 @@ export default function SpotFishingTripScreen() {
       <View style={styles.container}>
         <SpotModalHeader
           title="Fishing Trip"
-          topInset={insets.top}
+          topInset={effectiveTop}
           showMenu={showSpotCreatorMenu}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
@@ -661,7 +664,7 @@ export default function SpotFishingTripScreen() {
       <View style={styles.container}>
         <SpotModalHeader
           title={spotHeaderTitle}
-          topInset={insets.top}
+          topInset={effectiveTop}
           showMenu={showSpotCreatorMenu}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
@@ -678,7 +681,7 @@ export default function SpotFishingTripScreen() {
     <View style={styles.container}>
       <SpotModalHeader
         title={spotHeaderTitle}
-        topInset={insets.top}
+        topInset={effectiveTop}
         showMenu={showSpotCreatorMenu}
         onBack={handleHeaderBack}
         onOpenMenu={() => setManageMenuOpen(true)}
