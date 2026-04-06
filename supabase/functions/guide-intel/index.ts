@@ -392,7 +392,7 @@ Deno.serve(async (req: Request) => {
       const promptUser = String(body.promptUser ?? "");
       const text = await openaiChat(
         guideSystem(
-          "Respond with ONLY valid JSON for fly recommendation. Prefer flies from the angler's fly box when they fit conditions; if none fit well, recommend the best pattern anyway (may be outside the box) and explain briefly in reason.",
+          "Respond with ONLY valid JSON for fly recommendation. Recommend the best fly or two-fly rig for conditions and the trip — the angler's box is context only, not a limit. If the best pattern is not in their box, recommend it anyway and note that briefly in reason.",
         ),
         promptUser,
         280,

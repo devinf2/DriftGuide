@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  TouchableOpacity,
   Platform,
   Image,
 } from 'react-native';
@@ -24,12 +23,11 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
-  FLY_TYPE_LABELS,
   FLY_SIZES as FLY_SIZES_LIST,
   FLY_COLORS,
   FLY_PRESENTATION_LABELS,
 } from '@/src/constants/fishingTypes';
-import type { Fly, FlyType, FlyPresentation } from '@/src/types';
+import type { Fly, FlyPresentation } from '@/src/types';
 import {
   fetchFliesOrCache,
   fetchFlyCatalog,
@@ -47,6 +45,7 @@ import {
 } from '@/src/services/pendingFlyOpsStorage';
 import { uploadFlyPhoto } from '@/src/services/photoService';
 import type { FlyCatalog } from '@/src/types';
+import { FlyCatalogPickerModal } from '@/src/components/fly/FlyCatalogPickerModal';
 
 const FLY_PRESENTATIONS: FlyPresentation[] = ['dry', 'emerger', 'wet', 'nymph', 'streamer'];
 
@@ -124,7 +123,10 @@ export default function FlyBoxScreen() {
   const [clearPhoto, setClearPhoto] = useState(false);
   const [catalog, setCatalog] = useState<FlyCatalog[]>([]);
   const [selectedCatalogFly, setSelectedCatalogFly] = useState<FlyCatalog | null>(null);
-  const [dropdownOpen, setDropdownOpen] = useState<null | 'fly' | 'size' | 'color'>(null);
+  /** True only after the user explicitly picks “Other (new pattern)”, or when editing a non-catalog fly. */
+  const [customPatternMode, setCustomPatternMode] = useState(false);
+  const [flyPickerVisible, setFlyPickerVisible] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState<null | 'size' | 'color'>(null);
   const [quantity, setQuantity] = useState(1);
 
   const loadFlies = useCallback(async () => {
@@ -155,6 +157,7 @@ export default function FlyBoxScreen() {
   const openAdd = () => {
     setEditingFly(null);
     setSelectedCatalogFly(null);
+    setCustomPatternMode(false);
     setName('');
     setSize('');
     setColor('');
@@ -162,6 +165,7 @@ export default function FlyBoxScreen() {
     setPhotoUri(null);
     setClearPhoto(false);
     setDropdownOpen(null);
+    setFlyPickerVisible(false);
     setQuantity(1);
     setModalOpen(true);
   };
@@ -170,6 +174,7 @@ export default function FlyBoxScreen() {
     setEditingFly(fly);
     const catalogFly = fly.fly_id ? catalog.find((c) => c.id === fly.fly_id) ?? null : null;
     setSelectedCatalogFly(catalogFly ?? null);
+    setCustomPatternMode(!catalogFly);
     setName(fly.name);
     setSize(fly.size ?? '');
     setColor(fly.color ?? '');
@@ -177,6 +182,7 @@ export default function FlyBoxScreen() {
     setPhotoUri(null);
     setClearPhoto(false);
     setDropdownOpen(null);
+    setFlyPickerVisible(false);
     setQuantity(Math.max(1, fly.quantity ?? 1));
     setModalOpen(true);
   };
@@ -202,22 +208,28 @@ export default function FlyBoxScreen() {
     setModalOpen(false);
     setEditingFly(null);
     setSaving(false);
+    setFlyPickerVisible(false);
+    setDropdownOpen(null);
   };
 
   const trimmedName = name.trim();
-  const isOtherPattern = !selectedCatalogFly;
-  const canSave =
-    (selectedCatalogFly || (trimmedName && (editingFly || presentation != null))) &&
-    size !== '' &&
-    color.trim() !== '' &&
-    !saving;
+  const hasFlyChoice = selectedCatalogFly != null || customPatternMode;
+  const customPatternValid =
+    !customPatternMode || (trimmedName.length > 0 && (editingFly != null || presentation != null));
+  const canSave = hasFlyChoice && customPatternValid && !saving;
+
+  const flyTriggerLabel = selectedCatalogFly
+    ? selectedCatalogFly.name
+    : customPatternMode
+      ? 'Other (new pattern)'
+      : 'Select fly';
+  const flyTriggerPlaceholder = !selectedCatalogFly && !customPatternMode;
 
   const handleSave = async () => {
     if (!user) return;
     const nameVal = name.trim();
-    const hasPattern = selectedCatalogFly || (nameVal && (editingFly || presentation != null));
-    if (!hasPattern || size === '' || !color.trim()) return;
-    const sizeNum = Number(size);
+    if (!hasFlyChoice || !customPatternValid) return;
+    const sizeNum = size === '' ? null : Number(size);
     setSaving(true);
     try {
       if (!isConnected && editingFly) {
@@ -400,11 +412,13 @@ export default function FlyBoxScreen() {
         animationType="slide"
         onRequestClose={closeModal}
       >
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={closeModal}
-        >
+        <View style={styles.modalBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={closeModal}
+            accessibilityLabel="Dismiss"
+            accessibilityRole="button"
+          />
           <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>
@@ -412,14 +426,17 @@ export default function FlyBoxScreen() {
             </Text>
 
             <Text style={styles.label}>Fly</Text>
-            <Pressable style={styles.dropdownTrigger} onPress={() => setDropdownOpen('fly')}>
-              <Text style={[styles.dropdownTriggerText, !selectedCatalogFly && !trimmedName && styles.dropdownPlaceholder]} numberOfLines={1}>
-                {selectedCatalogFly ? selectedCatalogFly.name : trimmedName || 'Select fly'}
+            <Pressable style={styles.dropdownTrigger} onPress={() => setFlyPickerVisible(true)}>
+              <Text
+                style={[styles.dropdownTriggerText, flyTriggerPlaceholder && styles.dropdownPlaceholder]}
+                numberOfLines={1}
+              >
+                {flyTriggerLabel}
               </Text>
               <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
             </Pressable>
 
-            {isOtherPattern && (
+            {customPatternMode && (
               <>
                 <Text style={styles.label}>Pattern name</Text>
                 <TextInput
@@ -447,7 +464,7 @@ export default function FlyBoxScreen() {
               </>
             )}
 
-            <Text style={styles.label}>Size (hook)</Text>
+            <Text style={styles.label}>Size (hook) (optional)</Text>
             <Pressable style={styles.dropdownTrigger} onPress={() => setDropdownOpen('size')}>
               <Text style={[styles.dropdownTriggerText, size === '' && styles.dropdownPlaceholder]} numberOfLines={1}>
                 {size === '' ? 'Select size' : `#${size}`}
@@ -455,7 +472,7 @@ export default function FlyBoxScreen() {
               <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
             </Pressable>
 
-            <Text style={styles.label}>Color</Text>
+            <Text style={styles.label}>Color (optional)</Text>
             <Pressable style={styles.dropdownTrigger} onPress={() => setDropdownOpen('color')}>
               <Text style={[styles.dropdownTriggerText, !color.trim() && styles.dropdownPlaceholder]} numberOfLines={1}>
                 {color.trim() || 'Select color'}
@@ -487,61 +504,76 @@ export default function FlyBoxScreen() {
                   <Pressable style={StyleSheet.absoluteFill} onPress={() => setDropdownOpen(null)} />
                   <View style={styles.dropdownSheet} onStartShouldSetResponder={() => true}>
                     <ScrollView style={styles.dropdownScroll} keyboardShouldPersistTaps="handled">
-                      {dropdownOpen === 'fly' && (
+                      {dropdownOpen === 'size' && (
                         <>
                           <Pressable
-                            style={[styles.dropdownOption, !selectedCatalogFly && styles.dropdownOptionActive]}
+                            style={[styles.dropdownOption, size === '' && styles.dropdownOptionActive]}
                             onPress={() => {
-                              setSelectedCatalogFly(null);
-                              setName('');
-                              setPresentation(null);
+                              setSize('');
                               setDropdownOpen(null);
                             }}
                           >
-                            <Text style={[styles.dropdownOptionText, !selectedCatalogFly && styles.dropdownOptionTextActive]}>Other (new pattern)</Text>
+                            <Text
+                              style={[
+                                styles.dropdownOptionText,
+                                size === '' && styles.dropdownOptionTextActive,
+                              ]}
+                            >
+                              None
+                            </Text>
                           </Pressable>
-                          {catalog.map((c) => (
+                          {FLY_SIZES_LIST.map((s) => (
                             <Pressable
-                              key={c.id}
-                              style={[styles.dropdownOption, selectedCatalogFly?.id === c.id && styles.dropdownOptionActive]}
+                              key={s}
+                              style={[styles.dropdownOption, size === s && styles.dropdownOptionActive]}
                               onPress={() => {
-                                setSelectedCatalogFly(c);
-                                setName(c.name);
-                                setPresentation((c.presentation as FlyPresentation) ?? null);
+                                setSize(s);
                                 setDropdownOpen(null);
                               }}
                             >
-                              <Text style={[styles.dropdownOptionText, selectedCatalogFly?.id === c.id && styles.dropdownOptionTextActive]}>{c.name}</Text>
+                              <Text style={[styles.dropdownOptionText, size === s && styles.dropdownOptionTextActive]}>
+                                #{s}
+                              </Text>
                             </Pressable>
                           ))}
                         </>
                       )}
-                      {dropdownOpen === 'size' &&
-                        FLY_SIZES_LIST.map((s) => (
+                      {dropdownOpen === 'color' && (
+                        <>
                           <Pressable
-                            key={s}
-                            style={[styles.dropdownOption, size === s && styles.dropdownOptionActive]}
+                            style={[styles.dropdownOption, !color.trim() && styles.dropdownOptionActive]}
                             onPress={() => {
-                              setSize(s);
+                              setColor('');
                               setDropdownOpen(null);
                             }}
                           >
-                            <Text style={[styles.dropdownOptionText, size === s && styles.dropdownOptionTextActive]}>#{s}</Text>
+                            <Text
+                              style={[
+                                styles.dropdownOptionText,
+                                !color.trim() && styles.dropdownOptionTextActive,
+                              ]}
+                            >
+                              None
+                            </Text>
                           </Pressable>
-                        ))}
-                      {dropdownOpen === 'color' &&
-                        FLY_COLORS.map((c) => (
-                          <Pressable
-                            key={c}
-                            style={[styles.dropdownOption, color.trim() === c && styles.dropdownOptionActive]}
-                            onPress={() => {
-                              setColor(c);
-                              setDropdownOpen(null);
-                            }}
-                          >
-                            <Text style={[styles.dropdownOptionText, color.trim() === c && styles.dropdownOptionTextActive]}>{c}</Text>
-                          </Pressable>
-                        ))}
+                          {FLY_COLORS.map((c) => (
+                            <Pressable
+                              key={c}
+                              style={[styles.dropdownOption, color.trim() === c && styles.dropdownOptionActive]}
+                              onPress={() => {
+                                setColor(c);
+                                setDropdownOpen(null);
+                              }}
+                            >
+                              <Text
+                                style={[styles.dropdownOptionText, color.trim() === c && styles.dropdownOptionTextActive]}
+                              >
+                                {c}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </>
+                      )}
                     </ScrollView>
                   </View>
                 </View>
@@ -593,7 +625,32 @@ export default function FlyBoxScreen() {
               </Pressable>
             </View>
           </View>
-        </TouchableOpacity>
+
+          <FlyCatalogPickerModal
+            visible={flyPickerVisible}
+            onRequestClose={() => setFlyPickerVisible(false)}
+            catalog={catalog}
+            otherSelected={customPatternMode}
+            selectedCatalogFlyId={selectedCatalogFly?.id ?? null}
+            onSelectCatalogFly={(fly) => {
+              setSelectedCatalogFly(fly);
+              setCustomPatternMode(false);
+              setName(fly.name);
+              setPresentation((fly.presentation as FlyPresentation) ?? null);
+            }}
+            onSelectOther={() => {
+              setSelectedCatalogFly(null);
+              setCustomPatternMode(true);
+              if (editingFly) {
+                setName(editingFly.name);
+                setPresentation(editingFly.presentation ?? null);
+              } else {
+                setName('');
+                setPresentation(null);
+              }
+            }}
+          />
+        </View>
       </Modal>
     </View>
   );
@@ -775,6 +832,10 @@ function createFlyBoxStyles(colors: ThemeColors) {
     borderTopRightRadius: BorderRadius.lg,
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl,
+    zIndex: 1,
+    ...Platform.select({
+      android: { elevation: 8 },
+    }),
   },
   modalHandle: {
     width: 40,

@@ -48,7 +48,7 @@ import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
 import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
 import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/photoService';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -57,6 +57,7 @@ import {
   AIQueryData,
   CatchData,
   Fly,
+  FlyCatalog,
   FlyChangeData,
   NoteData,
   Photo,
@@ -150,6 +151,7 @@ export default function TripDashboardScreen() {
   const aiScrollRef = useRef<ScrollView>(null);
 
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
+  const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
   const conditionsFetched = useRef(false);
   /** One automatic "select fly" prompt per trip id (dismiss without picking does not re-prompt). */
   const autoFlyPromptedForTripRef = useRef<string | null>(null);
@@ -183,6 +185,14 @@ export default function TripDashboardScreen() {
       getFliesFromCache(activeTrip.user_id).then(setUserFlies);
     }
   }, [activeTrip?.user_id, isConnected]);
+
+  useEffect(() => {
+    fetchFlyCatalog()
+      .then(setFlyCatalog)
+      .catch(async () => {
+        setFlyCatalog(await loadFlyCatalogFromCache());
+      });
+  }, []);
 
   useEffect(() => {
     if (locations.length === 0) void fetchLocations();
@@ -891,11 +901,12 @@ export default function TripDashboardScreen() {
         </>
       )}
 
+      {/* Trip rig picker: shared ChangeFlyPickerModal (My flies + catalog + Try next from tripStore) */}
       <ChangeFlyPickerModal
         visible={showFlyPicker}
         onClose={closeFlyPicker}
         userFlies={userFlies}
-        flyPickerNames={flyPickerNames}
+        flyCatalog={flyCatalog}
         seedKey={flyPickerEditEvent?.id ?? 'rig'}
         initialPrimary={flyPickerSeeds.primary}
         initialDropper={flyPickerSeeds.dropper}

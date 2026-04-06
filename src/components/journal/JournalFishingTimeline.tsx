@@ -15,7 +15,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { FLY_NAMES } from '@/src/constants/fishingTypes';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
 import { CatchDetailsModal } from '@/src/components/catch/CatchDetailsModal';
 import {
   ChangeFlyPickerModal,
@@ -39,7 +39,7 @@ import {
   upsertEventSorted,
 } from '@/src/utils/journalTimeline';
 import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
-import type { AIQueryData, CatchData, Fly, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
+import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { formatEventTime } from '@/src/utils/formatters';
 
@@ -136,6 +136,7 @@ export function JournalFishingTimeline({
   const [flyModal, setFlyModal] = useState<TripEvent | null>(null);
   const [aiModal, setAiModal] = useState<TripEvent | null>(null);
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
+  const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
 
   const flyPickerNames = useMemo(
     () => (userFlies.length > 0 ? [...new Set(userFlies.map((f) => f.name))].sort() : FLY_NAMES),
@@ -150,6 +151,14 @@ export function JournalFishingTimeline({
       void getFliesFromCache(userId).then(setUserFlies);
     }
   }, [userId, isConnected]);
+
+  useEffect(() => {
+    fetchFlyCatalog()
+      .then(setFlyCatalog)
+      .catch(async () => {
+        setFlyCatalog(await loadFlyCatalogFromCache());
+      });
+  }, []);
 
   const reloadFromCloud = useCallback(async () => {
     const trips = await fetchTripsFromCloud(userId);
@@ -588,7 +597,7 @@ export function JournalFishingTimeline({
         visible={flyModal != null}
         onClose={() => setFlyModal(null)}
         userFlies={userFlies}
-        flyPickerNames={flyPickerNames}
+        flyCatalog={flyCatalog}
         seedKey={flyModal?.id ?? ''}
         initialPrimary={flyModal ? splitFlyChangeData(flyModal.data as FlyChangeData).primary : null}
         initialDropper={flyModal ? splitFlyChangeData(flyModal.data as FlyChangeData).dropper : null}

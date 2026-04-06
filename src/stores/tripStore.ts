@@ -22,7 +22,13 @@ import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
 import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
 import { withTimeout } from '@/src/utils/promiseTimeout';
-import { getFallbackRecommendation, getSmartFlyRecommendation, getSeason, getTimeOfDay } from '@/src/services/ai';
+import {
+  enrichTryNextWithSuggestedDropper,
+  getFallbackRecommendation,
+  getSmartFlyRecommendation,
+  getSeason,
+  getTimeOfDay,
+} from '@/src/services/ai';
 import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
@@ -1084,12 +1090,27 @@ export const useTripStore = create<TripState>()(
             const cached = locationId ? await getCachedConditions(locationId, parentId) : null;
             const cachedWeather = cached?.weather ?? weatherData ?? null;
             const userFlies = await getFliesFromCache(activeTrip.user_id);
-            const recommendation = getFallbackRecommendation(
-              activeTrip.fishing_type,
-              primaryStr,
-              cachedWeather,
-              userFlies.length > 0 ? userFlies : null,
-              dropperStr,
+            const recommendation = enrichTryNextWithSuggestedDropper(
+              getFallbackRecommendation(
+                activeTrip.fishing_type,
+                primaryStr,
+                cachedWeather,
+                userFlies.length > 0 ? userFlies : null,
+                dropperStr,
+              ),
+              {
+                location: activeTrip.location || null,
+                fishingType: activeTrip.fishing_type,
+                weather: cachedWeather,
+                waterFlow: null,
+                currentFly: primaryStr,
+                currentFly2: dropperStr,
+                fishCount,
+                recentEvents: events,
+                timeOfDay: getTimeOfDay(now),
+                season: getSeason(now),
+                userFlies: userFlies.length > 0 ? userFlies : null,
+              },
             );
             set({ nextFlyRecommendation: recommendation, recommendationLoading: false });
             return;
