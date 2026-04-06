@@ -86,7 +86,48 @@ import { v4 as uuidv4 } from 'uuid';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type TabKey = 'fish' | 'photos' | 'conditions' | 'ai' | 'map';
+type TabKey = 'fish' | 'photos' | 'conditions' | 'map';
+
+type TripGuideChatMessage = {
+  id: string;
+  role: 'user' | 'ai';
+  text: string;
+  linkedSpots?: { id: string; name: string }[];
+  ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
+  webSources?: GuideIntelSource[];
+  sourcesFetchedAt?: string;
+  locationRecommendation?: GuideLocationRecommendation | null;
+};
+
+/** Rebuild in-trip guide chat from persisted timeline rows (`ai_query`). */
+function aiQueryEventsToChatMessages(events: TripEvent[]): TripGuideChatMessage[] {
+  const sorted = sortEventsByTime(events.filter((e) => e.event_type === 'ai_query'));
+  const rows: TripGuideChatMessage[] = [];
+  for (const ev of sorted) {
+    const d = ev.data as AIQueryData;
+    rows.push({ id: `${ev.id}-q`, role: 'user', text: d.question });
+    if (d.response?.trim()) {
+      const ws = d.webSources;
+      rows.push({
+        id: `${ev.id}-a`,
+        role: 'ai',
+        text: d.response,
+        ...(ws && ws.length > 0
+          ? {
+              webSources: ws.map((s) => ({
+                url: s.url,
+                title: s.title,
+                fetchedAt: s.fetchedAt ?? ev.timestamp,
+                excerpt: s.excerpt ?? '',
+              })),
+              sourcesFetchedAt: ws[0]?.fetchedAt ?? ev.timestamp,
+            }
+          : {}),
+      });
+    }
+  }
+  return rows;
+}
 
 export default function TripDashboardScreen() {
   const { colors, resolvedScheme } = useAppTheme();
@@ -134,21 +175,11 @@ export default function TripDashboardScreen() {
     caption?: string;
   } | null>(null);
 
-  const [aiMessages, setAiMessages] = useState<
-    {
-      id: string;
-      role: 'user' | 'ai';
-      text: string;
-      linkedSpots?: { id: string; name: string }[];
-      ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
-      webSources?: GuideIntelSource[];
-      sourcesFetchedAt?: string;
-      locationRecommendation?: GuideLocationRecommendation | null;
-    }[]
-  >([]);
+  const [aiPendingQuestion, setAiPendingQuestion] = useState<string | null>(null);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const aiScrollRef = useRef<ScrollView>(null);
+  const [tripAiModalVisible, setTripAiModalVisible] = useState(false);
 
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
   const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
@@ -162,6 +193,8 @@ export default function TripDashboardScreen() {
   const [strategyBestTime, setStrategyBestTime] = useState<string | null>(null);
   const [strategyHowToFish, setStrategyHowToFish] = useState<string | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(false);
+  /** Avoid re-calling spot summary APIs every time the trip guide modal opens. */
+  const strategyFetchedForTripIdRef = useRef<string | null>(null);
 
   /** Fly names for picker: from Fly Box when available, else default list */
   const flyPickerNames = userFlies.length > 0
@@ -230,8 +263,30 @@ export default function TripDashboardScreen() {
     if (activeTrip && activeTab === 'photos') loadTripPhotos();
   }, [activeTrip, activeTab, loadTripPhotos]);
 
+  const historicalAiMessages = useMemo(() => aiQueryEventsToChatMessages(events), [events]);
+  const displayAiMessages = useMemo(
+    () =>
+      aiPendingQuestion
+        ? [
+            ...historicalAiMessages,
+            { id: 'pending-user', role: 'user' as const, text: aiPendingQuestion },
+          ]
+        : historicalAiMessages,
+    [historicalAiMessages, aiPendingQuestion],
+  );
+
   useEffect(() => {
-    if (activeTab !== 'ai' || !activeTrip?.location) return;
+    strategyFetchedForTripIdRef.current = null;
+    setStrategyTopFlies([]);
+    setStrategyBestTime(null);
+    setStrategyHowToFish(null);
+    setStrategyLoading(false);
+  }, [activeTrip?.id]);
+
+  useEffect(() => {
+    if (!tripAiModalVisible || !activeTrip?.location) return;
+    if (strategyFetchedForTripIdRef.current === activeTrip.id) return;
+
     const loc = activeTrip.location;
     const conditions = buildConditionsFromWeatherAndFlow(weatherData, waterFlowData, loc.id)
       ?? {
@@ -256,10 +311,21 @@ export default function TripDashboardScreen() {
         setStrategyBestTime(summary.bestTime);
         setStrategyHowToFish(howToFish);
         setStrategyLoading(false);
+        strategyFetchedForTripIdRef.current = activeTrip.id;
       }
-    }).catch(() => { if (!cancelled) setStrategyLoading(false); });
-    return () => { cancelled = true; };
-  }, [activeTab, activeTrip?.id, activeTrip?.location?.id, activeTrip?.location?.name, weatherData, waterFlowData]);
+    }).catch(() => {
+      if (!cancelled) setStrategyLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tripAiModalVisible, activeTrip?.id, activeTrip?.location?.id, activeTrip?.location?.name, weatherData, waterFlowData]);
+
+  useEffect(() => {
+    if (!tripAiModalVisible) return;
+    const t = setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 250);
+    return () => clearTimeout(t);
+  }, [tripAiModalVisible, displayAiMessages.length, aiLoading]);
 
   const handlePickTripPhoto = useCallback(async () => {
     if (!activeTrip?.id) return;
@@ -614,8 +680,7 @@ export default function TripDashboardScreen() {
     const question = aiInput.trim();
     if (!question || aiLoading || isTripPaused) return;
 
-    const userMsg = { id: Date.now().toString(), role: 'user' as const, text: question };
-    setAiMessages(prev => [...prev, userMsg]);
+    setAiPendingQuestion(question);
     setAiInput('');
     setAiLoading(true);
 
@@ -635,41 +700,36 @@ export default function TripDashboardScreen() {
       season: getSeason(now),
       userFlies: userFlies.length > 0 ? userFlies : undefined,
     };
-    const context = await enrichContextWithLocationCatchData(base, {
-      question,
-      locations,
-      userId: activeTrip?.user_id ?? null,
-      userLat: userProxRefForAI.current?.[1] ?? null,
-      userLng: userProxRefForAI.current?.[0] ?? null,
-      referenceDate: now,
-    });
-    const response = await askAI(context, question);
 
-    const aiMsg = {
-      id: (Date.now() + 1).toString(),
-      role: 'ai' as const,
-      text: response.text,
-      linkedSpots: context.guideLinkedSpots,
-      ambiguousSpots: context.guideLocationAmbiguous,
-      webSources: response.sources,
-      sourcesFetchedAt: response.fetchedAt,
-      locationRecommendation: response.locationRecommendation,
-    };
-    setAiMessages((prev) => [...prev, aiMsg]);
-    setAiLoading(false);
+    try {
+      const context = await enrichContextWithLocationCatchData(base, {
+        question,
+        locations,
+        userId: activeTrip?.user_id ?? null,
+        userLat: userProxRefForAI.current?.[1] ?? null,
+        userLng: userProxRefForAI.current?.[0] ?? null,
+        referenceDate: now,
+      });
+      const response = await askAI(context, question);
 
-    addAIQuery(
-      question,
-      response.text,
-      response.sources?.map((s) => ({
-        url: s.url,
-        title: s.title,
-        fetchedAt: s.fetchedAt,
-        excerpt: s.excerpt,
-      })),
-    );
+      addAIQuery(
+        question,
+        response.text,
+        response.sources?.map((s) => ({
+          url: s.url,
+          title: s.title,
+          fetchedAt: s.fetchedAt,
+          excerpt: s.excerpt,
+        })),
+      );
 
-    setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
+    } catch {
+      Alert.alert('Trip guide', 'Could not get a response. Check your connection and try again.');
+    } finally {
+      setAiPendingQuestion(null);
+      setAiLoading(false);
+    }
   }, [
     aiInput,
     aiLoading,
@@ -800,6 +860,96 @@ export default function TripDashboardScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={tripAiModalVisible}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
+        onRequestClose={() => setTripAiModalVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top', 'bottom']}>
+          <View style={styles.tripAiModalHeader}>
+            <Text style={styles.tripAiModalTitle}>Trip guide</Text>
+            <Pressable onPress={() => setTripAiModalVisible(false)} hitSlop={12}>
+              <Text style={styles.tripAiModalDone}>Done</Text>
+            </Pressable>
+          </View>
+          {!isConnected && (
+            <View style={styles.cachedDataBanner}>
+              <Text style={styles.cachedDataBannerText}>Offline – using cached data</Text>
+            </View>
+          )}
+          <AIGuideTab
+            strategySlot={
+              <>
+                <Text style={[styles.strategySectionLabel, styles.strategySectionLabelFirst]}>Best time to fish</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+                  ) : strategyBestTime ? (
+                    <Text style={styles.strategyBestTime}>{strategyBestTime}</Text>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>—</Text>
+                  )}
+                </View>
+                <Text style={styles.strategySectionLabel}>Top flies</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+                  ) : strategyTopFlies.length > 0 ? (
+                    <View style={styles.strategyFliesColumns}>
+                      <View style={styles.strategyFliesColumn}>
+                        {strategyTopFlies.map((fly, i) =>
+                          i % 2 === 0 ? (
+                            <View key={i} style={styles.strategyFlyRow}>
+                              <View style={styles.strategyFlyBullet} />
+                              <Text style={styles.strategyFlyName} numberOfLines={2}>
+                                {fly}
+                              </Text>
+                            </View>
+                          ) : null,
+                        )}
+                      </View>
+                      <View style={styles.strategyFliesColumn}>
+                        {strategyTopFlies.map((fly, i) =>
+                          i % 2 === 1 ? (
+                            <View key={i} style={styles.strategyFlyRow}>
+                              <View style={styles.strategyFlyBullet} />
+                              <Text style={styles.strategyFlyName} numberOfLines={2}>
+                                {fly}
+                              </Text>
+                            </View>
+                          ) : null,
+                        )}
+                      </View>
+                    </View>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>No fly suggestions.</Text>
+                  )}
+                </View>
+                <Text style={styles.strategySectionLabel}>How to fish it</Text>
+                <View style={styles.strategyCard}>
+                  {strategyLoading ? (
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+                  ) : strategyHowToFish ? (
+                    <Text style={styles.strategyHowToFishText}>{strategyHowToFish}</Text>
+                  ) : (
+                    <Text style={styles.strategyPlaceholder}>—</Text>
+                  )}
+                </View>
+              </>
+            }
+            messages={displayAiMessages}
+            input={aiInput}
+            setInput={setAiInput}
+            loading={aiLoading}
+            onSend={handleAskAI}
+            scrollRef={aiScrollRef}
+            styles={styles}
+            colors={colors}
+          />
+        </SafeAreaView>
+      </Modal>
+
       {/* Header — extends into top safe area so status bar area is blue */}
       <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
         <View style={styles.headerTitleBlock}>
@@ -834,7 +984,6 @@ export default function TripDashboardScreen() {
           { key: 'fish' as TabKey, label: 'Fishing' },
           { key: 'photos' as TabKey, label: 'Photos' },
           { key: 'conditions' as TabKey, label: 'Conditions' },
-          { key: 'ai' as TabKey, label: 'AI Guide' },
           { key: 'map' as TabKey, label: 'Map' },
         ]).map((tab) => {
           const color = activeTab === tab.key ? colors.primary : colors.textTertiary;
@@ -945,85 +1094,6 @@ export default function TripDashboardScreen() {
         </>
       )}
 
-      {activeTab === 'ai' && (
-        <>
-          {!isConnected && (
-            <View style={styles.cachedDataBanner}>
-              <Text style={styles.cachedDataBannerText}>Offline – using cached data</Text>
-            </View>
-          )}
-          <AIGuideTab
-            strategySlot={
-              <>
-                <Text style={[styles.strategySectionLabel, styles.strategySectionLabelFirst]}>Best time to fish</Text>
-                <View style={styles.strategyCard}>
-                  {strategyLoading ? (
-                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-                  ) : strategyBestTime ? (
-                    <Text style={styles.strategyBestTime}>{strategyBestTime}</Text>
-                  ) : (
-                    <Text style={styles.strategyPlaceholder}>—</Text>
-                  )}
-                </View>
-                <Text style={styles.strategySectionLabel}>Top flies</Text>
-                <View style={styles.strategyCard}>
-                  {strategyLoading ? (
-                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-                  ) : strategyTopFlies.length > 0 ? (
-                    <View style={styles.strategyFliesColumns}>
-                      <View style={styles.strategyFliesColumn}>
-                        {strategyTopFlies.map((fly, i) =>
-                          i % 2 === 0 ? (
-                            <View key={i} style={styles.strategyFlyRow}>
-                              <View style={styles.strategyFlyBullet} />
-                              <Text style={styles.strategyFlyName} numberOfLines={2}>
-                                {fly}
-                              </Text>
-                            </View>
-                          ) : null,
-                        )}
-                      </View>
-                      <View style={styles.strategyFliesColumn}>
-                        {strategyTopFlies.map((fly, i) =>
-                          i % 2 === 1 ? (
-                            <View key={i} style={styles.strategyFlyRow}>
-                              <View style={styles.strategyFlyBullet} />
-                              <Text style={styles.strategyFlyName} numberOfLines={2}>
-                                {fly}
-                              </Text>
-                            </View>
-                          ) : null,
-                        )}
-                      </View>
-                    </View>
-                  ) : (
-                    <Text style={styles.strategyPlaceholder}>No fly suggestions.</Text>
-                  )}
-                </View>
-                <Text style={styles.strategySectionLabel}>How to fish it</Text>
-                <View style={styles.strategyCard}>
-                  {strategyLoading ? (
-                    <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-                  ) : strategyHowToFish ? (
-                    <Text style={styles.strategyHowToFishText}>{strategyHowToFish}</Text>
-                  ) : (
-                    <Text style={styles.strategyPlaceholder}>—</Text>
-                  )}
-                </View>
-              </>
-            }
-            messages={aiMessages}
-            input={aiInput}
-            setInput={setAiInput}
-            loading={aiLoading}
-            onSend={handleAskAI}
-            scrollRef={aiScrollRef}
-            styles={styles}
-            colors={colors}
-          />
-        </>
-      )}
-
       {activeTab === 'map' && (
         <TripMapTab
           trip={activeTrip}
@@ -1061,6 +1131,17 @@ export default function TripDashboardScreen() {
           }}
         />
       )}
+
+      {activeTab !== 'map' ? (
+        <Pressable
+          style={[styles.tripAiChatFab, { bottom: Spacing.lg + insets.bottom }]}
+          onPress={() => setTripAiModalVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open trip guide chat"
+        >
+          <MaterialIcons name="chat" size={26} color={colors.textInverse} />
+        </Pressable>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1604,7 +1685,6 @@ function TripMapTab({
   mapColorScheme: 'light' | 'dark';
   styles: any;
 }) {
-  const addCatch = useTripStore((s) => s.addCatch);
   const locations = useLocationStore((s) => s.locations);
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
   const mapRef = useRef<TripMapboxMapRef>(null);
@@ -1750,51 +1830,6 @@ function TripMapTab({
     }, 400);
   }, [userId, isConnected]);
 
-  const handleAddFish = useCallback(async () => {
-    try {
-      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Location', 'Permission is needed to tag a catch with GPS.');
-        return;
-      }
-      const loc = await ExpoLocation.getCurrentPositionAsync({
-        accuracy: ExpoLocation.Accuracy.Lowest,
-      });
-      const lat = loc.coords.latitude;
-      const lng = loc.coords.longitude;
-      const clientEventId = uuidv4();
-      const id = addCatch({}, lat, lng, clientEventId);
-      if (!id) {
-        Alert.alert('Trip', 'No active trip to log a catch.');
-        return;
-      }
-      const { activeTrip: at, events: ev } = useTripStore.getState();
-      const catchEvent = ev.find((e) => e.id === id && e.event_type === 'catch');
-      if (at && catchEvent) {
-        const refreshPins = () => void getCachedCatchPins().then(setCachedPins);
-        if (isConnected) {
-          void upsertCatchEventToCloud(at, catchEvent, ev).then(async (ok) => {
-            if (ok) {
-              const pin = cachedPinFromCatchEvent(catchEvent);
-              if (pin) await mergeCachedPins([pin]);
-              await removePendingCatchByEventId(id);
-            } else {
-              await enqueuePendingCatch({ trip: at, event: catchEvent, allEvents: ev });
-            }
-            refreshPins();
-          });
-        } else {
-          void enqueuePendingCatch({ trip: at, event: catchEvent, allEvents: ev }).then(refreshPins);
-        }
-      }
-      setCenterCoordinate([lng, lat]);
-      setZoomLevel(USER_LOCATION_ZOOM);
-      setCameraKey((k) => k + 1);
-    } catch {
-      Alert.alert('Location', 'Could not read GPS for this catch.');
-    }
-  }, [addCatch, isConnected]);
-
   const handleDownloadOffline = useCallback(async () => {
     setOfflineBusy(true);
     try {
@@ -1848,13 +1883,6 @@ function TripMapTab({
       />
       <View style={styles.mapTabFabColumn} pointerEvents="box-none">
         <Pressable
-          style={({ pressed }) => [styles.mapTabFishFab, pressed && styles.mapTabFabPressed]}
-          onPress={() => void handleAddFish()}
-        >
-          <MaterialIcons name="add" size={26} color={colors.textInverse} />
-          <Text style={styles.mapTabFishFabLabel}>Fish</Text>
-        </Pressable>
-        <Pressable
           style={({ pressed }) => [
             styles.mapTabOfflineFab,
             offlineBusy && styles.mapTabFabDisabled,
@@ -1884,16 +1912,7 @@ function AIGuideTab({
   styles,
   colors,
 }: {
-  messages: {
-    id: string;
-    role: 'user' | 'ai';
-    text: string;
-    linkedSpots?: { id: string; name: string }[];
-    ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
-    webSources?: GuideIntelSource[];
-    sourcesFetchedAt?: string;
-    locationRecommendation?: GuideLocationRecommendation | null;
-  }[];
+  messages: TripGuideChatMessage[];
   input: string;
   setInput: (v: string) => void;
   loading: boolean;
@@ -3194,20 +3213,6 @@ function createTripDashboardStyles(colors: ThemeColors) {
     gap: Spacing.sm,
     alignItems: 'flex-end',
   },
-  mapTabFishFab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: BorderRadius.lg,
-    backgroundColor: colors.primary,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
-  },
   mapTabOfflineFab: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3228,15 +3233,47 @@ function createTripDashboardStyles(colors: ThemeColors) {
   mapTabFabDisabled: {
     opacity: 0.55,
   },
-  mapTabFishFabLabel: {
-    fontSize: FontSize.md,
-    fontWeight: '700',
-    color: colors.textInverse,
-  },
   mapTabOfflineFabLabel: {
     fontSize: FontSize.sm,
     fontWeight: '700',
     color: colors.textInverse,
+  },
+
+  tripAiChatFab: {
+    position: 'absolute',
+    right: Spacing.md,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.28,
+    shadowRadius: 4,
+    zIndex: 20,
+  },
+  tripAiModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  tripAiModalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  tripAiModalDone: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: colors.primary,
   },
 
   // AI Guide Tab

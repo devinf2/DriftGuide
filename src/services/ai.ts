@@ -18,6 +18,7 @@ import {
   parseGuideIntelChatResponse,
   parseSpotSummaryEdgeResponse,
 } from '@/src/services/guideIntelClient';
+import { bestTimeForClock, fliesForSeason, waterBodyHint } from '@/src/utils/offlineGuideBasics';
 import type {
   GuideIntelChatDataTier,
   GuideIntelSource,
@@ -372,6 +373,94 @@ function normalizeGuideChatReplyText(text: string, context: AIContext): string {
   return wrapPlainCatalogNamesInSpotTags(afterQuotes, entries);
 }
 
+function questionSoundsFlyRelated(q: string): boolean {
+  return (
+    /\b(fly|flies|pattern|lure|bait|nymph|dry|streamer|midge|caddis|hopper|dropper|rig)\b/i.test(q) ||
+    /\bwhat (should|to) (use|try|tie)\b/i.test(q) ||
+    /\b(recommend|suggest)\b.*\b(fly|pattern)\b/i.test(q)
+  );
+}
+
+/**
+ * Deterministic “offline guide” chat: no network; uses trip context, cached conditions, and catalog links only.
+ */
+function buildOfflineGuideChatReply(context: AIContext, question: string): GuideAIReply {
+  const q = question.trim();
+  const ql = q.toLowerCase();
+  const parts: string[] = [];
+
+  parts.push(
+    '**Offline guide** — using only data on this device (trip, saved catalog, cached conditions). Reconnect for live AI and fresh weather/flows.',
+  );
+
+  if (context.guideLocationAmbiguous?.length) {
+    for (const amb of context.guideLocationAmbiguous) {
+      const opts = amb.candidates.map((c) => `<<spot:${c.id}:${c.name}>>`).join(', ');
+      parts.push(`That could mean a few waters. Tap the one you mean: ${opts}.`);
+    }
+  }
+
+  const wantPlace = questionWantsLocationRecommendation(q);
+  const wantsFly = questionSoundsFlyRelated(ql);
+
+  const linked: { id: string; name: string }[] = [...(context.guideLinkedSpots ?? [])];
+  if (context.location?.id && context.location.name?.trim()) {
+    const name = context.location.name.trim();
+    if (!linked.some((s) => s.id === context.location!.id)) {
+      linked.unshift({ id: context.location.id, name });
+    }
+  }
+
+  const hasAmbiguity = Boolean(context.guideLocationAmbiguous?.length);
+  if (wantPlace && linked.length > 0 && !hasAmbiguity) {
+    const tagged = linked
+      .slice(0, 4)
+      .map((s) => `<<spot:${s.id}:${s.name}>>`)
+      .join(', ');
+    parts.push(`From your offline catalog and this screen, good options to open or compare: ${tagged}.`);
+  } else if (wantPlace && linked.length === 0 && !hasAmbiguity) {
+    parts.push(
+      'For where to fish offline, open a saved trip or spot first so I can tie picks to a specific water in your download.',
+    );
+  }
+
+  if (context.location?.type) {
+    parts.push(waterBodyHint(context.location.type));
+  }
+  parts.push(bestTimeForClock(context.timeOfDay));
+
+  if (wantsFly || (!wantPlace && ql.length > 0)) {
+    const flies = fliesForSeason(context.season);
+    parts.push(`Common ${context.season} patterns to try: ${flies.slice(0, 5).join(', ')}.`);
+    if (context.currentFly) {
+      parts.push(
+        context.currentFly2
+          ? `On the water you're fishing ${context.currentFly} / ${context.currentFly2}. If it's gone quiet, change depth or try a contrasting size or color from the list.`
+          : `You're on ${context.currentFly}. If it's slow, vary depth or switch to another pattern from the list.`,
+      );
+    }
+  }
+
+  if (context.weather) {
+    parts.push(
+      `Cached weather: ${context.weather.temperature_f}°F, ${context.weather.condition}. Wind ${context.weather.wind_speed_mph} mph ${context.weather.wind_direction}.`,
+    );
+  }
+  if (context.waterFlow) {
+    parts.push(
+      `Cached flows: ${context.waterFlow.flow_cfs} CFS; clarity ${CLARITY_LABELS[context.waterFlow.clarity]}.`,
+    );
+  }
+
+  if (context.recentEvents.length > 0 && (wantsFly || /\b(trip|caught|catch|working)\b/i.test(ql))) {
+    const tripLine = buildTripSummary(context.recentEvents).replace(/\n/g, ' ');
+    parts.push(`This trip: ${tripLine}`);
+  }
+
+  const raw = parts.join('\n\n');
+  return { text: normalizeGuideChatReplyText(raw, context) };
+}
+
 export async function askAI(context: AIContext, question: string): Promise<GuideAIReply> {
   const regionLabel =
     context.guideRegionLabel ||
@@ -407,6 +496,10 @@ export async function askAI(context: AIContext, question: string): Promise<Guide
     };
   }
 
+  if (!(await isOnlineForGuideIntel())) {
+    return buildOfflineGuideChatReply(context, question);
+  }
+
   if (!(await canUseClientOpenAiFallback())) {
     await new Promise(resolve => setTimeout(resolve, OPENAI_API_KEY ? 300 : 800));
     if (!OPENAI_API_KEY) {
@@ -416,9 +509,8 @@ export async function askAI(context: AIContext, question: string): Promise<Guide
           'Sign in, stay online, then try again. If you are signed in, check Edge Function logs for guide-intel in the Supabase dashboard.',
       };
     }
-    return {
-      text: "You're offline — reconnect for live answers. Saved conditions and any cached report on this screen still apply.",
-    };
+    // Rare: OpenAI key present but reachability flipped; still give on-device context.
+    return buildOfflineGuideChatReply(context, question);
   }
 
   try {

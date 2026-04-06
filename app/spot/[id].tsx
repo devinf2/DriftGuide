@@ -919,7 +919,7 @@ export default function SpotFishingTripScreen() {
             {showSpotOfflineGuide ? <OfflineFallbackGuide /> : null}
             {!spotNetOn ? (
               <Text style={styles.aiOfflineHint}>
-                You're offline — reconnect for live answers. Saved report and conditions still apply.
+                Offline: chat uses saved conditions and catalog data only. Reconnect for live AI and fresh flows.
               </Text>
             ) : null}
             {/* Best time to fish */}
@@ -1011,18 +1011,18 @@ export default function SpotFishingTripScreen() {
           <View style={styles.aiInputRow}>
             <TextInput
               style={styles.aiInput}
-              placeholder={spotNetOn ? 'Ask about this spot…' : 'Offline — reconnect to chat…'}
+              placeholder={spotNetOn ? 'Ask about this spot…' : 'Offline guide — ask using saved data…'}
               placeholderTextColor={colors.textTertiary}
               value={aiInput}
               onChangeText={setAiInput}
-              editable={spotNetOn && !aiLoading}
+              editable={!aiLoading}
               multiline
               maxLength={500}
             />
             <Pressable
               style={styles.aiSendButton}
               onPress={handleAskAI}
-              disabled={!spotNetOn || !aiInput.trim() || aiLoading}
+              disabled={!aiInput.trim() || aiLoading}
             >
               <Ionicons name="send" size={20} color={colors.textInverse} />
             </Pressable>
