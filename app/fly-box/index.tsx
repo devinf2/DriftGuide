@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import {
   View,
   Text,
@@ -16,6 +17,8 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/src/stores/authStore';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
@@ -28,12 +31,20 @@ import {
 } from '@/src/constants/fishingTypes';
 import type { Fly, FlyType, FlyPresentation } from '@/src/types';
 import {
-  fetchFlies,
+  fetchFliesOrCache,
   fetchFlyCatalog,
+  loadFlyCatalogFromCache,
   createFly,
   updateFly,
   deleteFly,
+  appendOptimisticFlyToCache,
+  removeFlyFromUserCache,
 } from '@/src/services/flyService';
+import {
+  enqueuePendingFlyCreate,
+  enqueuePendingFlyDelete,
+  removePendingFlyCreate,
+} from '@/src/services/pendingFlyOpsStorage';
 import { uploadFlyPhoto } from '@/src/services/photoService';
 import type { FlyCatalog } from '@/src/types';
 
@@ -97,6 +108,8 @@ export default function FlyBoxScreen() {
   const styles = useMemo(() => createFlyBoxStyles(colors), [colors]);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
+  const { isConnected } = useNetworkStatus();
   const { user } = useAuthStore();
   const [flies, setFlies] = useState<Fly[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,7 +131,8 @@ export default function FlyBoxScreen() {
     if (!user) return;
     setLoading(true);
     try {
-      const list = await fetchFlies(user.id);
+      const list = await fetchFliesOrCache(user.id);
+      list.sort((a, b) => a.name.localeCompare(b.name));
       setFlies(list);
     } catch (e) {
       console.error(e);
@@ -130,7 +144,11 @@ export default function FlyBoxScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFlies();
-      fetchFlyCatalog().then(setCatalog).catch(() => setCatalog([]));
+      fetchFlyCatalog()
+        .then(setCatalog)
+        .catch(async () => {
+          setCatalog(await loadFlyCatalogFromCache());
+        });
     }, [loadFlies])
   );
 
@@ -202,6 +220,14 @@ export default function FlyBoxScreen() {
     const sizeNum = Number(size);
     setSaving(true);
     try {
+      if (!isConnected && editingFly) {
+        Alert.alert('Offline', 'Reconnect to edit flies already saved to your account.');
+        return;
+      }
+      if (!isConnected && photoUri) {
+        Alert.alert('Offline', 'Add photos after you reconnect.');
+        return;
+      }
       let photoUrl: string | null = null;
       if (photoUri) {
         photoUrl = await uploadFlyPhoto(user.id, photoUri);
@@ -215,6 +241,38 @@ export default function FlyBoxScreen() {
           quantity,
           ...(clearPhoto ? { photo_url: null } : photoUrl !== null ? { photo_url: photoUrl } : {}),
         });
+      } else if (!isConnected) {
+        const clientId = `pg_${uuidv4()}`;
+        const input = {
+          ...(selectedCatalogFly
+            ? { fly_id: selectedCatalogFly.id, ...(photoUrl != null && { photo_url: photoUrl }) }
+            : {
+                name: nameVal,
+                type: 'fly' as const,
+                presentation: presentation ?? undefined,
+                photo_url: photoUrl,
+              }),
+          size: sizeNum,
+          color: color.trim() || null,
+          quantity,
+        };
+        await enqueuePendingFlyCreate(user.id, clientId, input);
+        const optimistic: Fly = {
+          id: clientId,
+          user_id: user.id,
+          name: selectedCatalogFly?.name ?? nameVal,
+          type: 'fly',
+          size: sizeNum,
+          color: color.trim() || null,
+          photo_url: null,
+          presentation: presentation ?? selectedCatalogFly?.presentation ?? null,
+          quantity,
+          fly_id: selectedCatalogFly?.id,
+        };
+        await appendOptimisticFlyToCache(user.id, optimistic);
+        setFlies((prev) => [...prev, optimistic].sort((a, b) => a.name.localeCompare(b.name)));
+        closeModal();
+        return;
       } else {
         await createFly(user.id, {
           ...(selectedCatalogFly
@@ -254,6 +312,17 @@ export default function FlyBoxScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              if (!user) return;
+              if (!isConnected) {
+                if (fly.id.startsWith('pg_')) {
+                  await removePendingFlyCreate(fly.id);
+                } else {
+                  await enqueuePendingFlyDelete(user.id, fly.id);
+                }
+                await removeFlyFromUserCache(user.id, fly.id);
+                await loadFlies();
+                return;
+              }
               await deleteFly(fly.id);
               await loadFlies();
             } catch (e) {
@@ -268,7 +337,7 @@ export default function FlyBoxScreen() {
 
   return (
     <View style={[styles.container, { paddingBottom: insets.bottom + Spacing.lg }]}>
-      <View style={[styles.screenHeader, { paddingTop: insets.top + Spacing.sm }]}>
+      <View style={[styles.screenHeader, { paddingTop: effectiveTop + Spacing.sm }]}>
         <Pressable
           style={styles.screenHeaderBack}
           onPress={goBack}

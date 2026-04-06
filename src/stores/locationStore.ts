@@ -47,7 +47,8 @@ export const useLocationStore = create<LocationState>()(
         set({ isLoading: true });
         try {
           const { data, error } = await withTimeout(
-            supabase.from('locations').select('*').is('deleted_at', null).order('name'),
+            (async () =>
+              supabase.from('locations').select('*').is('deleted_at', null).order('name'))(),
             LOCATION_FETCH_MS,
           );
 

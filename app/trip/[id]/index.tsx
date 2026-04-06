@@ -75,7 +75,6 @@ import {
   timestampBetween,
   upsertEventSorted,
 } from '@/src/utils/journalTimeline';
-import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { catalogLocationMarkersInViewport } from '@/src/utils/mapCatalogMarkers';
 import { tripMapDefaultCenterCoordinate, tripMapDefaultZoom } from '@/src/utils/mapViewport';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -110,7 +109,6 @@ export default function TripDashboardScreen() {
   const userProxRefForAI = useRef<[number, number] | null>(null);
 
   const [activeTab, setActiveTab] = useState<TabKey>('fish');
-  const [elapsed, setElapsed] = useState('0m');
   const [showFlyPicker, setShowFlyPicker] = useState(false);
   const [flyPickerEditEvent, setFlyPickerEditEvent] = useState<TripEvent | null>(null);
   const [showNoteInput, setShowNoteInput] = useState(false);
@@ -167,27 +165,6 @@ export default function TripDashboardScreen() {
   const flyPickerNames = userFlies.length > 0
     ? [...new Set(userFlies.map(f => f.name))].sort()
     : FLY_NAMES;
-
-  useEffect(() => {
-    if (!activeTrip) return;
-    const tick = () => {
-      const s = useTripStore.getState();
-      const ms = getLiveFishingElapsedMs(
-        s.fishingElapsedMs,
-        s.fishingSegmentStartedAt,
-        s.isTripPaused,
-        s.activeTrip?.start_time ?? null,
-      );
-      setElapsed(formatFishingElapsedLabel(ms));
-    };
-    if (isTripPaused) {
-      tick();
-      return;
-    }
-    const interval = setInterval(tick, 1000);
-    tick();
-    return () => clearInterval(interval);
-  }, [activeTrip, isTripPaused]);
 
   useEffect(() => {
     if (activeTrip && !conditionsFetched.current) {

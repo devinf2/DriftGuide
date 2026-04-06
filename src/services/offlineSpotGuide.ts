@@ -48,8 +48,8 @@ export function buildOfflineSpotGuide(
   const tod = getTimeOfDay(now);
   const flies = fliesForSeason(season);
   const condLine =
-    conditions && conditions.overall_rating
-      ? ` Saved conditions snapshot suggests overall fishing is ${conditions.overall_rating} — treat as a rough static hint offline.`
+    conditions?.water?.rating != null
+      ? ` Saved conditions snapshot (water ${conditions.water.rating}) is a rough offline hint.`
       : '';
 
   const report = [

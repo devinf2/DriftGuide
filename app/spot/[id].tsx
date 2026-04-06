@@ -611,7 +611,7 @@ export default function SpotFishingTripScreen() {
               const ok = await softDeleteCommunityLocation(id);
               if (ok) {
                 await fetchLocations();
-                router.back();
+                handleHeaderBack();
               } else {
                 Alert.alert('Could not delete', USED_SPOT_MESSAGE);
               }
@@ -620,7 +620,7 @@ export default function SpotFishingTripScreen() {
         ],
       );
     });
-  }, [id, runCreatorActionIfAllowed, fetchLocations, router]);
+  }, [id, runCreatorActionIfAllowed, fetchLocations, handleHeaderBack]);
 
   const spotHeaderTitle = location?.name ?? 'Fishing Trip';
   const showSpotCreatorMenu = creatorMenu?.isCreator === true;

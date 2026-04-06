@@ -394,7 +394,7 @@ export async function updateFly(
     boxUpdate.fly_size_id = await ensureFlySizeId(updates.size);
   }
   if (updates.quantity !== undefined) {
-    boxUpdate.quantity = Math.max(1, updates.quantity);
+    boxUpdate.quantity = Math.max(1, updates.quantity ?? 1);
   }
 
   if (Object.keys(boxUpdate).length === 0) {

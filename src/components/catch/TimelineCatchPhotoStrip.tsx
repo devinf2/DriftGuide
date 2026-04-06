@@ -1,6 +1,8 @@
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import type { CatchData } from '@/src/types';
 import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
-import { Image, Pressable, StyleSheet, View, type ImageStyle, type ViewStyle } from 'react-native';
+import { Image } from 'expo-image';
+import { Pressable, StyleSheet, View, type ImageStyle, type ViewStyle } from 'react-native';
 
 type Props = {
   data: CatchData;
@@ -17,7 +19,11 @@ export function TimelineCatchPhotoStrip({ data, onPress, imageStyle, containerSt
     <View style={[styles.strip, containerStyle]}>
       {urls.map((uri, i) => (
         <Pressable key={`${i}-${uri}`} onPress={onPress}>
-          <Image source={{ uri }} style={[styles.thumbBase, imageStyle]} />
+          {uri.startsWith('http') ? (
+            <OfflineTripPhotoImage remoteUri={uri} style={[styles.thumbBase, imageStyle]} contentFit="cover" />
+          ) : (
+            <Image source={{ uri }} style={[styles.thumbBase, imageStyle]} contentFit="cover" cachePolicy="memory-disk" />
+          )}
         </Pressable>
       ))}
     </View>

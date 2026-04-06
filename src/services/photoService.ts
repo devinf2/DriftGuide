@@ -39,6 +39,26 @@ export async function fetchPhotos(userId: string, options: FetchPhotosOptions = 
   return list;
 }
 
+/** Photos for any of the given trips (album rows). Empty `tripIds` returns []. */
+export async function fetchPhotosForTripIds(userId: string, tripIds: string[]): Promise<Photo[]> {
+  if (tripIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*')
+    .eq('user_id', userId)
+    .in('trip_id', tripIds)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.warn('[fetchPhotosForTripIds] query failed', { userId, tripIds: tripIds.length, error });
+    throw error;
+  }
+  const list = (data as Photo[]) || [];
+  console.log('[fetchPhotosForTripIds] photos table', { userId, count: list.length });
+  return list;
+}
+
 /** Photo with optional trip and location for library + filters */
 export interface PhotoWithTrip extends Photo {
   trip?: { id: string; location_id: string | null; location?: { id: string; name: string } | null } | null;

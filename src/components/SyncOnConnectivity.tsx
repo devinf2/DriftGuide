@@ -9,6 +9,7 @@ import { syncPendingUserCatches } from '@/src/services/userCatchService';
 import { refreshAllIfStale } from '@/src/services/waterwayCache';
 import { processPendingPhotos } from '@/src/services/processPendingPhotos';
 import { flushPendingFlyOps } from '@/src/services/flyService';
+import { reconcileTripPhotoCache } from '@/src/services/tripPhotoOfflineCache';
 
 const DEBOUNCE_MS = 2000;
 const WATERWAY_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +48,11 @@ export function SyncOnConnectivity() {
         await processPendingPhotos();
         await flushPendingFlyOps();
         await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, userId);
+        if (userId) {
+          await reconcileTripPhotoCache(userId).catch((e) =>
+            console.warn('[tripPhotoOfflineCache] reconcile failed', e),
+          );
+        }
       } finally {
         inProgressRef.current = false;
       }
@@ -74,6 +80,11 @@ export function SyncOnConnectivity() {
           await processPendingPhotos();
           await flushPendingFlyOps();
           await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, uid);
+          if (uid) {
+            await reconcileTripPhotoCache(uid).catch((e) =>
+              console.warn('[tripPhotoOfflineCache] reconcile failed', e),
+            );
+          }
         })()
           .finally(() => {
             inProgressRef.current = false;

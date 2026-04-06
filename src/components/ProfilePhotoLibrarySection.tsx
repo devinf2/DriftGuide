@@ -16,10 +16,10 @@ import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import {
   ActivityIndicator,
   Alert,
-  Image as RNImage,
   Modal,
   Pressable,
   ScrollView,
@@ -374,7 +374,11 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
                 style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
                 onPress={() => setSelectedPhoto(photo)}
               >
-                <RNImage source={{ uri: photo.url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                <OfflineTripPhotoImage
+                  remoteUri={photo.url}
+                  style={StyleSheet.absoluteFill}
+                  contentFit="cover"
+                />
                 {dateLabel ? (
                   <View style={styles.dateBanner} pointerEvents="none">
                     <Text style={styles.dateBannerText} numberOfLines={1}>
@@ -692,10 +696,10 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
               ]}
               showsVerticalScrollIndicator={false}
             >
-              <RNImage
-                source={{ uri: selectedPhoto.url }}
+              <OfflineTripPhotoImage
+                remoteUri={selectedPhoto.url}
                 style={[styles.fullScreenImage, { width: winWidth, height: Math.round(winHeight * 0.55) }]}
-                resizeMode="contain"
+                contentFit="contain"
               />
               <View style={styles.photoInfo}>
                 {selectedPhoto.trip?.location?.name ? (

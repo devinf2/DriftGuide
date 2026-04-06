@@ -5,6 +5,7 @@ import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import Constants from 'expo-constants';
+import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -99,6 +100,7 @@ export default function ProfileSettingsScreen() {
   const { pendingSyncTrips, retryPendingSyncs, isSyncingPending } = useTripStore();
   const [homeStateDraft, setHomeStateDraft] = useState('');
   const [savingHomeState, setSavingHomeState] = useState(false);
+  const [clearingTripPhotos, setClearingTripPhotos] = useState(false);
 
   useEffect(() => {
     setHomeStateDraft(profile?.home_state?.trim() ?? '');
@@ -124,6 +126,33 @@ export default function ProfileSettingsScreen() {
       Alert.alert('Sync failed', 'Could not sync. Check your connection and try again.');
     }
   }, [pendingSyncTrips.length, retryPendingSyncs]);
+
+  const handleClearTripPhotoCache = useCallback(() => {
+    Alert.alert(
+      'Clear downloaded trip photos?',
+      'Removes offline copies of trip photos on this device, including pinned trips. They will download again when you are online.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setClearingTripPhotos(true);
+              try {
+                await clearTripPhotoOfflineCache();
+                Alert.alert('Done', 'Trip photo cache cleared.');
+              } catch (e) {
+                Alert.alert('Could not clear', (e as Error).message);
+              } finally {
+                setClearingTripPhotos(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, []);
 
   const handleSaveHomeState = useCallback(async () => {
     setSavingHomeState(true);
@@ -188,6 +217,25 @@ export default function ProfileSettingsScreen() {
             <ActivityIndicator size="small" color={colors.textInverse} />
           ) : (
             <Text style={styles.primaryBtnText}>Save home state</Text>
+          )}
+        </Pressable>
+      </View>
+
+      <View style={[styles.card, styles.sectionSpacing]}>
+        <Text style={styles.sectionTitle}>Trip photos offline</Text>
+        <Text style={styles.bodyText}>
+          We keep photos for your last four completed trips on this device for quick loading. You can pin specific
+          trips from a trip summary so those photos are always kept here.
+        </Text>
+        <Pressable
+          style={[styles.primaryBtn, clearingTripPhotos && styles.primaryBtnDisabled]}
+          onPress={handleClearTripPhotoCache}
+          disabled={clearingTripPhotos}
+        >
+          {clearingTripPhotos ? (
+            <ActivityIndicator size="small" color={colors.textInverse} />
+          ) : (
+            <Text style={styles.primaryBtnText}>Clear downloaded trip photos</Text>
           )}
         </Pressable>
       </View>

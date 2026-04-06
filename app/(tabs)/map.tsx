@@ -226,7 +226,7 @@ export default function MapTabScreen() {
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const { locations, fetchLocations } = useLocationStore();
-  const [offlineSnap, setOfflineSnap] = useState<typeof locations>([]);
+  const [offlineSnap, setOfflineSnap] = useState<Location[]>([]);
   const setMapAddLocationSheetActive = useAddLocationFlowStore((s) => s.setMapSheetActive);
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
