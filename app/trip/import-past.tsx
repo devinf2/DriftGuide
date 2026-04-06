@@ -44,6 +44,7 @@ import {
   View,
 } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { v4 as uuidv4 } from 'uuid';
@@ -444,6 +445,7 @@ function Step3CatchDetailsSummary({
 export default function ImportPastTripsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { width: windowWidth } = useWindowDimensions();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -1329,7 +1331,7 @@ export default function ImportPastTripsScreen() {
 
   return (
     <View style={styles.flex}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
+      <View style={[styles.header, { paddingTop: effectiveTop }]}>
         <View style={styles.headerNavRow}>
           <View style={[styles.headerNavSide, styles.headerNavSideStart]}>
             <Pressable style={styles.backBtn} onPress={goBackInWizard}>

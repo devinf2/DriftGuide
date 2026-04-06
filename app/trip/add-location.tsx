@@ -17,6 +17,7 @@ import {
   Switch,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
@@ -76,6 +77,7 @@ export default function AddLocationScreen() {
   const styles = useMemo(() => createAddLocationStyles(colors), [colors]);
 
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const router = useRouter();
   const params = useLocalSearchParams<{ presetName?: string; lat?: string; lng?: string }>();
   const presetLat = parseCoordParam(params.lat);
@@ -586,7 +588,7 @@ export default function AddLocationScreen() {
       presentationStyle="fullScreen"
       onRequestClose={closeParentPickerWithoutSaving}
     >
-      <View style={[styles.parentPickerFullScreen, { paddingTop: insets.top + Spacing.md, paddingBottom: insets.bottom + Spacing.md }]}>
+      <View style={[styles.parentPickerFullScreen, { paddingTop: effectiveTop + Spacing.md, paddingBottom: insets.bottom + Spacing.md }]}>
         <Text style={styles.parentPickerTitle}>Part of an existing place?</Text>
         {parentPickerPhase === 'loading' && !parentLinkSaving ? (
           <View style={styles.parentLinkSavingWrap}>

@@ -29,6 +29,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 
@@ -38,6 +39,7 @@ export default function TripSummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
   const { deleteTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
@@ -231,7 +233,7 @@ export default function TripSummaryScreen() {
         statusBarTranslucent
         onRequestClose={() => setFullScreenPhoto(null)}
       >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
@@ -335,7 +337,7 @@ export default function TripSummaryScreen() {
       </Modal>
 
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
+      <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
         <Pressable onPress={() => router.back()}>
           <MaterialIcons name="arrow-back" size={22} color={Colors.textInverse} />
         </Pressable>

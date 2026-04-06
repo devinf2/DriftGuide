@@ -23,6 +23,7 @@ import {
   TouchableOpacity,
   Switch,
 } from 'react-native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
@@ -355,6 +356,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
     ref,
   ) {
     const insets = useSafeAreaInsets();
+    const effectiveTop = useEffectiveSafeTopInset();
     const { colors, resolvedScheme } = useAppTheme();
     const styles = useMemo(() => createAddLocationMapSheetStyles(colors), [colors]);
     const { user } = useAuthStore();
@@ -650,7 +652,7 @@ export const AddLocationMapSheet = forwardRef<AddLocationMapSheetRef, Props>(
           <View
             style={[
               styles.parentPickerFullScreen,
-              { paddingTop: insets.top + Spacing.md, paddingBottom: insets.bottom + Spacing.md },
+              { paddingTop: effectiveTop + Spacing.md, paddingBottom: insets.bottom + Spacing.md },
             ]}
           >
             <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />

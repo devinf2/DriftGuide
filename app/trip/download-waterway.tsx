@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ExpoLocation from 'expo-location';
 import { OfflineRegionPickerMap } from '@/src/components/map/OfflineRegionPickerMap';
@@ -36,6 +37,7 @@ type TabKey = 'shortcuts' | 'map';
 export default function DownloadWaterwayScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const user = useAuthStore((s) => s.user);
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const { isConnected } = useNetworkStatus();
@@ -179,7 +181,7 @@ export default function DownloadWaterwayScreen() {
 
   if (!isConnected) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top + Spacing.xl }]}>
+      <View style={[styles.container, { paddingTop: effectiveTop + Spacing.xl }]}>
         <Text style={styles.offlineMessage}>
           Connect to the internet to add regions for offline use.
         </Text>

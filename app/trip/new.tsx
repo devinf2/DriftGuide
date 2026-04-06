@@ -3,6 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Platform, Modal, KeyboardAvoidingView, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
@@ -196,6 +197,7 @@ export default function NewTripScreen() {
   const pickerThemeVariant = resolvedScheme === 'dark' ? 'dark' : 'light';
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const params = useLocalSearchParams<{ locationId?: string; fromHome?: string }>();
   const paramTruthy = (v: string | string[] | undefined) => {
     const s = Array.isArray(v) ? v[0] : v;
@@ -612,7 +614,7 @@ export default function NewTripScreen() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />
-      <View style={[styles.planTripHeaderBar, { paddingTop: insets.top }]}>
+      <View style={[styles.planTripHeaderBar, { paddingTop: effectiveTop }]}>
         <View style={[styles.planTripHeaderSide, styles.planTripHeaderSideStart]}>
           <Pressable
             accessibilityRole="button"

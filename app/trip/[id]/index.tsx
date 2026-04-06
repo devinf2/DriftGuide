@@ -43,6 +43,7 @@ import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox'
 import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
@@ -94,6 +95,7 @@ export default function TripDashboardScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { isConnected } = useNetworkStatus();
   const {
     activeTrip, events, fishCount, currentFly, currentFly2, nextFlyRecommendation,
@@ -763,7 +765,7 @@ export default function TripDashboardScreen() {
         statusBarTranslucent
         onRequestClose={() => setFullScreenPhoto(null)}
       >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
@@ -812,13 +814,10 @@ export default function TripDashboardScreen() {
       </Modal>
 
       {/* Header — extends into top safe area so status bar area is blue */}
-      <View style={[styles.header, { paddingTop: insets.top + Spacing.md }]}>
-        <View>
-          <Text style={styles.locationName}>
+      <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.locationName} numberOfLines={2}>
             {activeTrip.location?.name || 'Fishing Trip'}
-          </Text>
-          <Text style={[styles.timerText, isTripPaused && styles.timerTextPaused]}>
-            {isTripPaused ? `Paused \u00B7 ${elapsed}` : elapsed}
           </Text>
         </View>
         <View style={styles.headerRight}>
@@ -2249,24 +2248,20 @@ function createTripDashboardStyles(colors: ThemeColors) {
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: colors.primary,
+  },
+  headerTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: Spacing.sm,
   },
   locationName: {
     fontSize: FontSize.lg,
     fontWeight: '700',
     color: colors.textInverse,
-  },
-  timerText: {
-    fontSize: FontSize.md,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 2,
-  },
-  timerTextPaused: {
-    color: 'rgba(255,255,255,0.95)',
-    fontWeight: '600',
   },
   headerRight: {
     flexDirection: 'row',

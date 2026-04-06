@@ -34,6 +34,7 @@ import {
     useWindowDimensions,
     View,
 } from 'react-native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type ViewMode = 'list' | 'map';
@@ -205,6 +206,7 @@ interface LocationGroup {
 export default function JournalScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
   const { colors, resolvedScheme } = useAppTheme();
@@ -432,21 +434,8 @@ export default function JournalScreen() {
         coordinate: [c.longitude!, c.latitude!] as [number, number],
         title: c.species?.trim() || 'Catch',
         onPress: () => handleFishMarkerPress(c),
-        children: (
-          <View style={styles.fishMarkerWrap} pointerEvents="box-none">
-            <View style={styles.fishMarkerBubble}>
-              {fishHero ? (
-                <Image
-                  source={{ uri: fishHero }}
-                  style={styles.fishMarkerThumb}
-                  resizeMode="cover"
-                />
-              ) : (
-                <MaterialCommunityIcons name="fish" size={18} color={colors.textInverse} />
-              )}
-            </View>
-          </View>
-        ),
+        /** Use catch-photo path so PointAnnotation refreshes after the image loads (bitmap snapshot). */
+        catchPhotoUrl: fishHero ?? null,
       };
     });
   }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress, styles, colors]);
@@ -487,7 +476,7 @@ export default function JournalScreen() {
   return (
     <View style={styles.container}>
       {/* Blue safe area + header (List/Map + filter) */}
-      <View style={[styles.journalHeaderWrap, { paddingTop: insets.top, paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]}>
+      <View style={[styles.journalHeaderWrap, { paddingTop: effectiveTop, paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]}>
         <View style={styles.controlsBar}>
           <View style={styles.viewToggle}>
             <Pressable
@@ -1204,29 +1193,6 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     fontSize: FontSize.md,
     fontWeight: '600',
   },
-  fishMarkerWrap: {
-    alignItems: 'center',
-  },
-  fishMarkerBubble: {
-    backgroundColor: colors.accent,
-    borderRadius: BorderRadius.full,
-    width: 34,
-    height: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  fishMarkerThumb: {
-    width: 34,
-    height: 34,
-    borderRadius: BorderRadius.full,
-  },
-
   // Entry selection modal (multiple trips at same place)
   entryModalRoot: {
     flex: 1,

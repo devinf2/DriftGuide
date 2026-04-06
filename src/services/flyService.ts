@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import type { Fly, FlyCatalog, FlyColor, FlySize, FlyPresentation } from '@/src/types';
+import { getPendingFlyOps, setPendingFlyOpsList } from '@/src/services/pendingFlyOpsStorage';
 
 const FLIES_CACHE_PREFIX = 'user_flies_';
+const FLY_CATALOG_CACHE_KEY = 'driftguide_fly_catalog_v1';
 
 /** Fetch reference lists for pickers. */
 export async function fetchFlyCatalog(): Promise<FlyCatalog[]> {
@@ -11,7 +13,23 @@ export async function fetchFlyCatalog(): Promise<FlyCatalog[]> {
     .select('*')
     .order('name');
   if (error) throw error;
-  return (data ?? []) as FlyCatalog[];
+  const list = (data ?? []) as FlyCatalog[];
+  try {
+    await AsyncStorage.setItem(FLY_CATALOG_CACHE_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore */
+  }
+  return list;
+}
+
+export async function loadFlyCatalogFromCache(): Promise<FlyCatalog[]> {
+  try {
+    const raw = await AsyncStorage.getItem(FLY_CATALOG_CACHE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as FlyCatalog[];
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchFlyColors(): Promise<FlyColor[]> {
@@ -93,6 +111,67 @@ export async function getFliesFromCache(userId: string): Promise<Fly[]> {
     return JSON.parse(raw) as Fly[];
   } catch {
     return [];
+  }
+}
+
+async function writeFliesCache(userId: string, flies: Fly[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(FLIES_CACHE_PREFIX + userId, JSON.stringify(flies));
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function appendOptimisticFlyToCache(userId: string, fly: Fly): Promise<void> {
+  const list = await getFliesFromCache(userId);
+  await writeFliesCache(userId, [...list, fly]);
+}
+
+export async function replacePendingFlyInUserCache(
+  userId: string,
+  clientBoxId: string,
+  fly: Fly,
+): Promise<void> {
+  const list = await getFliesFromCache(userId);
+  await writeFliesCache(
+    userId,
+    list.map((f) => (f.id === clientBoxId ? fly : f)),
+  );
+}
+
+export async function removeFlyFromUserCache(userId: string, flyId: string): Promise<void> {
+  const list = await getFliesFromCache(userId);
+  await writeFliesCache(
+    userId,
+    list.filter((f) => f.id !== flyId),
+  );
+}
+
+/** Try Supabase; on failure return cached flies. */
+export async function fetchFliesOrCache(userId: string): Promise<Fly[]> {
+  try {
+    return await fetchFlies(userId);
+  } catch {
+    return getFliesFromCache(userId);
+  }
+}
+
+export async function flushPendingFlyOps(): Promise<void> {
+  let ops = await getPendingFlyOps();
+  while (ops.length > 0) {
+    const op = ops[0];
+    try {
+      if (op.kind === 'create') {
+        const fly = await createFly(op.userId, op.input as Parameters<typeof createFly>[1]);
+        await replacePendingFlyInUserCache(op.userId, op.clientBoxId, fly);
+      } else {
+        await deleteFly(op.serverId);
+      }
+      ops = ops.slice(1);
+      await setPendingFlyOpsList(ops);
+    } catch {
+      break;
+    }
   }
 }
 

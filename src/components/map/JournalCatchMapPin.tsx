@@ -63,7 +63,9 @@ export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
           style={styles.image}
           contentFit="cover"
           cachePolicy="memory-disk"
+          priority="high"
           onLoadEnd={onImageLoaded}
+          onError={onImageLoaded}
         />
       ) : (
         <View style={styles.iconInner}>

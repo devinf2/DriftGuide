@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { STEP1_NEARBY_CATALOG_LIST_CAP } from '@/src/constants/locationThresholds';
+import {
+  PARENT_CANDIDATE_MAX_RADIUS_KM,
+  STEP1_NEARBY_CATALOG_LIST_CAP,
+} from '@/src/constants/locationThresholds';
 import {
   View,
   Text,
@@ -16,6 +19,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { Ionicons } from '@expo/vector-icons';
 import * as ExpoLocation from 'expo-location';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
@@ -28,8 +32,12 @@ import {
   addCommunityLocation,
   haversineDistance,
   isWithinPinParentReuseThreshold,
+  rootParentCandidatesFromLocations,
   searchNearbyRootParentCandidates,
 } from '@/src/services/locationService';
+import { loadOfflineLocationsSnapshot } from '@/src/services/offlineLocationSnapshot';
+import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
+import { mergeLocationsById } from '@/src/utils/mergeLocations';
 import type { Location, LocationType, NearbyLocationResult } from '@/src/types';
 import {
   LocationPinParentTwoStepFlow,
@@ -83,6 +91,7 @@ export default function FishNowScreen() {
   const pickerTheme = resolvedScheme === 'dark' ? 'dark' : 'light';
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
   const { startTrip } = useTripStore();
   const { fetchLocations, locations, addRecentLocation } = useLocationStore();
@@ -165,17 +174,6 @@ export default function FishNowScreen() {
             if (!cancelled) {
               setUserCoords({ ...DEV_FALLBACK_COORDS });
               setDevFallbackNotice('Dev: using Provo, UT — location permission not granted (simulator-friendly).');
-              setPhase('loading_parents');
-              const rows = await searchNearbyRootParentCandidates(
-                DEV_FALLBACK_COORDS.latitude,
-                DEV_FALLBACK_COORDS.longitude,
-                undefined,
-                undefined,
-                STEP1_NEARBY_CATALOG_LIST_CAP,
-              );
-              if (cancelled) return;
-              setNearbyCatalog(rows);
-              setPhase('pick_parent');
             }
             return;
           }
@@ -185,50 +183,39 @@ export default function FishNowScreen() {
           }
           return;
         }
-        const loc = await ExpoLocation.getCurrentPositionAsync({
-          accuracy: ExpoLocation.Accuracy.Balanced,
-        });
-        if (cancelled) return;
-        const { latitude, longitude } = loc.coords;
-        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-          throw new Error('invalid coords');
+
+        const last = await ExpoLocation.getLastKnownPositionAsync({ maxAge: 3_600_000 });
+        let latitude: number | null =
+          last?.coords && Number.isFinite(last.coords.latitude) ? last.coords.latitude : null;
+        let longitude: number | null =
+          last?.coords && Number.isFinite(last.coords.longitude) ? last.coords.longitude : null;
+
+        try {
+          const loc = await ExpoLocation.getCurrentPositionAsync({
+            accuracy: isConnected ? ExpoLocation.Accuracy.Balanced : ExpoLocation.Accuracy.Low,
+          });
+          const la = loc.coords.latitude;
+          const lo = loc.coords.longitude;
+          if (Number.isFinite(la) && Number.isFinite(lo)) {
+            latitude = la;
+            longitude = lo;
+          }
+        } catch {
+          /* keep last-known */
         }
-        setUserCoords({ latitude, longitude });
-        setPhase('loading_parents');
-        const rows = await searchNearbyRootParentCandidates(
-          latitude,
-          longitude,
-          undefined,
-          undefined,
-          STEP1_NEARBY_CATALOG_LIST_CAP,
-        );
-        if (cancelled) return;
-        setNearbyCatalog(rows);
-        setPhase('pick_parent');
+
+        if (latitude == null || longitude == null) {
+          throw new Error('no coords');
+        }
+        if (!cancelled) {
+          setUserCoords({ latitude, longitude });
+        }
       } catch {
         if (__DEV__) {
           if (!cancelled) {
             setUserCoords({ ...DEV_FALLBACK_COORDS });
             setDevFallbackNotice('Dev: using Provo, UT — GPS unavailable (typical in simulator).');
             setGpsError(null);
-            setPhase('loading_parents');
-            try {
-              const rows = await searchNearbyRootParentCandidates(
-                DEV_FALLBACK_COORDS.latitude,
-                DEV_FALLBACK_COORDS.longitude,
-                undefined,
-                undefined,
-                STEP1_NEARBY_CATALOG_LIST_CAP,
-              );
-              if (cancelled) return;
-              setNearbyCatalog(rows);
-              setPhase('pick_parent');
-            } catch {
-              if (!cancelled) {
-                setNearbyCatalog([]);
-                setPhase('pick_parent');
-              }
-            }
           }
           return;
         }
@@ -241,7 +228,51 @@ export default function FishNowScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isConnected]);
+
+  useEffect(() => {
+    if (!userCoords) return;
+    let cancelled = false;
+    (async () => {
+      setPhase('loading_parents');
+      const { latitude, longitude } = userCoords;
+      try {
+        let rows: NearbyLocationResult[];
+        if (isConnected) {
+          rows = await searchNearbyRootParentCandidates(
+            latitude,
+            longitude,
+            undefined,
+            undefined,
+            STEP1_NEARBY_CATALOG_LIST_CAP,
+          );
+        } else {
+          const snap = user?.id ? await loadOfflineLocationsSnapshot(user.id) : [];
+          const dl = await getLocationsForOfflineStart();
+          const merged = mergeLocationsById(locations, snap, dl);
+          rows = rootParentCandidatesFromLocations(
+            merged,
+            latitude,
+            longitude,
+            null,
+            PARENT_CANDIDATE_MAX_RADIUS_KM,
+            STEP1_NEARBY_CATALOG_LIST_CAP,
+          );
+        }
+        if (cancelled) return;
+        setNearbyCatalog(rows);
+        setPhase('pick_parent');
+      } catch {
+        if (!cancelled) {
+          setNearbyCatalog([]);
+          setPhase('pick_parent');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userCoords, isConnected, user?.id, locations]);
 
   const executeStartTripForLocation = useCallback(
     async (loc: Location) => {
@@ -483,7 +514,7 @@ export default function FishNowScreen() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <StatusBar style={pickerTheme === 'dark' ? 'light' : 'dark'} />
-      <View style={[styles.headerBar, { paddingTop: insets.top }]}>
+      <View style={[styles.headerBar, { paddingTop: effectiveTop }]}>
         <View style={[styles.headerSide, styles.headerSideStart]}>
           <Pressable
             accessibilityRole="button"

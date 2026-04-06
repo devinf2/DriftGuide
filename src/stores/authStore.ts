@@ -14,6 +14,7 @@ interface AuthState {
   setProfile: (profile: Profile | null) => void;
   fetchProfile: () => Promise<void>;
   updateProfileNames: (firstName: string, lastName: string) => Promise<{ error: string | null }>;
+  updateHomeState: (homeState: string | null) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -64,6 +65,16 @@ export const useAuthStore = create<AuthState>()(
             display_name,
           })
           .eq('id', user.id);
+        if (error) return { error: error.message };
+        await get().fetchProfile();
+        return { error: null };
+      },
+
+      updateHomeState: async (homeState) => {
+        const user = get().user;
+        if (!user) return { error: 'Not signed in' };
+        const v = homeState?.trim() || null;
+        const { error } = await supabase.from('profiles').update({ home_state: v }).eq('id', user.id);
         if (error) return { error: error.message };
         await get().fetchProfile();
         return { error: null };

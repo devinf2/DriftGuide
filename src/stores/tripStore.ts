@@ -21,6 +21,7 @@ import { getMoonPhase } from '@/src/utils/moonPhase';
 import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/utils/tripGps';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
 import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
+import { withTimeout } from '@/src/utils/promiseTimeout';
 import { getFallbackRecommendation, getSmartFlyRecommendation, getSeason, getTimeOfDay } from '@/src/services/ai';
 import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
@@ -300,7 +301,7 @@ export const useTripStore = create<TripState>()(
       fetchPlannedTrips: async (userId) => {
         set({ plannedTripsLoading: true });
         try {
-          const trips = await fetchPlannedTripsFromCloud(userId);
+          const trips = await withTimeout(fetchPlannedTripsFromCloud(userId), 10_000);
           set({ plannedTrips: trips, plannedTripsLoading: false });
         } catch {
           set({ plannedTripsLoading: false });

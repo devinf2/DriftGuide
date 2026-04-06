@@ -4,6 +4,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
@@ -40,12 +41,10 @@ export function GlobalOfflineBanner() {
 
   useEffect(() => {
     const sub = NetInfo.addEventListener((s) => {
-      const on = Boolean(s.isConnected && s.isInternetReachable !== false);
-      setOffline(!on);
+      setOffline(!isAppReachableFromNetInfoState(s));
     });
-    NetInfo.fetch().then((s) => {
-      const on = Boolean(s.isConnected && s.isInternetReachable !== false);
-      setOffline(!on);
+    void NetInfo.fetch().then((s) => {
+      setOffline(!isAppReachableFromNetInfoState(s));
     });
     return () => sub();
   }, []);

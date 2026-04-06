@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -23,6 +24,7 @@ export default function TripSurveyScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { activeTrip, updateTripSurvey } = useTripStore();
   const [rating, setRating] = useState<number | null>(null);
   const [userReportedClarity, setUserReportedClarity] = useState<WaterClarity | null>(null);
@@ -95,7 +97,7 @@ export default function TripSurveyScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + Spacing.xl,
+            paddingTop: effectiveTop + Spacing.xl,
             paddingBottom: Math.max(insets.bottom, 32) + Spacing.xxl,
           },
         ]}

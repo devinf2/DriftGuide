@@ -1,10 +1,11 @@
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import Constants from 'expo-constants';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +15,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -61,6 +63,16 @@ function createStyles(colors: ThemeColors) {
     primaryBtnText: { fontSize: FontSize.md, fontWeight: '600', color: colors.textInverse },
     signOutRow: { paddingVertical: Spacing.lg, alignItems: 'center' },
     signOutText: { fontSize: FontSize.md, color: colors.error, fontWeight: '600' },
+    textInput: {
+      marginTop: Spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.sm,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+    },
     appearanceRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -82,8 +94,15 @@ export default function ProfileSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { colors, darkModeEnabled, setDarkModeEnabled } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { signOut } = useAuthStore();
+  const { signOut, profile, updateHomeState, fetchProfile } = useAuthStore();
+  const fetchLocations = useLocationStore((s) => s.fetchLocations);
   const { pendingSyncTrips, retryPendingSyncs, isSyncingPending } = useTripStore();
+  const [homeStateDraft, setHomeStateDraft] = useState('');
+  const [savingHomeState, setSavingHomeState] = useState(false);
+
+  useEffect(() => {
+    setHomeStateDraft(profile?.home_state?.trim() ?? '');
+  }, [profile?.home_state]);
 
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -105,6 +124,18 @@ export default function ProfileSettingsScreen() {
       Alert.alert('Sync failed', 'Could not sync. Check your connection and try again.');
     }
   }, [pendingSyncTrips.length, retryPendingSyncs]);
+
+  const handleSaveHomeState = useCallback(async () => {
+    setSavingHomeState(true);
+    const { error } = await updateHomeState(homeStateDraft.trim() || null);
+    setSavingHomeState(false);
+    if (error) {
+      Alert.alert('Could not save', error);
+      return;
+    }
+    await fetchProfile();
+    void fetchLocations();
+  }, [homeStateDraft, updateHomeState, fetchProfile, fetchLocations]);
 
   return (
     <ScrollView
@@ -130,6 +161,35 @@ export default function ProfileSettingsScreen() {
             thumbColor={colors.surfaceElevated}
           />
         </View>
+      </View>
+
+      <View style={[styles.card, styles.sectionSpacing]}>
+        <Text style={styles.sectionTitle}>Offline maps</Text>
+        <Text style={styles.bodyText}>
+          US home state (e.g. UT or Utah). Used to cache catalog waters for offline map and Fish now when you
+          do not have a signal. Clear the field to stop state snapshots.
+        </Text>
+        <TextInput
+          style={styles.textInput}
+          value={homeStateDraft}
+          onChangeText={setHomeStateDraft}
+          placeholder="e.g. Utah or UT"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="words"
+          autoCorrect={false}
+          editable={!savingHomeState}
+        />
+        <Pressable
+          style={[styles.primaryBtn, savingHomeState && styles.primaryBtnDisabled]}
+          onPress={handleSaveHomeState}
+          disabled={savingHomeState}
+        >
+          {savingHomeState ? (
+            <ActivityIndicator size="small" color={colors.textInverse} />
+          ) : (
+            <Text style={styles.primaryBtnText}>Save home state</Text>
+          )}
+        </Pressable>
       </View>
 
       {pendingSyncTrips.length > 0 ? (

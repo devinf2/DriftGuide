@@ -29,6 +29,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const NUM_COLS = 3;
@@ -47,10 +48,16 @@ function formatPhotoThumbDate(iso: string | null | undefined): string | null {
   }
 }
 
-export function ProfilePhotoLibrarySection() {
+type ProfilePhotoLibrarySectionProps = {
+  /** Increment to reload the grid (e.g. parent pull-to-refresh). */
+  refreshSignal?: number;
+};
+
+export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLibrarySectionProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProfilePhotoLibraryStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
+  const effectiveTop = useEffectiveSafeTopInset();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
   const { isConnected } = useNetworkStatus();
@@ -106,6 +113,11 @@ export function ProfilePhotoLibrarySection() {
       loadPhotos();
     }, [loadPhotos]),
   );
+
+  useEffect(() => {
+    if (refreshSignal === 0) return;
+    void loadPhotos();
+  }, [refreshSignal, loadPhotos]);
 
   useEffect(() => {
     if (!addPhotoUri || !user?.id) return;
@@ -664,7 +676,7 @@ export function ProfilePhotoLibrarySection() {
         statusBarTranslucent
         onRequestClose={() => setSelectedPhoto(null)}
       >
-        <View style={[styles.fullScreenPhoto, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={[styles.fullScreenPhoto, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setSelectedPhoto(null)}
