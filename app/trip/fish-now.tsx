@@ -248,7 +248,7 @@ export default function FishNowScreen() {
           );
         } else {
           const snap = user?.id ? await loadOfflineLocationsSnapshot(user.id) : [];
-          const dl = await getLocationsForOfflineStart();
+          const dl = await getLocationsForOfflineStart(user?.id);
           const merged = mergeLocationsById(locations, snap, dl);
           rows = rootParentCandidatesFromLocations(
             merged,
@@ -257,6 +257,7 @@ export default function FishNowScreen() {
             null,
             PARENT_CANDIDATE_MAX_RADIUS_KM,
             STEP1_NEARBY_CATALOG_LIST_CAP,
+            user?.id,
           );
         }
         if (cancelled) return;

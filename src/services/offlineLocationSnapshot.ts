@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Location } from '@/src/types';
 import { normalizeHomeStateCode } from '@/src/utils/homeStateNormalize';
 import { US_STATE_BOUNDS } from '@/src/data/usStateBounds';
-import { activeLocationsOnly } from '@/src/utils/locationVisibility';
+import { activeLocationsOnly, locationsVisibleToViewer } from '@/src/utils/locationVisibility';
 
 const KEY = (userId: string) => `driftguide_offline_loc_snapshot_v1_${userId}`;
 
@@ -52,7 +52,8 @@ export async function loadOfflineLocationsSnapshot(userId: string): Promise<Loca
     const raw = await AsyncStorage.getItem(KEY(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Location[];
-    return Array.isArray(parsed) ? activeLocationsOnly(parsed) : [];
+    if (!Array.isArray(parsed)) return [];
+    return locationsVisibleToViewer(activeLocationsOnly(parsed), userId);
   } catch {
     return [];
   }

@@ -4,7 +4,7 @@ import {
   PARENT_CANDIDATE_MAX_RADIUS_KM,
 } from '@/src/constants/locationThresholds';
 import { Location, LocationType, NearbyLocationResult } from '@/src/types';
-import { activeLocationsOnly } from '@/src/utils/locationVisibility';
+import { activeLocationsOnly, locationsVisibleToViewer } from '@/src/utils/locationVisibility';
 
 const EARTH_RADIUS_KM = 6371;
 
@@ -187,10 +187,11 @@ export function rootParentCandidatesFromLocations(
   excludeLocationId: string | null,
   radiusKm: number,
   maxResults: number,
+  viewerId: string | null | undefined,
 ): NearbyLocationResult[] {
   const maxR = Number(radiusKm);
   const ex = excludeLocationId ?? null;
-  return activeLocationsOnly(rows)
+  return activeLocationsOnly(locationsVisibleToViewer(rows, viewerId))
     .filter((loc) => loc.parent_location_id == null)
     .filter((loc) => loc.latitude != null && loc.longitude != null)
     .filter((loc) => !ex || loc.id !== ex)
