@@ -4,7 +4,7 @@ import {
   type CatchDetailsSubmitAdd,
 } from '@/src/components/catch/CatchDetailsModal';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { fetchFlies } from '@/src/services/flyService';
+import { fetchFlies, fetchFlyCatalog, loadFlyCatalogFromCache } from '@/src/services/flyService';
 import { STEP1_NEARBY_CATALOG_LIST_CAP } from '@/src/constants/locationThresholds';
 import { searchNearbyRootParentCandidates } from '@/src/services/locationService';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
@@ -16,7 +16,7 @@ import {
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import type { CatchData, Fly, Location, NearbyLocationResult, TripEvent } from '@/src/types';
+import type { CatchData, Fly, FlyCatalog, Location, NearbyLocationResult, TripEvent } from '@/src/types';
 import { extractPhotoMetadataFromPickerAsset } from '@/src/utils/imageExif';
 import { aggregateImportPhotoMeta } from '@/src/utils/importPastTrips/importPhotoMetaAggregate';
 import { getFlyForCatch } from '@/src/services/sync';
@@ -490,6 +490,7 @@ export default function ImportPastTripsScreen() {
   const [picking, setPicking] = useState(false);
   const [importing, setImporting] = useState(false);
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
+  const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
   const [locModalVisible, setLocModalVisible] = useState(false);
   const [locLoading, setLocLoading] = useState(false);
   const [locCandidates, setLocCandidates] = useState<NearbyLocationResult[]>([]);
@@ -512,6 +513,14 @@ export default function ImportPastTripsScreen() {
   useEffect(() => {
     if (user?.id) fetchFlies(user.id).then(setUserFlies).catch(() => setUserFlies([]));
   }, [user?.id]);
+
+  useEffect(() => {
+    fetchFlyCatalog()
+      .then(setFlyCatalog)
+      .catch(async () => {
+        setFlyCatalog(await loadFlyCatalogFromCache());
+      });
+  }, []);
 
   useEffect(() => {
     if (step === 3 && groups.length > 0 && !activeGroupIdForStep4) {
@@ -1546,6 +1555,7 @@ export default function ImportPastTripsScreen() {
           userId={user.id}
           isConnected={isConnected}
           userFlies={userFlies}
+          flyCatalog={flyCatalog}
           allEvents={draftEventsForModal}
           editingEvent={catchUi.mode === 'edit' ? catchUi.editingEvent : null}
           seedPrimary={seedPrimaryForModal ?? undefined}

@@ -578,6 +578,7 @@ export function JournalFishingTimeline({
         isConnected={isConnected}
         userFlies={userFlies}
         flyPickerNames={flyPickerNames}
+        flyCatalog={flyCatalog}
         allEvents={events}
         editingEvent={catchModal}
         onSubmitEdit={submitJournalCatchEdit}

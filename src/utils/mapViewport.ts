@@ -32,14 +32,31 @@ export function boundingBoxFromMapState(state: MapCameraStatePayload): BoundingB
   return boundingBoxFromLngLatPair(ne, sw);
 }
 
-/** Mapbox camera center [lng, lat]: trip GPS start, else saved location, else regional default. */
-export function tripMapDefaultCenterCoordinate(trip: Trip): [number, number] {
-  if (trip.start_latitude != null && trip.start_longitude != null) {
-    return [trip.start_longitude, trip.start_latitude];
+/**
+ * Trip-linked lat/lng when the trip was started or linked to a saved spot (no regional default).
+ * Use to seed catch pins when GPS is unavailable (e.g. offline).
+ */
+export function tripSeedLatLng(trip: Trip): { latitude: number; longitude: number } | null {
+  if (
+    trip.start_latitude != null &&
+    trip.start_longitude != null &&
+    Number.isFinite(trip.start_latitude) &&
+    Number.isFinite(trip.start_longitude)
+  ) {
+    return { latitude: trip.start_latitude, longitude: trip.start_longitude };
   }
   const lat = trip.location?.latitude;
   const lng = trip.location?.longitude;
-  if (lat != null && lng != null) return [lng, lat];
+  if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { latitude: lat, longitude: lng };
+  }
+  return null;
+}
+
+/** Mapbox camera center [lng, lat]: trip GPS start, else saved location, else regional default. */
+export function tripMapDefaultCenterCoordinate(trip: Trip): [number, number] {
+  const seed = tripSeedLatLng(trip);
+  if (seed) return [seed.longitude, seed.latitude];
   return DEFAULT_MAP_CENTER;
 }
 

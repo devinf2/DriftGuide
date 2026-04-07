@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from 'react';
 import {
   Platform,
   Pressable,
@@ -14,11 +21,17 @@ import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPi
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
-import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
+import {
+  DEFAULT_MAP_CENTER,
+  MAP_MAX_ZOOM,
+  MAP_MIN_ZOOM,
+  USER_LOCATION_ZOOM,
+} from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { dedupeConsecutiveLngLat, matchWalkingRoute } from '@/src/services/mapboxWalkingMatch';
 import type { CatchData, Trip, TripEvent } from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
+import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
 import { getAnnotationsLayerID } from '@rnmapbox/maps';
@@ -117,6 +130,32 @@ export function buildJournalWaypoints(trip: Trip, events: TripEvent[]): JournalW
   return waypoints;
 }
 
+/** Apply draft start/end coords while placing a pin; preserves catch order from {@link buildJournalWaypoints}. */
+function mergeJournalWaypointsWithPlacement(
+  trip: Trip,
+  events: TripEvent[],
+  placement: { kind: 'start' | 'end'; lat: number; lng: number } | null,
+): JournalWaypoint[] {
+  const base = buildJournalWaypoints(trip, events);
+  if (!placement) return base;
+  const pinColor = placement.kind === 'start' ? Colors.primary : Colors.secondary;
+  const wp: JournalWaypoint = {
+    id: placement.kind === 'start' ? 'journal-start' : 'journal-end',
+    lng: placement.lng,
+    lat: placement.lat,
+    title: placement.kind === 'start' ? 'Start' : 'End',
+    pinColor,
+    kind: placement.kind,
+  };
+  const idx = base.findIndex((w) => w.kind === placement.kind);
+  if (placement.kind === 'start') {
+    if (idx >= 0) return base.map((w, i) => (i === idx ? wp : w));
+    return [wp, ...base];
+  }
+  if (idx >= 0) return base.map((w, i) => (i === idx ? wp : w));
+  return [...base, wp];
+}
+
 function bboxPaddingFromLngLats(points: [number, number][], pad = 0.002): [[number, number], [number, number]] {
   let minLng = Infinity;
   let maxLng = -Infinity;
@@ -140,6 +179,15 @@ type Props = {
   containerStyle?: StyleProp<ViewStyle>;
   /** Tapping a catch pin (thumbnail or fish icon) */
   onCatchWaypointPress?: (catchEventId: string) => void;
+  /**
+   * Pan-under-center mode: full route and catch pins stay visible; map center sets the moving start/end.
+   * `focusRequestKey` bumps when opening placement to recenter the camera.
+   */
+  placementKind?: 'start' | 'end' | null;
+  placementLatitude?: number;
+  placementLongitude?: number;
+  placementFocusKey?: number;
+  onPlacementCoordinateChange?: (lat: number, lng: number) => void;
 };
 
 /**
@@ -180,7 +228,17 @@ function JournalCatchPointAnnotation({
   );
 }
 
-export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchWaypointPress }: Props) {
+export function JournalTripRouteMapView({
+  trip,
+  events,
+  containerStyle,
+  onCatchWaypointPress,
+  placementKind = null,
+  placementLatitude,
+  placementLongitude,
+  placementFocusKey = 0,
+  onPlacementCoordinateChange,
+}: Props) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const rawMod = useMemo(() => loadMapbox(), []);
   /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
@@ -196,7 +254,19 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
     zoomTo?: (z: number, duration?: number) => void;
   } | null>(null);
 
-  const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
+  const isPlacing =
+    placementKind != null &&
+    placementLatitude != null &&
+    placementLongitude != null &&
+    onPlacementCoordinateChange != null;
+
+  const waypoints = useMemo(() => {
+    const placement =
+      placementKind != null && placementLatitude != null && placementLongitude != null
+        ? { kind: placementKind, lat: placementLatitude, lng: placementLongitude }
+        : null;
+    return mergeJournalWaypointsWithPlacement(trip, events, placement);
+  }, [trip, events, placementKind, placementLatitude, placementLongitude]);
   const pathLngLat = useMemo(() => {
     const raw = waypoints.map((w) => [w.lng, w.lat] as [number, number]);
     return dedupeConsecutiveLngLat(raw);
@@ -245,6 +315,11 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
       },
     };
 
+    if (isPlacing) {
+      setRouteFeature(straight);
+      return;
+    }
+
     void (async () => {
       const matched = await matchWalkingRoute(pathLngLat);
       if (cancelled) return;
@@ -262,7 +337,7 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
     return () => {
       cancelled = true;
     };
-  }, [pathLngLat]);
+  }, [pathLngLat, isPlacing]);
 
   const fitCameraToTripStart = useCallback(() => {
     const cam = cameraRef.current;
@@ -274,12 +349,30 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
   }, [waypoints]);
 
   useEffect(() => {
+    if (isPlacing) return;
     const t = setTimeout(() => fitCameraToTripStart(), 300);
     return () => clearTimeout(t);
-  }, [fitCameraToTripStart]);
+  }, [fitCameraToTripStart, isPlacing]);
 
   const reportZoom = useCallback((z: number) => {
     setLiveZoom(roundZoom(z));
+  }, []);
+
+  const placementCbRef = useRef(onPlacementCoordinateChange);
+  placementCbRef.current = onPlacementCoordinateChange;
+
+  const handlePlacementCamera = useCallback((e: unknown) => {
+    const s = e as MapCameraStatePayload;
+    if (typeof s.properties?.zoom === 'number') {
+      setLiveZoom(roundZoom(s.properties.zoom));
+    }
+    const c = s.properties?.center;
+    if (!Array.isArray(c) || c.length < 2) return;
+    const lng = c[0];
+    const lat = c[1];
+    if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+      placementCbRef.current?.(lat, lng);
+    }
   }, []);
 
   const handleMapIdle = useCallback(
@@ -341,6 +434,11 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
   const center: [number, number] =
     startWp != null ? [startWp.lng, startWp.lat] : DEFAULT_MAP_CENTER;
 
+  const annotationsWaypoints =
+    isPlacing && placementKind != null
+      ? waypoints.filter((w) => w.kind !== placementKind)
+      : waypoints;
+
   return (
     <View style={[styles.fill, containerStyle]}>
       <MapView
@@ -351,14 +449,25 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
         logoEnabled
         attributionEnabled
         attributionPosition={mapAttributionBesideZoomControls(true)}
-        onMapIdle={(e: unknown) => handleMapIdle(e as { properties?: { zoom?: number } })}
+        onMapIdle={
+          isPlacing ? undefined : (e: unknown) => handleMapIdle(e as { properties?: { zoom?: number } })
+        }
+        onCameraChanged={isPlacing ? (e: unknown) => handlePlacementCamera(e) : undefined}
       >
         <Camera
           ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: center,
-            zoomLevel: 13,
-          }}
+          key={isPlacing ? `place-${placementFocusKey}` : 'route'}
+          defaultSettings={
+            isPlacing && placementLatitude != null && placementLongitude != null
+              ? {
+                  centerCoordinate: [placementLongitude, placementLatitude],
+                  zoomLevel: USER_LOCATION_ZOOM,
+                }
+              : {
+                  centerCoordinate: center,
+                  zoomLevel: 13,
+                }
+          }
           minZoomLevel={MAP_MIN_ZOOM}
           maxZoomLevel={MAP_MAX_ZOOM}
         />
@@ -393,7 +502,7 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
             />
           </ShapeSource>
         ) : null}
-        {waypoints.map((w) =>
+        {annotationsWaypoints.map((w) =>
           w.kind === 'catch' ? (
             <JournalCatchPointAnnotation
               key={w.id}
@@ -414,6 +523,17 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
           ),
         )}
       </MapView>
+
+      {isPlacing && placementKind != null ? (
+        <View style={styles.placementCrosshair} pointerEvents="none">
+          <MaterialIcons
+            name={placementKind === 'end' ? 'flag' : 'place'}
+            size={44}
+            color={placementKind === 'end' ? Colors.secondary : Colors.primaryLight}
+            style={styles.placementCrosshairIcon}
+          />
+        </View>
+      ) : null}
 
       <MapBasemapSwitcher />
 
@@ -445,6 +565,14 @@ export function JournalTripRouteMapView({ trip, events, containerStyle, onCatchW
 const styles = StyleSheet.create({
   fill: { flex: 1, minHeight: 280 },
   map: { flex: 1 },
+  placementCrosshair: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placementCrosshairIcon: {
+    transform: [{ translateY: -20 }],
+  },
   placeholder: {
     flex: 1,
     minHeight: 280,

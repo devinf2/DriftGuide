@@ -1039,6 +1039,7 @@ export default function TripDashboardScreen() {
             isConnected={isConnected}
             userFlies={userFlies}
             flyPickerNames={flyPickerNames}
+            flyCatalog={flyCatalog}
             allEvents={events}
             editingEvent={catchUIMode != null && catchUIMode !== 'add' ? catchUIMode : null}
             seedPrimary={currentFly}
@@ -1363,15 +1364,27 @@ function FishingTab({
         pointerEvents={tripPaused ? 'none' : 'auto'}
       >
       {/* Current Fly (primary + optional dropper) */}
-      <Pressable style={styles.currentFlyBar} onPress={openFlyPicker}>
-        <Text style={styles.currentFlyLabel}>{currentFly2 ? 'Current rig' : 'Current Fly'}</Text>
-        <Text style={styles.currentFlyName}>
-          {currentFly
-            ? currentFly2
-              ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''} / ${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}`
-              : `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}`
-            : 'Tap to select'}
+      <Pressable
+        style={[styles.currentFlyBar, currentFly2 ? styles.currentFlyBarRig : null]}
+        onPress={openFlyPicker}
+      >
+        <Text style={[styles.currentFlyLabel, currentFly2 ? styles.currentFlyLabelRig : null]}>
+          {currentFly2 ? 'Current rig' : 'Current Fly'}
         </Text>
+        {currentFly && currentFly2 ? (
+          <View style={styles.currentFlyNamesColumn}>
+            <Text style={[styles.currentFlyName, styles.currentFlyRigLine]} numberOfLines={2}>
+              {`${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}`}
+            </Text>
+            <Text style={[styles.currentFlyName, styles.currentFlyRigLine, styles.currentFlyRigSecond]} numberOfLines={2}>
+              {`${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}`}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.currentFlyName}>
+            {currentFly ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}` : 'Tap to select'}
+          </Text>
+        )}
       </Pressable>
 
       {/* Fish Counter */}
@@ -2527,14 +2540,34 @@ function createTripDashboardStyles(colors: ThemeColors) {
     zIndex: 1,
     elevation: 1,
   },
+  /** Two-fly rig: align label to top next to stacked fly names */
+  currentFlyBarRig: {
+    alignItems: 'flex-start',
+  },
   currentFlyLabel: {
     fontSize: FontSize.sm,
     color: colors.textSecondary,
+  },
+  currentFlyLabelRig: {
+    marginTop: 2,
   },
   currentFlyName: {
     fontSize: FontSize.md,
     fontWeight: '600',
     color: colors.text,
+  },
+  currentFlyNamesColumn: {
+    flex: 1,
+    marginLeft: Spacing.md,
+    minWidth: 0,
+    alignItems: 'flex-end',
+  },
+  currentFlyRigLine: {
+    textAlign: 'right',
+    maxWidth: '100%',
+  },
+  currentFlyRigSecond: {
+    marginTop: 4,
   },
   fishCounterSection: {
     flexDirection: 'row',

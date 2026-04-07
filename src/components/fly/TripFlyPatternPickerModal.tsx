@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -35,9 +35,22 @@ export type TripFlyPatternPickerModalProps = {
   selectedCatalogFlyId: string | null;
   /** Highlight “Other” when pattern is typed manually */
   otherActive?: boolean;
+  /** First row: clear pattern (optional). Used by add/edit catch fly row. */
+  showNoPatternRow?: boolean;
+  /** Highlight the “—” row when no pattern is selected */
+  noPatternRowActive?: boolean;
+  onSelectNoPattern?: () => void;
   onSelectUserFly: (fly: Fly) => void;
   onSelectCatalogFly: (item: FlyCatalog) => void;
-  onSelectOther: () => void;
+  /** User finished entering a custom pattern name in-sheet (may be empty). */
+  onSelectOther: (customName: string) => void;
+  /** Seed the “Other” field when reopening while in manual mode */
+  initialOtherPatternName?: string | null;
+  /**
+   * `embedded` — no native `Modal`; use inside another modal with an absolute-fill host.
+   * Avoids invisible touch layers when stacking modals (e.g. add-catch sheet on web).
+   */
+  presentation?: 'modal' | 'embedded';
 };
 
 function createStyles(colors: ThemeColors) {
@@ -136,6 +149,45 @@ function createStyles(colors: ThemeColors) {
       fontSize: FontSize.sm,
       color: colors.textTertiary,
     },
+    otherEntryWrap: {
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    otherEntryLabel: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs,
+    },
+    otherEntryInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.sm,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: Platform.OS === 'ios' ? Spacing.sm : Spacing.xs,
+      fontSize: FontSize.md,
+      color: colors.text,
+      backgroundColor: colors.background,
+    },
+    otherEntryActions: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+      gap: Spacing.lg,
+      marginTop: Spacing.md,
+    },
+    otherEntryActionText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.primary,
+    },
+    otherEntryCancelText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
   });
 }
 
@@ -169,18 +221,43 @@ export function TripFlyPatternPickerModal({
   selectedUserBoxFlyId,
   selectedCatalogFlyId,
   otherActive = false,
+  showNoPatternRow = false,
+  noPatternRowActive = false,
+  onSelectNoPattern,
   onSelectUserFly,
   onSelectCatalogFly,
   onSelectOther,
+  initialOtherPatternName = null,
+  presentation = 'modal',
 }: TripFlyPatternPickerModalProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
+  const [otherExpanded, setOtherExpanded] = useState(false);
+  const [otherDraft, setOtherDraft] = useState('');
+  const otherInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (visible) setQuery('');
   }, [visible]);
+
+  // Reset/sync when the sheet opens only — avoids wiping draft on parent re-renders while visible.
+  useEffect(() => {
+    if (!visible) {
+      setOtherExpanded(false);
+      setOtherDraft('');
+      return;
+    }
+    setOtherDraft(initialOtherPatternName ?? '');
+    setOtherExpanded(Boolean(otherActive));
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !otherExpanded) return;
+    const id = requestAnimationFrame(() => otherInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [visible, otherExpanded]);
 
   const q = query.trim().toLowerCase();
 
@@ -206,117 +283,195 @@ export function TripFlyPatternPickerModal({
 
     const out: { title: string; data: TripFlyPatternPickerRow[] }[] = [];
     if (userRows.length > 0) {
-      out.push({ title: 'My flies', data: userRows });
+      out.push({ title: 'My Flies', data: userRows });
     }
-    out.push({ title: 'All flies', data: [...catalogRows, otherRow] });
+    out.push({ title: 'All Flies', data: [...catalogRows, otherRow] });
     return out;
   }, [userFlies, catalog, q]);
 
+  // Do not mount <Modal> when closed — some platforms keep an invisible layer that eats touches
+  // on the modal behind this one (e.g. add-catch sheet).
+  if (!visible) {
+    return null;
+  }
+
+  const body = (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <View style={styles.overlay}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={onRequestClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        />
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, Spacing.lg) }]}>
+          <View style={styles.handle} />
+          <Text style={styles.title}>{title}</Text>
+          <View style={styles.searchWrap}>
+            <Ionicons name="search" size={20} color={colors.textTertiary} style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              value={query}
+              onChangeText={setQuery}
+              placeholder={searchPlaceholder}
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="while-editing"
+            />
+          </View>
+          <SectionList
+            sections={sections}
+            keyExtractor={(item) => item.key}
+            style={{ flex: 1 }}
+            keyboardShouldPersistTaps="handled"
+            ListHeaderComponent={
+              showNoPatternRow ? (
+                <Pressable
+                  style={[styles.row, noPatternRowActive && styles.rowActive]}
+                  onPress={() => {
+                    onSelectNoPattern?.();
+                    onRequestClose();
+                  }}
+                >
+                  <Text style={[styles.rowPrimary, noPatternRowActive && styles.rowTextActive]}>—</Text>
+                  <Text style={styles.rowSecondary}>No pattern (optional)</Text>
+                </Pressable>
+              ) : null
+            }
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Text style={styles.emptyText}>No patterns match your search.</Text>
+              </View>
+            }
+            renderSectionHeader={({ section: { title: st } }) => (
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{st}</Text>
+              </View>
+            )}
+            renderItem={({ item }) => {
+              if (item.kind === 'other') {
+                const otherHighlighted =
+                  (otherActive && !noPatternRowActive) || otherExpanded;
+                if (otherExpanded) {
+                  return (
+                    <View style={[styles.otherEntryWrap, otherHighlighted && styles.rowActive]}>
+                      <Text style={styles.otherEntryLabel}>Custom pattern</Text>
+                      <TextInput
+                        ref={otherInputRef}
+                        style={styles.otherEntryInput}
+                        value={otherDraft}
+                        onChangeText={setOtherDraft}
+                        placeholder="Type pattern name"
+                        placeholderTextColor={colors.textTertiary}
+                        autoCorrect={false}
+                        autoCapitalize="words"
+                        returnKeyType="done"
+                        onSubmitEditing={() => {
+                          onSelectOther(otherDraft.trim());
+                          onRequestClose();
+                        }}
+                        clearButtonMode="while-editing"
+                      />
+                      <View style={styles.otherEntryActions}>
+                        <Pressable
+                          onPress={() => {
+                            setOtherExpanded(false);
+                            setOtherDraft(initialOtherPatternName ?? '');
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Cancel custom pattern"
+                        >
+                          <Text style={styles.otherEntryCancelText}>Cancel</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            onSelectOther(otherDraft.trim());
+                            onRequestClose();
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Use custom pattern"
+                        >
+                          <Text style={styles.otherEntryActionText}>Done</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                }
+                return (
+                  <Pressable
+                    style={[styles.row, otherHighlighted && styles.rowActive]}
+                    onPress={() => {
+                      setOtherExpanded(true);
+                      setOtherDraft((d) => d || (initialOtherPatternName ?? ''));
+                    }}
+                  >
+                    <Text
+                      style={[styles.rowPrimary, otherHighlighted && styles.rowTextActive]}
+                    >
+                      Other (type name)
+                    </Text>
+                    <Text style={styles.rowSecondary}>Not listed — tap to type here</Text>
+                  </Pressable>
+                );
+              }
+              if (item.kind === 'user') {
+                const { fly } = item;
+                const active = !noPatternRowActive && fly.id === selectedUserBoxFlyId;
+                const sub =
+                  [fly.size != null ? `#${fly.size}` : null, fly.color].filter(Boolean).join(' · ') ||
+                  'No size/color';
+                return (
+                  <Pressable
+                    style={[styles.row, active && styles.rowActive]}
+                    onPress={() => {
+                      onSelectUserFly(fly);
+                      onRequestClose();
+                    }}
+                  >
+                    <Text style={[styles.rowPrimary, active && styles.rowTextActive]}>{fly.name}</Text>
+                    <Text style={styles.rowSecondary}>{sub}</Text>
+                  </Pressable>
+                );
+              }
+              const { item: cat } = item;
+              const active =
+                !noPatternRowActive &&
+                cat.id === selectedCatalogFlyId &&
+                selectedUserBoxFlyId == null &&
+                !otherActive;
+              return (
+                <Pressable
+                  style={[styles.row, active && styles.rowActive]}
+                  onPress={() => {
+                    onSelectCatalogFly(cat);
+                    onRequestClose();
+                  }}
+                >
+                  <Text style={[styles.rowPrimary, active && styles.rowTextActive]}>{cat.name}</Text>
+                </Pressable>
+              );
+            }}
+          />
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  );
+
+  if (presentation === 'embedded') {
+    return <View style={{ flex: 1 }}>{body}</View>;
+  }
+
   return (
     <Modal
-      visible={visible}
+      visible
       transparent
       animationType="slide"
       onRequestClose={onRequestClose}
       presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
       statusBarTranslucent={Platform.OS === 'android'}
     >
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <View style={styles.overlay}>
-          <Pressable
-            style={styles.backdrop}
-            onPress={onRequestClose}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-          />
-          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, Spacing.lg) }]}>
-            <View style={styles.handle} />
-            <Text style={styles.title}>{title}</Text>
-            <View style={styles.searchWrap}>
-              <Ionicons name="search" size={20} color={colors.textTertiary} style={styles.searchIcon} />
-              <TextInput
-                style={styles.searchInput}
-                value={query}
-                onChangeText={setQuery}
-                placeholder={searchPlaceholder}
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="none"
-                autoCorrect={false}
-                clearButtonMode="while-editing"
-              />
-            </View>
-            <SectionList
-              sections={sections}
-              keyExtractor={(item) => item.key}
-              style={{ flex: 1 }}
-              keyboardShouldPersistTaps="handled"
-              ListEmptyComponent={
-                <View style={styles.empty}>
-                  <Text style={styles.emptyText}>No patterns match your search.</Text>
-                </View>
-              }
-              renderSectionHeader={({ section: { title: st } }) => (
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>{st}</Text>
-                </View>
-              )}
-              renderItem={({ item }) => {
-                  if (item.kind === 'other') {
-                    return (
-                      <Pressable
-                        style={[styles.row, otherActive && styles.rowActive]}
-                        onPress={() => {
-                          onSelectOther();
-                          onRequestClose();
-                        }}
-                      >
-                        <Text style={[styles.rowPrimary, otherActive && styles.rowTextActive]}>
-                          Other (type name)
-                        </Text>
-                        <Text style={styles.rowSecondary}>Not listed — enter a custom pattern</Text>
-                      </Pressable>
-                    );
-                  }
-                  if (item.kind === 'user') {
-                    const { fly } = item;
-                    const active = fly.id === selectedUserBoxFlyId;
-                    const sub =
-                      [fly.size != null ? `#${fly.size}` : null, fly.color].filter(Boolean).join(' · ') ||
-                      'No size/color';
-                    return (
-                      <Pressable
-                        style={[styles.row, active && styles.rowActive]}
-                        onPress={() => {
-                          onSelectUserFly(fly);
-                          onRequestClose();
-                        }}
-                      >
-                        <Text style={[styles.rowPrimary, active && styles.rowTextActive]}>{fly.name}</Text>
-                        <Text style={styles.rowSecondary}>{sub}</Text>
-                      </Pressable>
-                    );
-                  }
-                  const { item: cat } = item;
-                  const active =
-                    cat.id === selectedCatalogFlyId &&
-                    selectedUserBoxFlyId == null &&
-                    !otherActive;
-                  return (
-                    <Pressable
-                      style={[styles.row, active && styles.rowActive]}
-                      onPress={() => {
-                        onSelectCatalogFly(cat);
-                        onRequestClose();
-                      }}
-                    >
-                      <Text style={[styles.rowPrimary, active && styles.rowTextActive]}>{cat.name}</Text>
-                    </Pressable>
-                  );
-                }}
-            />
-          </View>
-        </View>
-      </KeyboardAvoidingView>
+      {body}
     </Modal>
   );
 }

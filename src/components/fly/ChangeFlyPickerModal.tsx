@@ -69,7 +69,7 @@ export function dropperFromRecommendation(rec: NextFlyRecommendation): FlyChange
   };
 }
 
-function seedSelectionFromFlyChange(
+export function seedSelectionFromFlyChange(
   p: FlyChangeData | null | undefined,
   userFlies: Fly[],
   catalog: FlyCatalog[],
@@ -678,11 +678,12 @@ export function ChangeFlyPickerModal({
             setPrimaryCatalogFlyId(item.id);
             setPrimaryManual(false);
           }}
-          onSelectOther={() => {
+          initialOtherPatternName={pickerName ?? ''}
+          onSelectOther={(customName) => {
             setPrimaryUserBoxFlyId(null);
             setPrimaryCatalogFlyId(null);
             setPrimaryManual(true);
-            setPickerName(null);
+            setPickerName(customName.trim() ? customName.trim() : null);
             setPickerSize(null);
             setPickerColor(null);
           }}
@@ -713,11 +714,12 @@ export function ChangeFlyPickerModal({
             setDropperCatalogFlyId(item.id);
             setDropperManual(false);
           }}
-          onSelectOther={() => {
+          initialOtherPatternName={pickerName2 ?? ''}
+          onSelectOther={(customName) => {
             setDropperUserBoxFlyId(null);
             setDropperCatalogFlyId(null);
             setDropperManual(true);
-            setPickerName2('');
+            setPickerName2(customName.trim() ? customName.trim() : null);
             setPickerSize2(null);
             setPickerColor2(null);
           }}

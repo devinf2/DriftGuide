@@ -4,7 +4,8 @@ import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import { DEFAULT_MAP_CENTER, MAP_MAX_ZOOM, MAP_MIN_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
-import { Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { Feature, Point } from 'geojson';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
@@ -116,6 +117,102 @@ const DEFAULT_PIN_HINT =
 
 const DEFAULT_PAN_HINT = 'Pan and zoom the map to place the catch. The pin stays in the center.';
 
+function createCatchPinPickerStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    wrap: {
+      marginBottom: Spacing.md,
+    },
+    wrapFlex: {
+      flex: 1,
+      minHeight: 200,
+      marginBottom: 0,
+    },
+    mapBodyFixed: {
+      flex: 1,
+      minHeight: 0,
+    },
+    mapBodyFlex: {
+      flex: 1,
+      minHeight: 160,
+    },
+    hint: {
+      fontSize: FontSize.xs,
+      color: colors.textSecondary,
+      marginBottom: Spacing.sm,
+    },
+    mapBox: {
+      flex: 1,
+      minHeight: 120,
+      borderRadius: 12,
+      overflow: 'hidden',
+      backgroundColor: colors.borderLight,
+      position: 'relative',
+    },
+    centerPinOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    centerPinInner: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    /** Pin icon tip ~bottom center; shift up so the tip marks the map center */
+    centerPinIcon: {
+      transform: [{ translateY: -20 }],
+    },
+    hintBelow: {
+      marginTop: Spacing.sm,
+      marginBottom: 0,
+    },
+    fallback: {
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: Spacing.md,
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    fallbackText: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginTop: Spacing.sm,
+    },
+    zoomCluster: {
+      position: 'absolute',
+      bottom: Spacing.lg,
+      right: Spacing.md,
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      elevation: 3,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.15,
+      shadowRadius: 2,
+    },
+    zoomButton: {
+      width: ZOOM_BUTTON_WIDTH,
+      height: ZOOM_BUTTON_WIDTH,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+    },
+    zoomButtonPressed: {
+      opacity: 0.85,
+      backgroundColor: colors.surfaceElevated,
+    },
+    zoomDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+  });
+}
+
 export function CatchPinPickerMap({
   latitude,
   longitude,
@@ -136,6 +233,8 @@ export function CatchPinPickerMap({
   onCatalogMarkerPress,
   selectedCatalogMarkerId = null,
 }: CatchPinPickerMapProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createCatchPinPickerStyles(colors), [colors]);
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
   const cameraRef = useRef<{ zoomTo?: (z: number, duration?: number) => void } | null>(null);
@@ -212,7 +311,7 @@ export function CatchPinPickerMap({
   if (!rawMod || !mod?.MapView || !mod.Camera || !mod.PointAnnotation) {
     return (
       <View style={[styles.fallback, fallbackSize, containerStyle]}>
-        <MaterialIcons name="map" size={32} color={Colors.textTertiary} />
+        <MaterialIcons name="map" size={32} color={colors.textTertiary} />
         <Text style={styles.fallbackText}>
           Map preview needs a dev build with Mapbox. Use latitude/longitude fields below, or build the app with
           @rnmapbox/maps linked.
@@ -283,7 +382,7 @@ export function CatchPinPickerMap({
             onDragEnd={onDragEnd}
           >
             <View collapsable={false} pointerEvents="box-none">
-              <MaterialIcons name="place" size={36} color={Colors.primaryLight} />
+              <MaterialIcons name="place" size={36} color={colors.primaryLight} />
             </View>
           </PointAnnotation>
         ) : null}
@@ -296,7 +395,7 @@ export function CatchPinPickerMap({
                 <MaterialIcons
                   name="place"
                   size={selected ? 30 : 24}
-                  color={selected ? Colors.success : Colors.textSecondary}
+                  color={selected ? colors.success : colors.textSecondary}
                 />
               );
               return (
@@ -320,7 +419,7 @@ export function CatchPinPickerMap({
       {isPanCenter ? (
         <View style={styles.centerPinOverlay} pointerEvents="none">
           <View style={styles.centerPinInner}>
-            <MaterialIcons name="place" size={44} color={Colors.primaryLight} style={styles.centerPinIcon} />
+            <MaterialIcons name="place" size={44} color={colors.primaryLight} style={styles.centerPinIcon} />
           </View>
         </View>
       ) : null}
@@ -334,7 +433,7 @@ export function CatchPinPickerMap({
             onPress={() => zoomBy(zoomStep)}
             disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
           >
-            <MaterialIcons name="add" size={22} color={Colors.text} />
+            <MaterialIcons name="add" size={22} color={colors.text} />
           </Pressable>
           <View style={styles.zoomDivider} />
           <Pressable
@@ -344,7 +443,7 @@ export function CatchPinPickerMap({
             onPress={() => zoomBy(-zoomStep)}
             disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
           >
-            <MaterialIcons name="remove" size={22} color={Colors.text} />
+            <MaterialIcons name="remove" size={22} color={colors.text} />
           </Pressable>
         </View>
       ) : null}
@@ -364,97 +463,3 @@ export function CatchPinPickerMap({
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: {
-    marginBottom: Spacing.md,
-  },
-  wrapFlex: {
-    flex: 1,
-    minHeight: 200,
-    marginBottom: 0,
-  },
-  mapBodyFixed: {
-    flex: 1,
-    minHeight: 0,
-  },
-  mapBodyFlex: {
-    flex: 1,
-    minHeight: 160,
-  },
-  hint: {
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.sm,
-  },
-  mapBox: {
-    flex: 1,
-    minHeight: 120,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: Colors.borderLight,
-    position: 'relative',
-  },
-  centerPinOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  centerPinInner: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  /** Pin icon tip ~bottom center; shift up so the tip marks the map center */
-  centerPinIcon: {
-    transform: [{ translateY: -20 }],
-  },
-  hintBelow: {
-    marginTop: Spacing.sm,
-    marginBottom: 0,
-  },
-  fallback: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.md,
-    backgroundColor: Colors.background,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  fallbackText: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginTop: Spacing.sm,
-  },
-  zoomCluster: {
-    position: 'absolute',
-    bottom: Spacing.lg,
-    right: Spacing.md,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: Colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
-  zoomButton: {
-    width: ZOOM_BUTTON_WIDTH,
-    height: ZOOM_BUTTON_WIDTH,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-  },
-  zoomButtonPressed: {
-    opacity: 0.85,
-    backgroundColor: Colors.surfaceElevated,
-  },
-  zoomDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-  },
-});

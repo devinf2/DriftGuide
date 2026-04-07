@@ -125,6 +125,10 @@ export function PlanTripFab() {
   const hideDuringAddLocation =
     mapAddLocationOpen || pathname.includes('/trip/add-location');
 
+  /** Trip summary (journal tab detail or stack) — keep the fish FAB off read-only journal views. */
+  const hideOnTripSummary =
+    /^\/journal\/[^/]+$/.test(pathname) || /\/trip\/[^/]+\/summary$/.test(pathname);
+
   const homeWithChatComposer = pathname === '/home' || pathname === '/guide';
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -152,6 +156,10 @@ export function PlanTripFab() {
   }, [closeMenu, router]);
 
   if (hideDuringAddLocation) {
+    return null;
+  }
+
+  if (hideOnTripSummary) {
     return null;
   }
 

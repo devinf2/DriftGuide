@@ -16,7 +16,12 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
-import { TripEndpointPinModal, type TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
+import { useAppTheme } from '@/src/theme/ThemeProvider';
+import {
+  getTripEndpointInitialCoords,
+  patchTripEndpointCoords,
+  type TripEndpointKind,
+} from '@/src/components/journal/TripEndpointPinModal';
 import { fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
 import { Trip, TripEvent, CatchData, FlyChangeData, NoteData, AIQueryData, WaterFlowData, NextFlyRecommendation, EventConditionsSnapshot, Photo } from '@/src/types';
@@ -32,11 +37,19 @@ import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
+
+type TripPinPlacementState = {
+  kind: TripEndpointKind;
+  lat: number;
+  lng: number;
+  focusKey: number;
+};
 
 /** After `router.replace` (e.g. survey → summary), there may be no stack entry — `back()` throws in dev. */
 function exitTripSummary(router: ReturnType<typeof useRouter>) {
@@ -55,6 +68,7 @@ export default function TripSummaryScreen() {
   const { user } = useAuthStore();
   const { deleteTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
+  const { colors: themeColors } = useAppTheme();
   const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -71,7 +85,8 @@ export default function TripSummaryScreen() {
     species?: string;
     caption?: string;
   } | null>(null);
-  const [tripPinModal, setTripPinModal] = useState<TripEndpointKind | null>(null);
+  const [tripPinPlacement, setTripPinPlacement] = useState<TripPinPlacementState | null>(null);
+  const [tripPinPlacementSaving, setTripPinPlacementSaving] = useState(false);
   /** Map tab: catch pin tapped when there is no photo (full-screen flow uses `fullScreenPhoto`) */
   const [mapCatchDetailEvent, setMapCatchDetailEvent] = useState<TripEvent | null>(null);
   const [keepOfflinePinned, setKeepOfflinePinned] = useState(false);
@@ -79,7 +94,7 @@ export default function TripSummaryScreen() {
 
   useEffect(() => {
     setJournalEditMode(false);
-    setTripPinModal(null);
+    setTripPinPlacement(null);
   }, [id]);
 
   useEffect(() => {
@@ -182,6 +197,55 @@ export default function TripSummaryScreen() {
     },
     [isConnected, user, id],
   );
+
+  const openTripPinPlacement = useCallback(
+    (kind: TripEndpointKind) => {
+      if (!trip) return;
+      const init = getTripEndpointInitialCoords(trip, kind);
+      const fallback = tripMapDefaultCenterCoordinate(trip);
+      const lat = init.lat ?? fallback[1];
+      const lng = init.lon ?? fallback[0];
+      setTripPinPlacement({ kind, lat, lng, focusKey: Date.now() });
+      setActiveTab('map');
+    },
+    [trip],
+  );
+
+  const handleTripPinPlacementMove = useCallback((lat: number, lng: number) => {
+    setTripPinPlacement((prev) => (prev ? { ...prev, lat, lng } : prev));
+  }, []);
+
+  const cancelTripPinPlacement = useCallback(() => {
+    setTripPinPlacement(null);
+  }, []);
+
+  const saveTripPinPlacement = useCallback(async () => {
+    if (!trip || !tripPinPlacement) return;
+    if (!isConnected) {
+      Alert.alert('Offline', 'Connect to the internet to save changes.');
+      return;
+    }
+    const { lat, lng, kind } = tripPinPlacement;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      Alert.alert('Set a location', 'Pan the map to choose a point.');
+      return;
+    }
+    setTripPinPlacementSaving(true);
+    try {
+      const { trip: nextTrip, events: nextEvents } = patchTripEndpointCoords(trip, events, kind, lat, lng);
+      const ok = await persistTripPins(nextTrip, nextEvents);
+      if (ok) setTripPinPlacement(null);
+    } catch (e) {
+      Alert.alert('Error', (e as Error).message);
+    } finally {
+      setTripPinPlacementSaving(false);
+    }
+  }, [trip, tripPinPlacement, isConnected, events, persistTripPins]);
+
+  const selectTab = useCallback((key: TabKey) => {
+    if (key !== 'map') setTripPinPlacement(null);
+    setActiveTab(key);
+  }, []);
 
   const handleTripPhotoPress = useCallback((photo: Photo) => {
     setFullScreenPhoto({
@@ -446,6 +510,20 @@ export default function TripSummaryScreen() {
         </View>
       </View>
 
+      <View style={styles.keepOfflineRow}>
+        <Text style={styles.keepOfflineLabel} numberOfLines={1}>
+          Save offline
+        </Text>
+        <Switch
+          value={keepOfflinePinned}
+          onValueChange={handleKeepOfflineChange}
+          trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
+          thumbColor={themeColors.textInverse}
+          ios_backgroundColor={themeColors.textSecondary}
+          style={styles.keepOfflineSwitch}
+        />
+      </View>
+
       {/* Date & Location */}
       <View style={styles.dateLocationRow}>
         <Text style={styles.dateLocationName} numberOfLines={1}>
@@ -468,22 +546,6 @@ export default function TripSummaryScreen() {
         </View>
       </View>
 
-      <View style={styles.keepOfflineCard}>
-        <View style={styles.keepOfflineTextCol}>
-          <Text style={styles.keepOfflineTitle}>Keep photos offline</Text>
-          <Text style={styles.keepOfflineHint}>
-            Always keep this trip&apos;s photos on this device. Otherwise we cache about your last four completed
-            trips automatically.
-          </Text>
-        </View>
-        <Switch
-          value={keepOfflinePinned}
-          onValueChange={handleKeepOfflineChange}
-          trackColor={{ false: Colors.border, true: Colors.primaryLight }}
-          thumbColor={Colors.surfaceElevated}
-        />
-      </View>
-
       {/* Tab Bar — aligned with active trip: Fishing, Photos, Conditions, Map (trip guide is a modal) */}
       <View style={styles.tabBar}>
         {([
@@ -495,7 +557,7 @@ export default function TripSummaryScreen() {
           <Pressable
             key={tab.key}
             style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => setActiveTab(tab.key)}
+            onPress={() => selectTab(tab.key)}
           >
             <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]}>
               {tab.label}
@@ -515,7 +577,7 @@ export default function TripSummaryScreen() {
           onEventsChange={setEvents}
           onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
           onCatchPhotoPress={handleCatchPhotoPress}
-          onRequestEditTripPin={(kind) => setTripPinModal(kind)}
+          onRequestEditTripPin={openTripPinPlacement}
         />
       )}
       {activeTab === 'photos' && (
@@ -602,20 +664,13 @@ export default function TripSummaryScreen() {
           trip={trip}
           events={events}
           editMode={journalEditMode}
-          onRequestEditTripPin={(kind) => setTripPinModal(kind)}
+          tripPinPlacement={tripPinPlacement}
+          onRequestEditTripPin={openTripPinPlacement}
+          onPlacementMove={handleTripPinPlacementMove}
+          onCancelPlacement={cancelTripPinPlacement}
+          onSavePlacement={() => void saveTripPinPlacement()}
+          placementSaving={tripPinPlacementSaving}
           onCatchWaypointPress={handleMapCatchWaypointPress}
-        />
-      )}
-
-      {user && (
-        <TripEndpointPinModal
-          visible={tripPinModal != null}
-          kind={tripPinModal ?? 'start'}
-          trip={trip}
-          events={events}
-          isConnected={isConnected}
-          onClose={() => setTripPinModal(null)}
-          onPersist={persistTripPins}
         />
       )}
 
@@ -755,25 +810,41 @@ function SummaryPhotosTab({
 
 /* ─── Map Tab (read-only: route + pins; line snaps to nearby trails when possible) ─── */
 
+const TRIP_ROUTE_LEGEND_INFO =
+  'The teal line follows Mapbox walking paths near your track (trails and river corridors when available). If no path matches, a straight line connects your points.';
+
 function SummaryMapTab({
   trip,
   events,
   editMode,
+  tripPinPlacement,
   onRequestEditTripPin,
+  onPlacementMove,
+  onCancelPlacement,
+  onSavePlacement,
+  placementSaving,
   onCatchWaypointPress,
 }: {
   trip: Trip;
   events: TripEvent[];
   editMode: boolean;
+  tripPinPlacement: TripPinPlacementState | null;
   onRequestEditTripPin: (kind: TripEndpointKind) => void;
+  onPlacementMove: (lat: number, lng: number) => void;
+  onCancelPlacement: () => void;
+  onSavePlacement: () => void;
+  placementSaving: boolean;
   onCatchWaypointPress: (catchEventId: string) => void;
 }) {
+  const insets = useSafeAreaInsets();
   const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
   const hasMapData = waypoints.length > 0;
 
   const coordSummary = useMemo(() => tripStartEndDisplayCoords(trip, events), [trip, events]);
 
-  if (!hasMapData && !editMode) {
+  const showMap = hasMapData || editMode || tripPinPlacement != null;
+
+  if (!showMap) {
     return (
       <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
         <View style={styles.summaryMapEmpty}>
@@ -787,24 +858,76 @@ function SummaryMapTab({
     );
   }
 
+  const placing = tripPinPlacement != null;
+
   return (
     <View style={styles.summaryMapTabRoot}>
-      <JournalTripRouteMapView
-        trip={trip}
-        events={events}
-        containerStyle={styles.summaryMapNative}
-        onCatchWaypointPress={onCatchWaypointPress}
-      />
+      <View style={styles.summaryMapMapWrap}>
+        <JournalTripRouteMapView
+          trip={trip}
+          events={events}
+          containerStyle={styles.summaryMapNative}
+          onCatchWaypointPress={onCatchWaypointPress}
+          placementKind={placing ? tripPinPlacement.kind : null}
+          placementLatitude={placing ? tripPinPlacement.lat : undefined}
+          placementLongitude={placing ? tripPinPlacement.lng : undefined}
+          placementFocusKey={placing ? tripPinPlacement.focusKey : undefined}
+          onPlacementCoordinateChange={placing ? onPlacementMove : undefined}
+        />
+        {placing ? (
+          <View
+            style={[
+              styles.summaryMapPlacementBar,
+              { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
+            ]}
+          >
+            <Pressable
+              accessibilityRole="button"
+              style={styles.summaryMapPlacementBtnGhost}
+              onPress={onCancelPlacement}
+              disabled={placementSaving}
+            >
+              <Text style={styles.summaryMapPlacementBtnGhostText}>Cancel</Text>
+            </Pressable>
+            <Text style={styles.summaryMapPlacementTitle} numberOfLines={1}>
+              {tripPinPlacement.kind === 'start' ? 'Place start' : 'Place end'}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={[
+                styles.summaryMapPlacementBtnPrimary,
+                placementSaving && styles.summaryMapPlacementBtnDisabled,
+              ]}
+              onPress={onSavePlacement}
+              disabled={placementSaving}
+            >
+              {placementSaving ? (
+                <ActivityIndicator color={Colors.textInverse} size="small" />
+              ) : (
+                <Text style={styles.summaryMapPlacementBtnPrimaryText}>Save</Text>
+              )}
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
       <ScrollView
         style={styles.summaryMapLegendScroll}
         contentContainerStyle={styles.summaryMapLegendContent}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.summaryMapLegendTitle}>Trip route</Text>
-        <Text style={styles.emptyHint}>
-          The teal line follows Mapbox walking paths near your track (trails and river corridors when
-          available). If no path matches, a straight line connects your points.
-        </Text>
+        <View style={styles.summaryMapLegendTitleRow}>
+          <Text style={styles.summaryMapLegendTitle} numberOfLines={1}>
+            Trip Route
+          </Text>
+          <Pressable
+            onPress={() => Alert.alert('Trip Route', TRIP_ROUTE_LEGEND_INFO)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="How the trip route line is drawn"
+          >
+            <MaterialIcons name="info-outline" size={22} color={Colors.textTertiary} />
+          </Pressable>
+        </View>
         {editMode ? (
           <View style={styles.summaryMapEditPins}>
             <Text style={styles.summaryMapEditPinsHint}>Adjust start and end pins for this trip.</Text>
@@ -967,7 +1090,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
+    paddingTop: Spacing.xs,
     paddingBottom: Spacing.xs,
   },
   dateLocationName: {
@@ -1011,35 +1134,29 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  keepOfflineCard: {
+  keepOfflineRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
+    justifyContent: 'space-between',
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    shadowColor: Colors.shadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.xs,
+    paddingVertical: 4,
+    paddingHorizontal: Spacing.sm,
+    gap: Spacing.sm,
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
   },
-  keepOfflineTextCol: {
+  keepOfflineLabel: {
     flex: 1,
-  },
-  keepOfflineTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  keepOfflineHint: {
     fontSize: FontSize.xs,
+    fontWeight: '600',
     color: Colors.textSecondary,
-    marginTop: Spacing.xs,
-    lineHeight: 18,
+  },
+  keepOfflineSwitch: {
+    transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
   },
 
   tabBar: {
@@ -1082,9 +1199,62 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 320,
   },
+  summaryMapMapWrap: {
+    flex: 1,
+    minHeight: 280,
+    position: 'relative',
+  },
   summaryMapNative: {
     flex: 1,
     minHeight: 280,
+  },
+  summaryMapPlacementBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    backgroundColor: 'rgba(30, 41, 59, 0.94)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.12)',
+  },
+  summaryMapPlacementTitle: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.textInverse,
+    textAlign: 'center',
+  },
+  summaryMapPlacementBtnGhost: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    minWidth: 72,
+  },
+  summaryMapPlacementBtnGhostText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
+  },
+  summaryMapPlacementBtnPrimary: {
+    minWidth: 72,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryMapPlacementBtnDisabled: {
+    opacity: 0.7,
+  },
+  summaryMapPlacementBtnPrimaryText: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.textInverse,
   },
   summaryMapLegendScroll: {
     maxHeight: 200,
@@ -1096,6 +1266,12 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     gap: Spacing.sm,
     paddingBottom: Spacing.xl,
+  },
+  summaryMapLegendTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: Spacing.xs,
   },
   summaryMapLegendTitle: {
     fontSize: FontSize.sm,
