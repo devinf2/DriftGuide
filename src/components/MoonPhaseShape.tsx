@@ -6,6 +6,8 @@ import Svg, { Circle, ClipPath, Defs, G } from 'react-native-svg';
 
 const SIZE = 28;
 const R = 12;
+/** Slightly larger than R so the night disk still covers the moon limb after rasterization (avoids a thin yellow “ring” on the waning edge). */
+const SHADOW_R = R + 1.5;
 const C = SIZE / 2;
 
 /** Yellow moon disk; dark overlay is the night side (unlit). */
@@ -28,10 +30,11 @@ const PHASE_CONFIG: Record<MoonPhase, { fraction: number; waxing: boolean }> = {
 
 /**
  * Shadow disk (same radius as moon) shifted along x; clipped to the moon → curved terminator.
- * Waxing (NH): shadow eats from the **west/left**; waning from the **east/right**.
+ * Larger `fraction` (more lit) → larger shift → less overlap with moon → more yellow visible.
+ * Waxing (NH): shadow center to the **west** (left); waning to the **east** (right).
  */
 function shadowDiskCx(fraction: number, waxing: boolean): number {
-  const shift = 2 * R * (1 - fraction);
+  const shift = 2 * R * fraction;
   return waxing ? C - shift : C + shift;
 }
 
@@ -70,22 +73,7 @@ export function MoonPhaseShape({
           </ClipPath>
         </Defs>
 
-        {/* New moon: no sunlit face */}
-        {isNew && <Circle cx={C} cy={C} r={R} fill={NIGHT} />}
-
-        {/* Full moon: all sunlit */}
-        {!isNew && isFull && <Circle cx={C} cy={C} r={R} fill={MOONLIGHT} />}
-
-        {/* Phases: yellow moon, then dark “night” cap (same geometry as before, roles read clearly). */}
-        {!isNew && !isFull && (
-          <>
-            <Circle cx={C} cy={C} r={R} fill={MOONLIGHT} />
-            <G clipPath={`url(#${clipId})`}>
-              <Circle cx={shadowCx} cy={C} r={R} fill={NIGHT} />
-            </G>
-          </>
-        )}
-
+        {/* Rim first so fills cover the inner half of the stroke (cleaner terminator, no yellow gap at edge). */}
         <Circle
           cx={C}
           cy={C}
@@ -94,6 +82,22 @@ export function MoonPhaseShape({
           stroke={colors.textSecondary}
           strokeWidth={1.25}
         />
+
+        {/* New moon: no sunlit face */}
+        {isNew && <Circle cx={C} cy={C} r={R} fill={NIGHT} />}
+
+        {/* Full moon: all sunlit */}
+        {!isNew && isFull && <Circle cx={C} cy={C} r={R} fill={MOONLIGHT} />}
+
+        {/* Phases: yellow moon, then dark “night” cap (clipped to disk). */}
+        {!isNew && !isFull && (
+          <>
+            <Circle cx={C} cy={C} r={R} fill={MOONLIGHT} />
+            <G clipPath={`url(#${clipId})`}>
+              <Circle cx={shadowCx} cy={C} r={SHADOW_R} fill={NIGHT} />
+            </G>
+          </>
+        )}
       </Svg>
     </View>
   );

@@ -334,6 +334,8 @@ export interface WeatherData {
 
 /** Single 3-hour forecast slot from OpenWeatherMap forecast API */
 export interface HourlyForecastItem {
+  /** Slot start (local device TZ used only for display grouping) */
+  timestamp_ms: number;
   time: string;
   temp_f: number;
   condition: string;

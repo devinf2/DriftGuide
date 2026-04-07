@@ -48,10 +48,7 @@ export async function getWeather(lat: number, lng: number): Promise<WeatherData>
   }
 }
 
-/**
- * Fetches 5-day / 3-hour forecast and returns today's remaining slots (and next day if early).
- * Uses same API key as getWeather. Free tier: 5 day forecast with 3-hour steps.
- */
+/** Maps OpenWeather 3-hour forecast list entries to app forecast items. */
 const WIND_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 function slotToItem(slot: {
@@ -72,6 +69,7 @@ function slotToItem(slot: {
   const windDirIndex = Math.round(windDeg / 45) % 8;
   const windDirection = windSpeed != null ? WIND_DIRECTIONS[windDirIndex] : undefined;
   return {
+    timestamp_ms: slot.dt * 1000,
     time: timeStr,
     temp_f: Math.round(slot.main?.temp ?? 0),
     condition,
@@ -82,8 +80,8 @@ function slotToItem(slot: {
 }
 
 /**
- * Fetches 5-day / 3-hour forecast and returns today's remaining slots (and next day if early).
- * Uses same API key as getWeather. Free tier: 5 day forecast with 3-hour steps.
+ * Fetches 5-day / 3-hour forecast (all future slots in the API response).
+ * Free tier: up to 5 days at 3-hour steps (~40 points).
  * OpenWeatherMap returns cod as string "200" on success; we treat response.ok + list as success.
  */
 export async function getHourlyForecast(lat: number, lng: number): Promise<HourlyForecastItem[]> {
@@ -98,27 +96,15 @@ export async function getHourlyForecast(lat: number, lng: number): Promise<Hourl
     }
 
     const now = new Date();
-    const cutoff = new Date(now);
-    cutoff.setHours(cutoff.getHours() + 24);
     const items: HourlyForecastItem[] = [];
-    const fallbackItems: HourlyForecastItem[] = [];
-    const maxFallback = 8;
 
     for (const slot of data.list) {
       const dt = slot.dt * 1000;
-      const slotDate = new Date(dt);
-      if (slotDate < now) continue;
-
-      const item = slotToItem(slot);
-      if (slotDate <= cutoff) {
-        items.push(item);
-      }
-      if (fallbackItems.length < maxFallback) {
-        fallbackItems.push(item);
-      }
+      if (new Date(dt) < now) continue;
+      items.push(slotToItem(slot));
     }
 
-    return items.length > 0 ? items : fallbackItems;
+    return items;
   } catch {
     return [];
   }

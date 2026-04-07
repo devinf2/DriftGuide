@@ -69,11 +69,27 @@ export const OFFLINE_REGION_SIZE_PRESETS = {
 
 export type OfflineRegionSizePreset = keyof typeof OFFLINE_REGION_SIZE_PRESETS;
 
-export function offlineRegionHalfExtents(preset: OfflineRegionSizePreset): {
+/** Portrait = longer north–south (default, river-corridor friendly). Landscape = longer east–west. */
+export type OfflineRegionOrientation = 'portrait' | 'landscape';
+
+/** Full extent label: east–west × north–south km (approximate). */
+export function offlineRegionExtentLabel(halfWidthKm: number, halfHeightKm: number): string {
+  const ewKm = Math.round(halfWidthKm * 2);
+  const nsKm = Math.round(halfHeightKm * 2);
+  return `~${ewKm} × ${nsKm} km`;
+}
+
+export function offlineRegionHalfExtents(
+  preset: OfflineRegionSizePreset,
+  orientation: OfflineRegionOrientation = 'portrait',
+): {
   halfWidthKm: number;
   halfHeightKm: number;
 } {
   const p = OFFLINE_REGION_SIZE_PRESETS[preset];
+  if (orientation === 'landscape') {
+    return { halfWidthKm: p.halfHeightKm, halfHeightKm: p.halfWidthKm };
+  }
   return { halfWidthKm: p.halfWidthKm, halfHeightKm: p.halfHeightKm };
 }
 

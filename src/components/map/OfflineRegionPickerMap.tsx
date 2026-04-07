@@ -9,7 +9,6 @@ import {
   boundingBoxRectAroundCenter,
 } from '@/src/utils/offlineDownloadRegion';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
-import { SAMPLE_OFFLINE_MAX_ZOOM, SAMPLE_OFFLINE_MIN_ZOOM } from '@/src/constants/offlineSampleRegion';
 import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { BoundingBox } from '@/src/types/boundingBox';
@@ -83,7 +82,8 @@ type CameraRef = {
 };
 
 /**
- * Full-screen style map: pan/zoom to position the download rectangle; bbox updates on map idle.
+ * Full-screen style map: download rectangle stays centered on the map; bbox follows the camera
+ * on every camera change (not only on idle) so it does not lag behind while panning.
  */
 export function OfflineRegionPickerMap({
   initialCenter,
@@ -167,12 +167,8 @@ export function OfflineRegionPickerMap({
     fitCameraToBbox,
   ]);
 
-  const handleMapIdle = useCallback(
-    (e: unknown) => {
-      if (tryFrameInitialRegion()) {
-        return;
-      }
-      const state = e as MapCameraStatePayload;
+  const syncBboxFromCameraState = useCallback(
+    (state: MapCameraStatePayload) => {
       const center = state?.properties?.center;
       const z = state?.properties?.zoom;
       if (!center || center.length < 2) return;
@@ -182,7 +178,24 @@ export function OfflineRegionPickerMap({
       onBboxRef.current(bbox, [lng, lat]);
       if (typeof z === 'number') setLiveZoom(roundZoom(z));
     },
-    [halfWidthKm, halfHeightKm, tryFrameInitialRegion],
+    [halfWidthKm, halfHeightKm],
+  );
+
+  const handleCameraChanged = useCallback(
+    (e: unknown) => {
+      syncBboxFromCameraState(e as MapCameraStatePayload);
+    },
+    [syncBboxFromCameraState],
+  );
+
+  const handleMapIdle = useCallback(
+    (e: unknown) => {
+      if (tryFrameInitialRegion()) {
+        return;
+      }
+      syncBboxFromCameraState(e as MapCameraStatePayload);
+    },
+    [syncBboxFromCameraState, tryFrameInitialRegion],
   );
 
   useEffect(() => {
@@ -251,6 +264,7 @@ export function OfflineRegionPickerMap({
         logoEnabled
         attributionEnabled
         attributionPosition={{ bottom: Spacing.lg, right: Spacing.md + ZOOM_BUTTON_WIDTH + Spacing.sm }}
+        onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
         onDidFinishLoadingStyle={handleDidFinishLoadingStyle}
       >
@@ -304,11 +318,6 @@ export function OfflineRegionPickerMap({
           <MaterialIcons name="remove" size={22} color={colors.text} />
         </Pressable>
       </View>
-      <View style={styles.legend} pointerEvents="none">
-        <Text style={styles.legendText}>
-          Tiles z{SAMPLE_OFFLINE_MIN_ZOOM}–{SAMPLE_OFFLINE_MAX_ZOOM} · Pan to align the area inside the rectangle
-        </Text>
-      </View>
     </View>
   );
 }
@@ -350,21 +359,5 @@ function createOfflineRegionPickerMapStyles(colors: ThemeColors) {
     },
     zoomButtonPressed: { opacity: 0.85, backgroundColor: colors.surfaceElevated },
     zoomDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-    legend: {
-      position: 'absolute',
-      left: Spacing.md,
-      right: Spacing.md,
-      bottom: Spacing.md,
-      backgroundColor: colors.surfaceElevated,
-      padding: Spacing.sm,
-      borderRadius: 8,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-    },
-    legendText: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      textAlign: 'center',
-    },
   });
 }

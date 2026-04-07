@@ -28,6 +28,7 @@ import { locationsForRoots, rootLocationIdsWithPointsInBbox } from '@/src/utils/
 import { executeOfflineRegionDownload } from '@/src/services/offlineRegionDownloadFlow';
 import {
   offlineRegionHalfExtents,
+  type OfflineRegionOrientation,
   type OfflineRegionSizePreset,
 } from '@/src/utils/offlineDownloadRegion';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -52,11 +53,13 @@ export default function DownloadWaterwayScreen() {
   const [tileProgress, setTileProgress] = useState<number | null>(null);
   const [customSuffix] = useState(() => `${Date.now()}`);
   const [regionSizePreset, setRegionSizePreset] = useState<OfflineRegionSizePreset>('small');
+  const [regionOrientation, setRegionOrientation] =
+    useState<OfflineRegionOrientation>('portrait');
   const locatedForMapTab = useRef(false);
 
   const { halfWidthKm, halfHeightKm } = useMemo(
-    () => offlineRegionHalfExtents(regionSizePreset),
-    [regionSizePreset],
+    () => offlineRegionHalfExtents(regionSizePreset, regionOrientation),
+    [regionSizePreset, regionOrientation],
   );
 
   useEffect(() => {
@@ -254,10 +257,15 @@ export default function DownloadWaterwayScreen() {
       ) : (
         <View style={styles.mapColumn}>
           <View style={styles.mapColumnPadded}>
-            <OfflineRegionSizeSelector value={regionSizePreset} onChange={setRegionSizePreset} />
+            <OfflineRegionSizeSelector
+              value={regionSizePreset}
+              onChange={setRegionSizePreset}
+              orientation={regionOrientation}
+              onOrientationChange={setRegionOrientation}
+            />
           </View>
           <OfflineRegionPickerMap
-            key={`${inlineMapCenter[0]}-${inlineMapCenter[1]}-v${mapCenterVersion}-${regionSizePreset}`}
+            key={`${inlineMapCenter[0]}-${inlineMapCenter[1]}-v${mapCenterVersion}-${regionSizePreset}-${regionOrientation}`}
             initialCenter={inlineMapCenter}
             initialZoom={USER_LOCATION_ZOOM}
             halfWidthKm={halfWidthKm}

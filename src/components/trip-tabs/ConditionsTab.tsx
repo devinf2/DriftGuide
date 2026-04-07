@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, ReactNode } from 'react';
+import { useState, useEffect, useMemo, ReactNode, Fragment } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
@@ -30,7 +30,7 @@ export interface ConditionsTabProps {
   location: Location | null | undefined;
   /** Optional note below summary (e.g. "Conditions at time of trip") */
   note?: string;
-  /** If false, hide hourly forecast (e.g. for past trip summary). Default true. */
+  /** If false, hide extended forecast strip (e.g. for past trip summary). Default true. */
   showHourly?: boolean;
   /** When no weather/water data and no children, show this message instead of unavailable cards (e.g. summary) */
   emptyMessage?: string;
@@ -175,44 +175,64 @@ export function ConditionsTab({
         <View style={styles.conditionCard}>
           <View style={styles.conditionCardHeader}>
             <MaterialIcons name="schedule" size={20} color={colors.secondary} />
-            <Text style={styles.conditionCardTitle}>Today&apos;s forecast</Text>
+            <Text style={styles.conditionCardTitle}>Forecast</Text>
           </View>
           {hourlyLoading ? (
             <View style={styles.hourlyLoadingRow}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.hourlyLoadingText}>Loading hourly...</Text>
+              <Text style={styles.hourlyLoadingText}>Loading forecast...</Text>
             </View>
           ) : hourlyForecast.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyScroll}>
-              {hourlyForecast.map((slot, i) => (
-                <View key={i} style={styles.hourlySlot}>
-                  <Text style={styles.hourlySlotTime}>{slot.time}</Text>
-                  <Ionicons
-                    name={getWeatherIconName(slot.condition) as keyof typeof Ionicons.glyphMap}
-                    size={28}
-                    color={colors.secondary}
-                    style={styles.hourlySlotIcon}
-                  />
-                  <Text style={styles.hourlySlotTemp}>{slot.temp_f}°</Text>
-                  <Text style={styles.hourlySlotCondition} numberOfLines={1}>
-                    {formatSkyLabel(slot.condition)}
-                  </Text>
-                  {slot.wind_speed_mph != null && slot.wind_speed_mph > 0 && (
-                    <Text style={styles.hourlySlotWind}>
-                      {slot.wind_speed_mph} mph {slot.wind_direction ?? ''}
-                    </Text>
-                  )}
-                  {slot.pop != null && slot.pop > 0 && (
-                    <Text style={styles.hourlySlotPop} numberOfLines={1}>
-                      {slot.pop}%
-                    </Text>
-                  )}
-                </View>
-              ))}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.hourlyScroll}
+              contentContainerStyle={styles.hourlyScrollContent}
+            >
+              {hourlyForecast.map((slot, i) => {
+                const prev = hourlyForecast[i - 1];
+                const showDayHeader =
+                  i === 0 ||
+                  (prev != null && !isSameLocalCalendarDay(slot.timestamp_ms, prev.timestamp_ms));
+                const { line1, line2 } = formatForecastDayHeader(slot.timestamp_ms);
+                return (
+                  <Fragment key={`${slot.timestamp_ms}-${i}`}>
+                    {showDayHeader && (
+                      <View style={styles.forecastDayHeader}>
+                        <Text style={styles.forecastDayHeaderLine1}>{line1}</Text>
+                        <Text style={styles.forecastDayHeaderLine2}>{line2}</Text>
+                      </View>
+                    )}
+                    <View style={styles.hourlySlot}>
+                      <Text style={styles.hourlySlotTime}>{slot.time}</Text>
+                      <Ionicons
+                        name={getWeatherIconName(slot.condition) as keyof typeof Ionicons.glyphMap}
+                        size={28}
+                        color={colors.secondary}
+                        style={styles.hourlySlotIcon}
+                      />
+                      <Text style={styles.hourlySlotTemp}>{slot.temp_f}°</Text>
+                      <Text style={styles.hourlySlotCondition} numberOfLines={1}>
+                        {formatSkyLabel(slot.condition)}
+                      </Text>
+                      {slot.wind_speed_mph != null && slot.wind_speed_mph > 0 && (
+                        <Text style={styles.hourlySlotWind}>
+                          {slot.wind_speed_mph} mph {slot.wind_direction ?? ''}
+                        </Text>
+                      )}
+                      {slot.pop != null && slot.pop > 0 && (
+                        <Text style={styles.hourlySlotPop} numberOfLines={1}>
+                          {slot.pop}%
+                        </Text>
+                      )}
+                    </View>
+                  </Fragment>
+                );
+              })}
             </ScrollView>
           ) : (
             <Text style={styles.conditionEmptyHint}>
-              Forecast unavailable. Add OpenWeatherMap API key for hourly forecast.
+              Forecast unavailable. Add OpenWeatherMap API key for the 5-day forecast.
             </Text>
           )}
         </View>
@@ -297,6 +317,24 @@ export function ConditionsTab({
       {children}
     </ScrollView>
   );
+}
+
+function startOfLocalDay(ms: number): Date {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function isSameLocalCalendarDay(aMs: number, bMs: number): boolean {
+  return startOfLocalDay(aMs).getTime() === startOfLocalDay(bMs).getTime();
+}
+
+/** First row: Mon, Tue, … (en-US for fixed width); second row: short month + day */
+function formatForecastDayHeader(timestampMs: number): { line1: string; line2: string } {
+  const slot = new Date(timestampMs);
+  return {
+    line1: slot.toLocaleDateString('en-US', { weekday: 'short' }),
+    line2: slot.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+  };
 }
 
 function createConditionsTabStyles(colors: ThemeColors) {
@@ -532,6 +570,36 @@ function createConditionsTabStyles(colors: ThemeColors) {
   },
   hourlyScroll: {
     marginHorizontal: -Spacing.md,
+  },
+  hourlyScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingHorizontal: Spacing.md,
+  },
+  forecastDayHeader: {
+    width: 58,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: 4,
+    marginRight: Spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: BorderRadius.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+  },
+  forecastDayHeaderLine1: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    color: colors.text,
+    textAlign: 'center',
+  },
+  forecastDayHeaderLine2: {
+    fontSize: FontSize.xs,
+    color: colors.textTertiary,
+    textAlign: 'center',
+    marginTop: 2,
   },
   hourlySlot: {
     width: 72,

@@ -21,6 +21,7 @@ import { useLocationStore } from '@/src/stores/locationStore';
 import { executeOfflineRegionDownload } from '@/src/services/offlineRegionDownloadFlow';
 import {
   offlineRegionHalfExtents,
+  type OfflineRegionOrientation,
   type OfflineRegionSizePreset,
 } from '@/src/utils/offlineDownloadRegion';
 import {
@@ -70,10 +71,12 @@ export default function OfflineRegionPickerScreen() {
   const [tileProgress, setTileProgress] = useState<number | null>(null);
   const [customSuffix] = useState(() => `${Date.now()}`);
   const [regionSizePreset, setRegionSizePreset] = useState<OfflineRegionSizePreset>('small');
+  const [regionOrientation, setRegionOrientation] =
+    useState<OfflineRegionOrientation>('portrait');
 
   const { halfWidthKm, halfHeightKm } = useMemo(
-    () => offlineRegionHalfExtents(regionSizePreset),
-    [regionSizePreset],
+    () => offlineRegionHalfExtents(regionSizePreset, regionOrientation),
+    [regionSizePreset, regionOrientation],
   );
 
   const onRegionBboxChange = useCallback((bbox: BoundingBox, _center: [number, number]) => {
@@ -179,7 +182,7 @@ export default function OfflineRegionPickerScreen() {
   return (
     <View style={styles.root}>
       <OfflineRegionPickerMap
-        key={`${regionSizePreset}-${initialCenter[0]}-${initialCenter[1]}`}
+        key={`${regionSizePreset}-${regionOrientation}-${initialCenter[0]}-${initialCenter[1]}`}
         initialCenter={initialCenter}
         initialZoom={USER_LOCATION_ZOOM}
         halfWidthKm={halfWidthKm}
@@ -187,7 +190,12 @@ export default function OfflineRegionPickerScreen() {
         onRegionBboxChange={onRegionBboxChange}
       />
       <View style={[styles.footer, { paddingBottom: Spacing.lg + insets.bottom }]}>
-        <OfflineRegionSizeSelector value={regionSizePreset} onChange={setRegionSizePreset} />
+        <OfflineRegionSizeSelector
+          value={regionSizePreset}
+          onChange={setRegionSizePreset}
+          orientation={regionOrientation}
+          onOrientationChange={setRegionOrientation}
+        />
         {tileProgress != null && downloading ? (
           <Text style={styles.progressText}>Map tiles: {Math.round(tileProgress)}%</Text>
         ) : null}
