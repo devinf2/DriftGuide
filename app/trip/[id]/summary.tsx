@@ -22,6 +22,7 @@ import { fetchPhotos } from '@/src/services/photoService';
 import { Trip, TripEvent, CatchData, FlyChangeData, NoteData, AIQueryData, WaterFlowData, NextFlyRecommendation, EventConditionsSnapshot, Photo } from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
+import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS } from '@/src/services/waterFlow';
@@ -210,6 +211,23 @@ export default function TripSummaryScreen() {
     },
     [id, user, isConnected],
   );
+
+  const tripDurationLabel = useMemo(() => {
+    if (!trip) return '';
+    let ms: number | null | undefined = trip.active_fishing_ms;
+    if (ms == null && events.length > 0) {
+      const inferred = inferActiveFishingMsFromPauseResumeEvents(
+        trip.start_time,
+        trip.end_time,
+        events,
+      );
+      if (inferred != null) ms = inferred;
+    }
+    return formatTripDuration(trip.start_time, trip.end_time, {
+      imported: trip.imported,
+      activeFishingMs: ms ?? undefined,
+    });
+  }, [trip, events]);
 
   if (loading) {
     return (
@@ -444,7 +462,7 @@ export default function TripSummaryScreen() {
         </View>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>
-            {formatTripDuration(trip.start_time, trip.end_time, { imported: trip.imported })}
+            {tripDurationLabel}
           </Text>
           <Text style={styles.statLabel}>Duration</Text>
         </View>

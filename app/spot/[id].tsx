@@ -14,6 +14,7 @@ import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constan
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
+import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
 import {
   getSpotFishingSummary,
@@ -55,6 +56,7 @@ import {
   softDeleteCommunityLocation,
   type LocationCreatorManageState,
 } from '@/src/services/locationService';
+import { effectiveIsAppOnline } from '@/src/utils/netReachability';
 
 const USED_SPOT_MESSAGE =
   'Another angler has this spot on a trip. You can’t change the pin, visibility, or delete it until their trips no longer use it.';
@@ -190,7 +192,12 @@ export default function SpotFishingTripScreen() {
   const [summarySignal, setSummarySignal] = useState<number | null>(null);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
-  const [spotNetOn, setSpotNetOn] = useState(true);
+  const [spotRawNetOn, setSpotRawNetOn] = useState(true);
+  const simulateOffline = useSimulateOfflineStore((s) => s.simulateOffline);
+  const spotNetOn = useMemo(
+    () => effectiveIsAppOnline(spotRawNetOn),
+    [spotRawNetOn, simulateOffline],
+  );
 
   const location = id ? getLocationById(id) : undefined;
 
@@ -240,10 +247,10 @@ export default function SpotFishingTripScreen() {
 
   useEffect(() => {
     const sub = NetInfo.addEventListener((s) => {
-      setSpotNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+      setSpotRawNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
     });
     void NetInfo.fetch().then((s) => {
-      setSpotNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+      setSpotRawNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
     });
     return () => sub();
   }, []);
@@ -282,7 +289,9 @@ export default function SpotFishingTripScreen() {
       const meta = (location.metadata as Record<string, string> | null)?.usgs_station_id ?? null;
 
       const [online, n, cached] = await Promise.all([
-        NetInfo.fetch().then((s) => Boolean(s.isConnected && s.isInternetReachable !== false)),
+        NetInfo.fetch().then((s) =>
+          effectiveIsAppOnline(Boolean(s.isConnected && s.isInternetReachable !== false)),
+        ),
         fetchCommunityFishTotalForLocation(id),
         loadGuideIntelForLocation(id),
       ]);

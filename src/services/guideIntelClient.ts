@@ -13,6 +13,7 @@ import {
 } from '@/src/utils/guideLocationRecommendationJson';
 import { FunctionsHttpError } from '@supabase/functions-js';
 import NetInfo from '@react-native-community/netinfo';
+import { effectiveIsAppOnline } from '@/src/utils/netReachability';
 
 const DISABLE_EDGE = process.env.EXPO_PUBLIC_USE_GUIDE_INTEL_EDGE === '0';
 
@@ -21,11 +22,11 @@ export async function isOnlineForGuideIntel(): Promise<boolean> {
     const s = await NetInfo.fetch();
     // Only skip when the OS explicitly says we're offline. `isInternetReachable === false`
     // is often wrong on iOS Simulator / some Wi‑Fi setups while other requests still work.
-    if (s.isConnected === false) return false;
-    if (s.isInternetReachable === false) return false;
-    return true;
+    if (s.isConnected === false) return effectiveIsAppOnline(false);
+    if (s.isInternetReachable === false) return effectiveIsAppOnline(false);
+    return effectiveIsAppOnline(true);
   } catch {
-    return true;
+    return effectiveIsAppOnline(true);
   }
 }
 

@@ -8,6 +8,8 @@ import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constan
 import { askAI } from '@/src/services/ai';
 import type { AIContext } from '@/src/services/ai';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
+import { effectiveIsAppOnline } from '@/src/utils/netReachability';
 import NetInfo from '@react-native-community/netinfo';
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import {
@@ -199,17 +201,23 @@ export default function GuideChat({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [netOn, setNetOn] = useState(true);
+  const [rawNetOn, setRawNetOn] = useState(true);
+  const simulateOffline = useSimulateOfflineStore((s) => s.simulateOffline);
   const scrollRef = useRef<ScrollView>(null);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const netOn = useMemo(
+    () => effectiveIsAppOnline(rawNetOn),
+    [rawNetOn, simulateOffline],
+  );
+
   useEffect(() => {
     const sub = NetInfo.addEventListener((s) => {
-      setNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+      setRawNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
     });
     void NetInfo.fetch().then((s) => {
-      setNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
+      setRawNetOn(Boolean(s.isConnected && s.isInternetReachable !== false));
     });
     return () => sub();
   }, []);

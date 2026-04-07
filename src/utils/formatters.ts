@@ -1,11 +1,25 @@
 import { format, formatDistanceToNow, differenceInMinutes, differenceInHours } from 'date-fns';
 
+/** Human-readable duration from milliseconds (floored to whole minutes). */
+export function formatDurationFromMs(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const rem = totalMinutes % 60;
+  if (rem === 0) return `${hours}h`;
+  return `${hours}h ${rem}m`;
+}
+
 export function formatTripDuration(
   startTime: string,
   endTime: string | null,
-  options?: { imported?: boolean | null },
+  options?: { imported?: boolean | null; activeFishingMs?: number | null },
 ): string {
   if (options?.imported) return 'Imported';
+  const active = options?.activeFishingMs;
+  if (active != null && Number.isFinite(active) && active >= 0) {
+    return formatDurationFromMs(active);
+  }
   const start = new Date(startTime);
   const end = endTime ? new Date(endTime) : new Date();
   const minutes = differenceInMinutes(end, start);

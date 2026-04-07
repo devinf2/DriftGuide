@@ -7,6 +7,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
+import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -128,7 +129,7 @@ export default function ProfileScreen() {
   const confirmAvatarPreview = useCallback(async () => {
     if (!user || !avatarPreviewUri) return;
     const net = await NetInfo.fetch();
-    if (!net.isConnected) {
+    if (!effectiveIsAppOnline(isAppReachableFromNetInfoState(net))) {
       Alert.alert('Offline', 'Connect to the internet to upload a profile photo.');
       return;
     }

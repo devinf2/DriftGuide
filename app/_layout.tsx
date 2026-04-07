@@ -1,5 +1,6 @@
 import 'react-native-get-random-values';
-import { useEffect } from 'react';
+import { useEffect, type ComponentType } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -21,6 +22,22 @@ export const unstable_settings = {
 };
 
 SplashScreen.preventAutoHideAsync();
+
+/** Production builds: `__DEV__` is false → no `require` → dev overlay never loads or ships. */
+const OfflineSimOverlay: ComponentType | undefined = __DEV__
+  ? // eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional dev-only dynamic load
+    require('@/src/dev/OfflineSimOverlay').OfflineSimOverlay
+  : undefined;
+
+const styles = StyleSheet.create({
+  authGateRoot: { flex: 1 },
+  authGateStackShell: { flex: 1 },
+  devOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100000,
+    elevation: 100000,
+  },
+});
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { session, isLoading, setSession, fetchProfile } = useAuthStore();
@@ -54,11 +71,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, [session, segments, isLoading]);
 
   return (
-    <>
+    <View style={styles.authGateRoot}>
       {session ? <SyncOnConnectivity /> : null}
       {session ? <GlobalOfflineBanner /> : null}
-      {children}
-    </>
+      <View style={styles.authGateStackShell}>{children}</View>
+      {OfflineSimOverlay ? (
+        <View pointerEvents="box-none" style={styles.devOverlay}>
+          <OfflineSimOverlay />
+        </View>
+      ) : null}
+    </View>
   );
 }
 

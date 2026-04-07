@@ -45,6 +45,7 @@ function tripToUpsertPayload(trip: Trip) {
     rating: trip.rating ?? null,
     user_reported_clarity: trip.user_reported_clarity ?? null,
     imported: trip.imported ?? false,
+    active_fishing_ms: trip.active_fishing_ms ?? null,
   };
 }
 

@@ -486,7 +486,17 @@ export const useTripStore = create<TripState>()(
       },
 
       endTrip: async (): Promise<{ synced: boolean }> => {
-        const { activeTrip, events, fishCount, weatherData, waterFlowData, nextFlyRecommendation } = get();
+        const {
+          activeTrip,
+          events,
+          fishCount,
+          weatherData,
+          waterFlowData,
+          nextFlyRecommendation,
+          fishingElapsedMs,
+          fishingSegmentStartedAt,
+          isTripPaused,
+        } = get();
         if (!activeTrip) return { synced: false };
 
         const tripId = activeTrip.id;
@@ -494,10 +504,19 @@ export const useTripStore = create<TripState>()(
         const endLat = fastCoords?.latitude ?? null;
         const endLon = fastCoords?.longitude ?? null;
 
+        const endNow = Date.now();
+        let finalActiveMs = fishingElapsedMs ?? 0;
+        if (!isTripPaused) {
+          const segmentIso = fishingSegmentStartedAt ?? activeTrip.start_time;
+          const segmentStart = new Date(segmentIso).getTime();
+          finalActiveMs += Math.max(0, endNow - segmentStart);
+        }
+
         const endedTrip: Trip = {
           ...activeTrip,
           status: 'completed',
           end_time: new Date().toISOString(),
+          active_fishing_ms: Math.round(finalActiveMs),
           end_latitude: endLat,
           end_longitude: endLon,
           total_fish: fishCount,

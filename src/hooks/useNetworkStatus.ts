@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
-import { isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
+import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
+import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
 
 /**
  * App-level network: aligned with GlobalOfflineBanner (`isInternetReachable === false` ⇒ offline).
@@ -8,15 +9,16 @@ import { isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
  * `isConnected` kept for call-site compatibility — means "reachable enough to use the API".
  */
 export function useNetworkStatus() {
-  const [isConnected, setIsConnected] = useState(false);
+  const [netReachable, setNetReachable] = useState(false);
   const [connectionType, setConnectionType] = useState<string | null>(null);
+  const simulateOffline = useSimulateOfflineStore((s) => s.simulateOffline);
 
   useEffect(() => {
     let cancelled = false;
 
     const apply = (state: NetInfoState) => {
       if (cancelled) return;
-      setIsConnected(isAppReachableFromNetInfoState(state));
+      setNetReachable(isAppReachableFromNetInfoState(state));
       setConnectionType(state.type);
     };
 
@@ -28,6 +30,11 @@ export function useNetworkStatus() {
       unsubscribe();
     };
   }, []);
+
+  const isConnected = useMemo(
+    () => effectiveIsAppOnline(netReachable),
+    [netReachable, simulateOffline],
+  );
 
   return { isConnected, connectionType };
 }

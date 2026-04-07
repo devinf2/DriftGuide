@@ -110,6 +110,8 @@ export interface Trip {
   user_reported_clarity?: WaterClarity | null;
   /** True when created via Import Past Trips (not a live timed session). */
   imported?: boolean | null;
+  /** Active trip time in ms, excluding pauses; set when trip completes. */
+  active_fishing_ms?: number | null;
   created_at: string;
   /** Soft delete — excluded from location usage checks when set. */
   deleted_at?: string | null;

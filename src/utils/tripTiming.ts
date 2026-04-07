@@ -1,5 +1,10 @@
+import type { TripEvent } from '@/src/types';
+import { formatDurationFromMs, formatTripDuration } from './formatters';
+
 /** Re-export for screens that already import trip timing (keeps Metro/Hermes from dropping `formatTripDuration` when the timer bundle needs it). */
-export { formatTripDuration } from './formatters';
+export { formatTripDuration };
+
+export const formatFishingElapsedLabel = formatDurationFromMs;
 
 /** Active fishing time excluding paused intervals (client-side; also logged via note events). */
 export function getLiveFishingElapsedMs(
@@ -16,11 +21,45 @@ export function getLiveFishingElapsedMs(
   return base + (Date.now() - new Date(segment).getTime());
 }
 
-export function formatFishingElapsedLabel(ms: number): string {
-  const totalMinutes = Math.floor(ms / 60000);
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const hours = Math.floor(totalMinutes / 60);
-  const rem = totalMinutes % 60;
-  if (rem === 0) return `${hours}h`;
-  return `${hours}h ${rem}m`;
+function pauseResumeNoteText(e: TripEvent): string | null {
+  if (e.event_type !== 'note') return null;
+  const d = e.data as { text?: unknown };
+  return typeof d?.text === 'string' ? d.text : null;
+}
+
+/**
+ * When `active_fishing_ms` was never stored (legacy), infer active time from
+ * "Trip paused" / "Trip resumed" note events. Returns null if there were no pauses
+ * (caller should use wall-clock start→end).
+ */
+export function inferActiveFishingMsFromPauseResumeEvents(
+  startTimeIso: string,
+  endTimeIso: string | null,
+  events: TripEvent[],
+): number | null {
+  const hasPause = events.some((e) => pauseResumeNoteText(e) === 'Trip paused');
+  if (!hasPause) return null;
+
+  const endMs = endTimeIso ? new Date(endTimeIso).getTime() : Date.now();
+  const startMs = new Date(startTimeIso).getTime();
+  const sorted = [...events].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+
+  let runningStart: number | null = startMs;
+  let total = 0;
+  for (const e of sorted) {
+    const t = new Date(e.timestamp).getTime();
+    const text = pauseResumeNoteText(e);
+    if (text === 'Trip paused' && runningStart != null) {
+      total += Math.max(0, t - runningStart);
+      runningStart = null;
+    } else if (text === 'Trip resumed') {
+      runningStart = t;
+    }
+  }
+  if (runningStart != null) {
+    total += Math.max(0, endMs - runningStart);
+  }
+  return Math.max(0, Math.round(total));
 }
