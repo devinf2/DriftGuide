@@ -11,7 +11,7 @@ import type { BoundingBox } from '@/src/types/boundingBox';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { supabase } from '@/src/services/supabase';
-import { activeLocationsOnly } from '@/src/utils/locationVisibility';
+import { activeLocationsOnly, locationsVisibleToViewer } from '@/src/utils/locationVisibility';
 import {
   fetchCatchesInBounds,
   fetchCommunityCatchesInBounds,
@@ -324,7 +324,9 @@ export async function removeDownloadedDataForMapPack(mapPackName: string): Promi
 }
 
 /** All locations from all downloaded waterways, for offline "Start trip" location list. */
-export async function getLocationsForOfflineStart(): Promise<Location[]> {
+export async function getLocationsForOfflineStart(
+  viewerId: string | null | undefined,
+): Promise<Location[]> {
   const waterways = await getDownloadedWaterways();
   const seen = new Set<string>();
   const out: Location[] = [];
@@ -336,7 +338,8 @@ export async function getLocationsForOfflineStart(): Promise<Location[]> {
       }
     }
   }
-  return activeLocationsOnly(out).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const visible = locationsVisibleToViewer(activeLocationsOnly(out), viewerId);
+  return visible.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
 /** Community catches and conditions for a downloaded waterway (for offline AI recommendations). */

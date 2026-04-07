@@ -321,9 +321,9 @@ export default function NewTripScreen() {
 
   useEffect(() => {
     if (!isConnected) {
-      getLocationsForOfflineStart().then(setOfflineLocations);
+      getLocationsForOfflineStart(user?.id).then(setOfflineLocations);
     }
-  }, [isConnected]);
+  }, [isConnected, user?.id]);
 
   useEffect(() => {
     if (!lastAddedLocationId) return;

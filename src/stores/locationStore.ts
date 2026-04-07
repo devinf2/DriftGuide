@@ -10,7 +10,11 @@ import {
 } from '@/src/services/offlineLocationSnapshot';
 import { useAuthStore } from '@/src/stores/authStore';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
-import { activeLocationsOnly, isLocationActive } from '@/src/utils/locationVisibility';
+import {
+  activeLocationsOnly,
+  isLocationActive,
+  locationsVisibleToViewer,
+} from '@/src/utils/locationVisibility';
 import { withTimeout } from '@/src/utils/promiseTimeout';
 import { mergeLocationsById } from '@/src/utils/mergeLocations';
 import { getLocationsForOfflineStart } from '@/src/services/waterwayCache';
@@ -53,9 +57,9 @@ export const useLocationStore = create<LocationState>()(
           );
 
           if (!error && data) {
-            const list = activeLocationsOnly(data as Location[]);
-            set({ locations: list });
             const uid = useAuthStore.getState().user?.id;
+            const list = locationsVisibleToViewer(activeLocationsOnly(data as Location[]), uid);
+            set({ locations: list });
             const home = useAuthStore.getState().profile?.home_state;
             if (uid && home?.trim()) {
               const forSnap = filterLocationsByHomeState(list, home);
@@ -69,8 +73,11 @@ export const useLocationStore = create<LocationState>()(
           const uid = useAuthStore.getState().user?.id;
           if (uid) {
             const snap = await loadOfflineLocationsSnapshot(uid);
-            const dl = await getLocationsForOfflineStart();
-            const merged = mergeLocationsById(snap, dl);
+            const dl = await getLocationsForOfflineStart(uid);
+            const merged = locationsVisibleToViewer(
+              mergeLocationsById(snap, dl, get().locations),
+              uid,
+            );
             if (merged.length) {
               set({ locations: merged });
             }
