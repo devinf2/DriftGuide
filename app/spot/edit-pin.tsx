@@ -8,6 +8,7 @@ import {
   updateLocationPin,
 } from '@/src/services/locationService';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import type { Location } from '@/src/types';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
@@ -35,6 +36,8 @@ export default function EditSpotPinScreen() {
   const navigation = useNavigation();
   const { user } = useAuthStore();
   const { locations, fetchLocations, getLocationById, isLoading: locationsLoading } = useLocationStore();
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [pin, setPin] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -128,8 +131,8 @@ export default function EditSpotPinScreen() {
         surface: colors.surface,
         surfaceElevated: colors.surfaceElevated,
         colorScheme: resolvedScheme,
-      }),
-    [mapCatalogLocations, colors.primary, colors.surface, colors.surfaceElevated, resolvedScheme],
+      }, favoriteLocationIds),
+    [mapCatalogLocations, colors.primary, colors.surface, colors.surfaceElevated, resolvedScheme, favoriteLocationIds],
   );
 
   const handleMapIdle = useCallback((state: MapCameraStatePayload) => {

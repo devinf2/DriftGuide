@@ -51,6 +51,7 @@ import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
 import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
 import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
 import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import {
@@ -1615,6 +1616,8 @@ type TripMapMarker = {
   title: string;
   color: string;
   locationType?: LocationType;
+  /** Catalog viewport pins only */
+  isFavorite?: boolean;
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
   catchEventId?: string;
@@ -1700,6 +1703,8 @@ function TripMapTab({
 }) {
   const locations = useLocationStore((s) => s.locations);
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const mapRef = useRef<TripMapboxMapRef>(null);
   const [centerCoordinate, setCenterCoordinate] = useState<[number, number]>(() =>
     tripMapDefaultCenterCoordinate(trip),
@@ -1777,8 +1782,9 @@ function TripMapTab({
         trip.location_id ?? undefined,
         colors.textTertiary,
         mapColorScheme,
+        favoriteLocationIds,
       ),
-    [locations, dataViewport, trip.location_id, colors.textTertiary, mapColorScheme],
+    [locations, dataViewport, trip.location_id, colors.textTertiary, mapColorScheme, favoriteLocationIds],
   );
 
   const allMarkers = useMemo(() => {
@@ -1820,7 +1826,12 @@ function TripMapTab({
                 icon={m.endpointIcon ?? 'place'}
               />
             ) : (
-              <CatalogLocationMapIcon type={m.locationType} color={m.color} size={34} />
+              <CatalogLocationMapIcon
+                type={m.locationType}
+                color={m.color}
+                size={34}
+                isFavorite={m.isFavorite === true}
+              />
             ),
         };
       }),

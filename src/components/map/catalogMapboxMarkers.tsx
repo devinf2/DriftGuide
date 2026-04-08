@@ -22,9 +22,20 @@ function catalogMarkerIcon(type: LocationType): keyof typeof Ionicons.glyphMap {
   return 'location';
 }
 
-function CatalogPinIcon({ type, color }: { type: LocationType; color: string }) {
+function CatalogPinIcon({
+  type,
+  color,
+  isFavorite,
+}: {
+  type: LocationType;
+  color: string;
+  isFavorite: boolean;
+}) {
   if (type === 'parking' || type === 'access_point') {
-    return <CatalogLocationMapIcon type={type} color={color} size={ICON} />;
+    return <CatalogLocationMapIcon type={type} color={color} size={ICON} isFavorite={isFavorite} />;
+  }
+  if (isFavorite) {
+    return <Ionicons name="heart" size={ICON} color={color} />;
   }
   return <Ionicons name={catalogMarkerIcon(type)} size={ICON} color={color} />;
 }
@@ -58,6 +69,7 @@ export function buildCatalogMapboxMarkers(
   locations: Location[],
   onLocationPress: (loc: Location) => void,
   mapChrome: CatalogMapChromeColors,
+  favoriteIds?: ReadonlySet<string>,
 ): MapboxMapMarker[] {
   const list = activeLocationsOnly(locations)
     .filter(
@@ -79,6 +91,7 @@ export function buildCatalogMapboxMarkers(
   return list.map((loc) => {
     const accent = locationTypeMapPinAccent(loc.type, mapChrome.colorScheme, mapChrome.primary);
     const coord = displayCoords.get(loc.id) ?? [loc.longitude!, loc.latitude!];
+    const isFavorite = favoriteIds?.has(loc.id) === true;
     return {
       id: `cat-${loc.id}`,
       coordinate: coord,
@@ -102,7 +115,7 @@ export function buildCatalogMapboxMarkers(
             elevation: 2,
           }}
         >
-          <CatalogPinIcon type={loc.type} color={accent} />
+          <CatalogPinIcon type={loc.type} color={accent} isFavorite={isFavorite} />
         </View>
       ),
     };

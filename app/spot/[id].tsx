@@ -13,6 +13,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
@@ -70,12 +71,19 @@ function SpotModalHeader({
   showMenu,
   onBack,
   onOpenMenu,
+  showFavorite,
+  isFavorite,
+  onToggleFavorite,
 }: {
   title: string;
   topInset: number;
   showMenu: boolean;
   onBack: () => void;
   onOpenMenu: () => void;
+  /** Signed-in: show heart to favorite this catalog location. */
+  showFavorite?: boolean;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
 }) {
   const { colors } = useAppTheme();
   const headerStyles = useMemo(
@@ -93,7 +101,10 @@ function SpotModalHeader({
           justifyContent: 'center',
         },
         spotModalHeaderSideEnd: {
-          alignItems: 'flex-end',
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 4,
         },
         spotModalHeaderTitle: {
           flex: 1,
@@ -121,6 +132,20 @@ function SpotModalHeader({
         {title}
       </Text>
       <View style={[headerStyles.spotModalHeaderSide, headerStyles.spotModalHeaderSideEnd]}>
+        {showFavorite && onToggleFavorite ? (
+          <Pressable
+            onPress={onToggleFavorite}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          >
+            <Ionicons
+              name={isFavorite ? 'heart' : 'heart-outline'}
+              size={24}
+              color={colors.textInverse}
+            />
+          </Pressable>
+        ) : null}
         {showMenu ? (
           <Pressable
             onPress={onOpenMenu}
@@ -130,9 +155,9 @@ function SpotModalHeader({
           >
             <MaterialIcons name="more-vert" size={24} color={colors.textInverse} />
           </Pressable>
-        ) : (
+        ) : !showFavorite ? (
           <View style={headerStyles.spotModalHeaderIconSlot} />
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -200,6 +225,15 @@ export default function SpotFishingTripScreen() {
   );
 
   const location = id ? getLocationById(id) : undefined;
+
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+  const isSpotFavorite = Boolean(id && favoriteIds.includes(id));
+  const showFavoriteInHeader = Boolean(user && id && location);
+  const handleToggleFavorite = useCallback(() => {
+    if (!user?.id || !id) return;
+    void useLocationFavoritesStore.getState().toggle(user.id, id);
+  }, [user?.id, id]);
 
   const handleHeaderBack = useCallback(() => {
     if (router.canGoBack()) router.back();
@@ -419,6 +453,7 @@ export default function SpotFishingTripScreen() {
         surfaceElevated: colors.surfaceElevated,
         colorScheme: resolvedScheme,
       },
+      favoriteLocationIds,
     );
     const access = approvedAccessPoints.map((ap) => ({
       id: `ap-${ap.id}`,
@@ -443,6 +478,7 @@ export default function SpotFishingTripScreen() {
     colors.success,
     resolvedScheme,
     styles,
+    favoriteLocationIds,
   ]);
 
   useEffect(() => {
@@ -643,6 +679,7 @@ export default function SpotFishingTripScreen() {
           showMenu={false}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
+          showFavorite={false}
         />
         <View style={styles.centered}>
           <Text style={styles.errorText}>Missing spot</Text>
@@ -660,6 +697,7 @@ export default function SpotFishingTripScreen() {
           showMenu={showSpotCreatorMenu}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
+          showFavorite={false}
         />
         <View style={styles.centered}>
           <Text style={styles.errorText}>Spot not found</Text>
@@ -677,6 +715,9 @@ export default function SpotFishingTripScreen() {
           showMenu={showSpotCreatorMenu}
           onBack={handleHeaderBack}
           onOpenMenu={() => setManageMenuOpen(true)}
+          showFavorite={showFavoriteInHeader}
+          isFavorite={isSpotFavorite}
+          onToggleFavorite={handleToggleFavorite}
         />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -694,6 +735,9 @@ export default function SpotFishingTripScreen() {
         showMenu={showSpotCreatorMenu}
         onBack={handleHeaderBack}
         onOpenMenu={() => setManageMenuOpen(true)}
+        showFavorite={showFavoriteInHeader}
+        isFavorite={isSpotFavorite}
+        onToggleFavorite={handleToggleFavorite}
       />
       <View style={styles.tabBar}>
         {([

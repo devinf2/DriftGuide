@@ -5,6 +5,9 @@ import { haversineDistance } from '@/src/services/locationService';
 import { Location, LocationConditions } from '@/src/types';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 
+/** When two spots are within this distance (km), apply favorite tie-break. */
+const HOME_HOTSPOT_DISTANCE_TIE_EPS_KM = 0.5;
+
 /**
  * Max how many geotagged waters we send to the hot-spot model (smaller = closer-only).
  * Final UI still shows at most 3, sorted by distance.
@@ -87,6 +90,7 @@ function buildHotSpotListFromSuggestions(
   suggestions: SpotSuggestion[],
   userCoords: { latitude: number; longitude: number } | null,
   communityFishByLocationId: Map<string, number>,
+  favoriteLocationIds?: ReadonlySet<string>,
 ): HomeHotSpotData[] {
   const list: HomeHotSpotData[] = [];
   const seenIds = new Set<string>();
@@ -117,14 +121,27 @@ function buildHotSpotListFromSuggestions(
       });
     }
   }
-  list.sort((a, b) => {
+  const fav = favoriteLocationIds;
+  const cmpDistance = (a: HomeHotSpotData, b: HomeHotSpotData) => {
     const ad = a.distanceKm;
     const bd = b.distanceKm;
-    if (ad == null && bd == null) return 0;
+    if (ad == null && bd == null) {
+      const fa = fav?.has(a.location.id) === true;
+      const fb = fav?.has(b.location.id) === true;
+      if (fa && !fb) return -1;
+      if (!fa && fb) return 1;
+      return 0;
+    }
     if (ad == null) return 1;
     if (bd == null) return -1;
+    if (Math.abs(ad - bd) > HOME_HOTSPOT_DISTANCE_TIE_EPS_KM) return ad - bd;
+    const fa = fav?.has(a.location.id) === true;
+    const fb = fav?.has(b.location.id) === true;
+    if (fa && !fb) return -1;
+    if (!fa && fb) return 1;
     return ad - bd;
-  });
+  };
+  list.sort(cmpDistance);
   let top = list.slice(0, 3);
   if (top.length === 0 && spotsToUse.length > 0) {
     const fallback: HomeHotSpotData[] = [];
@@ -145,14 +162,7 @@ function buildHotSpotListFromSuggestions(
         communityFishN: communityFishByLocationId.get(loc.id) ?? 0,
       });
     }
-    fallback.sort((a, b) => {
-      const ad = a.distanceKm;
-      const bd = b.distanceKm;
-      if (ad == null && bd == null) return 0;
-      if (ad == null) return 1;
-      if (bd == null) return -1;
-      return ad - bd;
-    });
+    fallback.sort(cmpDistance);
     top = fallback.slice(0, 3);
   }
   return top;
@@ -186,6 +196,7 @@ export type FetchHomeHotSpotsResult = {
 export async function fetchHomeHotSpotsData(
   locations: Location[],
   userCoords: { latitude: number; longitude: number } | null,
+  favoriteLocationIds?: ReadonlySet<string>,
 ): Promise<FetchHomeHotSpotsResult | null> {
   const topLevel = activeLocationsOnly(locations).filter((l) => !l.parent_location_id);
   if (topLevel.length === 0) {
@@ -208,6 +219,7 @@ export async function fetchHomeHotSpotsData(
     userLat: userCoords?.latitude ?? null,
     userLng: userCoords?.longitude ?? null,
     communityFishByLocationId,
+    favoriteLocationIds,
   });
   const hotSpotList = buildHotSpotListFromSuggestions(
     spotsToUse,
@@ -215,6 +227,7 @@ export async function fetchHomeHotSpotsData(
     suggestions,
     userCoords,
     communityFishByLocationId,
+    favoriteLocationIds,
   );
   return { hotSpotList, watersForRegionalBriefing };
 }

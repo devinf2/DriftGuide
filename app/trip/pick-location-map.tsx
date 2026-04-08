@@ -21,6 +21,7 @@ import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constan
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import type { Location } from '@/src/types';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
@@ -52,6 +53,8 @@ export default function PickLocationMapScreen() {
   const hasPresetMapCoords = Number.isFinite(presetLat) && Number.isFinite(presetLng);
 
   const { locations, fetchLocations } = useLocationStore();
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const userProximityRef = useRef<[number, number] | null>(null);
@@ -192,7 +195,7 @@ export default function PickLocationMapScreen() {
         surface: colors.surface,
         surfaceElevated: colors.surfaceElevated,
         colorScheme: resolvedScheme,
-      }),
+      }, favoriteLocationIds),
     [
       locations,
       chooseLocation,
@@ -200,6 +203,7 @@ export default function PickLocationMapScreen() {
       colors.surface,
       colors.surfaceElevated,
       resolvedScheme,
+      favoriteLocationIds,
     ],
   );
 

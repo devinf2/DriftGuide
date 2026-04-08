@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import {
   View,
   Text,
@@ -174,6 +175,8 @@ export function LocationPinParentTwoStepFlow({
 }: LocationPinParentTwoStepFlowProps) {
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const busy = primaryBusy || interactionDisabled;
   const rowDisabled = busy || step1CandidatesDisabled;
   const [highlightCatalogPinId, setHighlightCatalogPinId] = useState<string | null>(null);
@@ -256,6 +259,7 @@ export function LocationPinParentTwoStepFlow({
                     latitude: c.latitude,
                     longitude: c.longitude,
                     name: c.name,
+                    isFavorite: favoriteLocationIds.has(c.id),
                   }))
                 : undefined
             }

@@ -8,16 +8,12 @@ import {
   readDirectoryAsync,
 } from 'expo-file-system/legacy';
 import { fetchPhotosForTripIds } from '@/src/services/photoService';
-import { fetchTripsFromCloud } from '@/src/services/sync';
-import type { Trip } from '@/src/types';
 
 const PINNED_KEY = 'offlinePinnedTripIds';
 const MANIFEST_KEY = 'tripPhotoOfflineManifestV1';
 const CACHE_SUBDIR = 'trip-photo-cache';
 
-/** Rolling window of completed trips (by recency) to auto-cache photos for. */
-export const AUTO_OFFLINE_TRIP_COUNT = 4;
-/** Max trips the user can pin for offline (beyond the rolling window). */
+/** Max trips the user can save for offline (trip summary → Save offline). */
 export const MAX_PINNED_TRIPS = 20;
 
 type Manifest = Record<string, string>;
@@ -76,17 +72,6 @@ async function setPinnedTripIdsInternal(ids: string[]): Promise<void> {
   await AsyncStorage.setItem(PINNED_KEY, JSON.stringify(unique));
 }
 
-/**
- * Last `AUTO_OFFLINE_TRIP_COUNT` completed trips (newest by `start_time`) ∪ pinned trip ids.
- */
-export function computeTargetTripIds(completedTrips: Trip[], pinnedTripIds: string[]): string[] {
-  const sorted = [...completedTrips]
-    .filter((t) => t.status === 'completed')
-    .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
-  const autoIds = sorted.slice(0, AUTO_OFFLINE_TRIP_COUNT).map((t) => t.id);
-  return [...new Set([...autoIds, ...pinnedTripIds])];
-}
-
 export async function togglePinTrip(tripId: string): Promise<boolean> {
   const pinned = await getPinnedTripIds();
   const isOn = pinned.includes(tripId);
@@ -107,7 +92,7 @@ export async function isTripPinned(tripId: string): Promise<boolean> {
 }
 
 /**
- * Download / evict files so on-disk cache matches the last N completed trips plus pinned trips.
+ * Download / evict files so on-disk cache matches trips the user saved for offline only.
  */
 export async function reconcileTripPhotoCache(userId: string): Promise<void> {
   const dir = cacheDirUri();
@@ -118,10 +103,7 @@ export async function reconcileTripPhotoCache(userId: string): Promise<void> {
 
   await makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
 
-  const allTrips = await fetchTripsFromCloud(userId);
-  const completed = allTrips.filter((t) => t.status === 'completed');
-  const pinned = await getPinnedTripIds();
-  const targetTripIds = computeTargetTripIds(completed, pinned);
+  const targetTripIds = await getPinnedTripIds();
 
   if (targetTripIds.length === 0) {
     await evictUrlsNotIn(new Set());
@@ -176,7 +158,7 @@ async function evictUrlsNotIn(keepUrls: Set<string>): Promise<void> {
 }
 
 /**
- * Remove all cached trip photos, pins, and manifest. Used from settings.
+ * Remove all cached trip photos, pins, and manifest (e.g. sign out).
  */
 export async function clearTripPhotoOfflineCache(): Promise<void> {
   const dir = cacheDirUri();

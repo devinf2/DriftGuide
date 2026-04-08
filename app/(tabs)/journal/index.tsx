@@ -5,6 +5,7 @@ import { BorderRadius, FontSize, LocationTypeColors, Spacing, type ThemeColors }
 import { fetchPhotos } from '@/src/services/photoService';
 import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import {
     Trip,
@@ -209,6 +210,8 @@ export default function JournalScreen() {
   const effectiveTop = useEffectiveSafeTopInset();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createJournalStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const filterButtonRef = useRef<View>(null);
@@ -415,6 +418,7 @@ export default function JournalScreen() {
                 type={group.trips[0]?.location?.type as LocationType | undefined}
                 color={colors.textInverse}
                 size={20}
+                isFavorite={favoriteLocationIds.has(group.locationId)}
               />
             </View>
             <Text style={styles.markerLabel} numberOfLines={1}>
@@ -438,7 +442,16 @@ export default function JournalScreen() {
         catchPhotoUrl: fishHero ?? null,
       };
     });
-  }, [mapLayer, locationGroups, fishMapPins, handleMarkerPress, handleFishMarkerPress, styles, colors]);
+  }, [
+    mapLayer,
+    locationGroups,
+    fishMapPins,
+    handleMarkerPress,
+    handleFishMarkerPress,
+    styles,
+    colors,
+    favoriteLocationIds,
+  ]);
 
   const gridGap = Spacing.sm;
   const listPadX = Spacing.xl;

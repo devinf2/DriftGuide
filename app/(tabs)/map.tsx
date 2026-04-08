@@ -35,6 +35,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { loadOfflineLocationsSnapshot } from '@/src/services/offlineLocationSnapshot';
 import { mergeLocationsById } from '@/src/utils/mergeLocations';
 
@@ -223,6 +224,8 @@ export default function MapTabScreen() {
   const effectiveTop = useEffectiveSafeTopInset();
   const { isConnected } = useNetworkStatus();
   const user = useAuthStore((s) => s.user);
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, resolvedScheme), [colors, resolvedScheme]);
   const { locations, fetchLocations } = useLocationStore();
@@ -419,6 +422,7 @@ export default function MapTabScreen() {
           surfaceElevated: colors.surfaceElevated,
           colorScheme: resolvedScheme,
         },
+        favoriteLocationIds,
       ),
     [
       mapDisplayLocations,
@@ -429,6 +433,7 @@ export default function MapTabScreen() {
       colors.surface,
       colors.surfaceElevated,
       resolvedScheme,
+      favoriteLocationIds,
     ],
   );
 

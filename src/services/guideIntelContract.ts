@@ -44,6 +44,8 @@ export type GuideIntelHotSpotSpot = {
   omitWeather?: boolean;
   /** Community fish-equivalent count (60d) for internal weighting */
   communityFishN?: number;
+  /** User saved this catalog location as a favorite (tie-break hint for ranking). */
+  isUserFavorite?: boolean;
 };
 
 export type GuideIntelRequestBase = {

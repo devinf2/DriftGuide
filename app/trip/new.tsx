@@ -12,6 +12,7 @@ import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constan
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
@@ -206,6 +207,8 @@ export default function NewTripScreen() {
   const fromHomeSuggestions = paramTruthy(params.fromHome);
 
   const { user } = useAuthStore();
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const { planTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
   const {
@@ -427,7 +430,9 @@ export default function NewTripScreen() {
         return;
       }
 
-      const suggestions = await getTopFishingSpots(spotsForSuggestions, result, plannedDate);
+      const suggestions = await getTopFishingSpots(spotsForSuggestions, result, plannedDate, {
+        favoriteLocationIds,
+      });
       if (!cancelled) {
         setSpotSuggestions(suggestions);
         setSuggestionsLoading(false);
@@ -435,7 +440,7 @@ export default function NewTripScreen() {
     })();
 
     return () => { cancelled = true; };
-  }, [topLevelLocations.length, plannedDate.getTime(), fromHomeSuggestions]);
+  }, [topLevelLocations.length, plannedDate.getTime(), fromHomeSuggestions, favoriteLocationIds]);
 
   const filteredLocations = searchQuery.trim()
     ? isConnected

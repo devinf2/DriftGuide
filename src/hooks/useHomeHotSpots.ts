@@ -1,7 +1,8 @@
 import { fetchHomeHotSpotsData, type HomeHotSpotData, type WaterConditionsBrief } from '@/src/utils/homeHotSpots';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import * as ExpoLocation from 'expo-location';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 export type { HomeHotSpotData, WaterConditionsBrief };
 
@@ -10,6 +11,8 @@ export type { HomeHotSpotData, WaterConditionsBrief };
  */
 export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
   const { locations, fetchLocations } = useLocationStore();
+  const favoriteIds = useLocationFavoritesStore((s) => s.ids);
+  const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const [hotSpotList, setHotSpotList] = useState<HomeHotSpotData[]>([]);
   const [hotSpotLoading, setHotSpotLoading] = useState(false);
   const [watersForRegionalBriefing, setWatersForRegionalBriefing] = useState<WaterConditionsBrief[]>([]);
@@ -43,7 +46,7 @@ export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
     }
     let cancelled = false;
     setHotSpotLoading(true);
-    fetchHomeHotSpotsData(locations, userCoords)
+    fetchHomeHotSpotsData(locations, userCoords, favoriteLocationIds)
       .then((result) => {
         if (cancelled || !result) return;
         setHotSpotList(result.hotSpotList);
@@ -61,7 +64,15 @@ export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, locations, fetchLocations, refreshKey, userCoords?.latitude, userCoords?.longitude]);
+  }, [
+    enabled,
+    locations,
+    fetchLocations,
+    refreshKey,
+    userCoords?.latitude,
+    userCoords?.longitude,
+    favoriteLocationIds,
+  ]);
 
   return {
     hotSpotList,

@@ -48,6 +48,7 @@ export type CatchPinCatalogMarker = {
   latitude: number;
   longitude: number;
   name?: string;
+  isFavorite?: boolean;
 };
 
 function mapAttributionBesideZoomControls(
@@ -393,7 +394,7 @@ export function CatchPinPickerMap({
               const title = p.name ?? 'Location';
               const inner: ReactNode = (
                 <MaterialIcons
-                  name="place"
+                  name={p.isFavorite ? 'favorite' : 'place'}
                   size={selected ? 30 : 24}
                   color={selected ? colors.success : colors.textSecondary}
                 />

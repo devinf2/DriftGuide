@@ -16,6 +16,7 @@ import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import { needsProfileOnboarding } from '@/src/utils/profileOnboarding';
 
@@ -47,6 +48,7 @@ const styles = StyleSheet.create({
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const session = useAuthStore((s) => s.session);
+  const user = useAuthStore((s) => s.user);
   const profile = useAuthStore((s) => s.profile);
   const isLoading = useAuthStore((s) => s.isLoading);
   const isProfileLoading = useAuthStore((s) => s.isProfileLoading);
@@ -70,6 +72,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (user?.id) void useLocationFavoritesStore.getState().refresh(user.id);
+    else useLocationFavoritesStore.getState().reset();
+  }, [user?.id]);
 
   useEffect(() => {
     const consumeOAuthUrl = (url: string | null) => {

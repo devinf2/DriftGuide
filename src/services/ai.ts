@@ -35,6 +35,7 @@ import {
   normalizeQuotedSpotsToTags,
   wrapPlainCatalogNamesInSpotTags,
 } from '@/src/utils/guideSpotTagNormalize';
+import { catalogLocationIdForSpotSuggestion } from '@/src/utils/spotSuggestionMatch';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 /** Use the cheaper model for most AI calls to control cost */
@@ -1044,6 +1045,8 @@ const MOCK_SPOT_SUGGESTIONS: SpotSuggestion[] = [
   { locationName: 'Weber River', reason: 'Lower pressure and good nymph fishing conditions', confidence: 0.75 },
 ];
 
+const SPOT_CONFIDENCE_TIE_EPS = 0.02;
+
 interface LocationWithConditions {
   name: string;
   sky?: string;
@@ -1053,6 +1056,7 @@ interface LocationWithConditions {
   flowCfs?: number | null;
   clarity?: string;
   communityFishN?: number;
+  isUserFavorite?: boolean;
 }
 
 function buildSpotSuggestionPrompt(
@@ -1071,6 +1075,7 @@ function buildSpotSuggestionPrompt(
     if (s.flowCfs !== undefined && s.flowCfs !== null) parts.push(`Flow ${s.flowCfs} CFS`);
     if (s.clarity) parts.push(`Water ${s.clarity}`);
     if (s.communityFishN != null) parts.push(`DriftGuide community logs (60d fish-equivalent): ${s.communityFishN}`);
+    if (s.isUserFavorite) parts.push('(user marked as favorite)');
     return parts.join(', ');
   });
 
@@ -1096,6 +1101,8 @@ function buildSpotSuggestionPrompt(
       ? 'Factor forecast weather and current flow heavily into your rankings and mention conditions in your reasoning.'
       : 'Factor the real-time conditions heavily into your rankings and mention weather in your reasoning.',
     '',
+    'When two or more locations would otherwise rank similarly (similar confidence and conditions), prefer locations marked (user marked as favorite) in the list.',
+    '',
     'Respond with ONLY valid JSON array in this exact format, no other text:',
     '[{"locationName": "Exact Location Name", "reason": "Brief reason factoring in weather & conditions", "confidence": 0.85}]',
     '',
@@ -1110,7 +1117,33 @@ export type TopSpotsOptions = {
   userLng?: number | null;
   /** Per-location community fish-equivalent (60d) */
   communityFishByLocationId?: Map<string, number>;
+  /** Tie-break when model returns near-equal confidence */
+  favoriteLocationIds?: ReadonlySet<string>;
 };
+
+function applyFavoriteConfidenceTieBreak(
+  suggestions: SpotSuggestion[],
+  catalog: { id: string; name: string }[],
+  favoriteIds: ReadonlySet<string> | undefined,
+): SpotSuggestion[] {
+  if (!favoriteIds?.size) return suggestions;
+  const isFav = (s: SpotSuggestion) => {
+    const locId = catalogLocationIdForSpotSuggestion(s, catalog);
+    return locId ? favoriteIds.has(locId) : false;
+  };
+  const withI = suggestions.map((s, i) => ({ s, i }));
+  withI.sort((A, B) => {
+    if (Math.abs(A.s.confidence - B.s.confidence) > SPOT_CONFIDENCE_TIE_EPS) {
+      return B.s.confidence - A.s.confidence;
+    }
+    const fa = isFav(A.s);
+    const fb = isFav(B.s);
+    if (fa && !fb) return -1;
+    if (!fa && fb) return 1;
+    return A.i - B.i;
+  });
+  return withI.map((x) => x.s);
+}
 
 export async function getTopFishingSpots(
   locations: { id: string; name: string; latitude?: number | null; longitude?: number | null }[],
@@ -1129,6 +1162,8 @@ export async function getTopFishingSpots(
     options?.userLng ?? locations[0]?.longitude ?? null,
   );
 
+  const favIds = options?.favoriteLocationIds;
+
   const spots: LocationWithConditions[] = locations.map(loc => {
     const c = conditionsMap?.get(loc.id);
     const omitWeather = c?.plannedTimeWeatherUnavailable;
@@ -1141,6 +1176,7 @@ export async function getTopFishingSpots(
       flowCfs: c?.water.flow_cfs,
       clarity: c ? String(c.water.clarity) : undefined,
       communityFishN: n,
+      isUserFavorite: favIds?.has(loc.id) === true,
     };
   });
 
@@ -1174,6 +1210,7 @@ export async function getTopFishingSpots(
       clarity: c ? String(c.water.clarity) : undefined,
       omitWeather,
       communityFishN: n,
+      isUserFavorite: favIds?.has(loc.id) === true,
     };
   });
 
@@ -1190,7 +1227,7 @@ export async function getTopFishingSpots(
       : null;
   if (edgeRaw) {
     const parsed = parseArr(edgeRaw);
-    if (parsed?.length) return parsed;
+    if (parsed?.length) return applyFavoriteConfidenceTieBreak(parsed, locations, favIds);
   }
 
   if (!(await canUseClientOpenAiFallback())) {
@@ -1229,7 +1266,11 @@ export async function getTopFishingSpots(
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) return MOCK_SPOT_SUGGESTIONS;
-    return parseArr(content) ?? MOCK_SPOT_SUGGESTIONS;
+    return applyFavoriteConfidenceTieBreak(
+      parseArr(content) ?? MOCK_SPOT_SUGGESTIONS,
+      locations,
+      favIds,
+    );
   } catch {
     return MOCK_SPOT_SUGGESTIONS;
   }

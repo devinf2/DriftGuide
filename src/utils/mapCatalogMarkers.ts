@@ -12,6 +12,7 @@ export type CatalogMapMarker = {
   color: string;
   /** Present for `catalog-loc-*` pins from {@link catalogLocationMarkersInViewport}. */
   locationType?: LocationType;
+  isFavorite?: boolean;
   /** Set on trip start/end pins only; catalog pins omit. */
   endpointLabel?: 'Start' | 'End';
   endpointIcon?: 'place' | 'flag';
@@ -31,6 +32,7 @@ export function catalogLocationMarkersInViewport(
   /** Fallback pin color when type has no mapping; pass theme `textTertiary` from the active palette. */
   textTertiaryFallback: string = ColorsLight.textTertiary,
   mapColorScheme: 'light' | 'dark' = 'light',
+  favoriteIds?: ReadonlySet<string>,
 ): CatalogMapMarker[] {
   if (!dataViewport) return [];
   type Row = { loc: Location; lat: number; lon: number };
@@ -57,6 +59,7 @@ export function catalogLocationMarkersInViewport(
       title: r.loc.name,
       color: locationTypeMapPinAccent(r.loc.type, mapColorScheme, textTertiaryFallback),
       locationType: r.loc.type,
+      isFavorite: favoriteIds?.has(r.loc.id) === true,
     };
   });
 }

@@ -17,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { getPinnedTripIds } from '@/src/services/tripPhotoOfflineCache';
 import {
   ActivityIndicator,
   Alert,
@@ -89,20 +90,31 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
   const [addPhotoTripsLoading, setAddPhotoTripsLoading] = useState(false);
   const [addPhotoDropdownOpen, setAddPhotoDropdownOpen] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [hasTripsSavedForOffline, setHasTripsSavedForOffline] = useState(false);
 
   const loadPhotos = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
     try {
+      const pinnedIds = await getPinnedTripIds();
+      setHasTripsSavedForOffline(pinnedIds.length > 0);
+      if (!isConnected) {
+        setPhotos([]);
+        return;
+      }
       const list = await fetchPhotosWithTrip(user.id);
       setPhotos(list);
     } catch (e) {
-      Alert.alert('Error', (e as Error).message);
-      setPhotos([]);
+      if (!isConnected) {
+        setPhotos([]);
+      } else {
+        Alert.alert('Error', (e as Error).message);
+        setPhotos([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, isConnected]);
 
   useEffect(() => {
     loadPhotos();
@@ -361,7 +373,13 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
         <View style={styles.empty}>
           <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
           <Text style={styles.emptyText}>
-            {photos.length === 0 ? 'No photos yet.' : 'No photos match the filters.'}
+            {!isConnected && photos.length === 0
+              ? hasTripsSavedForOffline
+                ? "You're offline. Open a trip from your journal to view photos saved for offline."
+                : 'No photos downloaded for offline use.'
+              : photos.length === 0
+                ? 'No photos yet.'
+                : 'No photos match the filters.'}
           </Text>
         </View>
       ) : (

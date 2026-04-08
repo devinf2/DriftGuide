@@ -418,6 +418,7 @@ Deno.serve(async (req: Request) => {
         if (s.flowCfs != null) p.push(`Flow ${s.flowCfs} CFS`);
         if (s.clarity) p.push(`Water ${s.clarity}`);
         if (s.communityFishN != null) p.push(`DriftGuide community logs (60d fish-equivalent): ${s.communityFishN}`);
+        if (s.isUserFavorite === true) p.push("(user marked as favorite)");
         return p.join(", ");
       });
       const intro = forPlannedTrip
@@ -433,6 +434,7 @@ Deno.serve(async (req: Request) => {
         "",
         "IMPORTANT: Penalize rain, thunderstorms, snow, severe weather. Prefer manageable wind and reasonable flows.",
         "When communityFishN is 0 or small, do not claim a location is 'on fire' from app data alone.",
+        "When two or more locations would otherwise rank similarly (similar confidence and conditions), prefer locations marked '(user marked as favorite)' in the list.",
         "",
         'Respond with ONLY valid JSON array: [{"locationName":"...","reason":"...","confidence":0.85}]',
         "Exactly 3 entries, highest confidence first.",
