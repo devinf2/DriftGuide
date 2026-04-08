@@ -15,6 +15,9 @@ export type FlyType = 'fly' | 'bait' | 'lure';
 /** How the fly is fished / behaves in the water (fly fishing terms). */
 export type FlyPresentation = 'dry' | 'emerger' | 'wet' | 'nymph' | 'streamer';
 
+/** Who can see trip-linked photos on your profile (not journal timeline). */
+export type TripPhotoVisibility = 'private' | 'friends_only' | 'public';
+
 export type SessionType = 'wade' | 'float' | 'shore';
 export type PresentationMethod = 'dry' | 'nymph' | 'streamer' | 'wet' | 'other';
 export type Structure = 'pool' | 'riffle' | 'run' | 'undercut_bank' | 'eddy' | 'other';
@@ -43,6 +46,60 @@ export interface Profile {
   onboarding_completed_at?: string | null;
   /** Set when the user closed their account (soft delete); app signs out and blocks use. */
   account_deleted_at?: string | null;
+  /** Case-insensitive unique handle for friend lookup (optional). */
+  friend_code?: string | null;
+  /** Optional unique @handle for discovery (lowercase a–z, 0–9, underscore). */
+  username?: string | null;
+  /** Default visibility for trip photos on profile; per-trip can override. */
+  default_trip_photo_visibility?: TripPhotoVisibility;
+}
+
+export type FriendshipStatus = 'pending' | 'accepted' | 'blocked';
+
+/** One row per pair (profile_min < profile_max). */
+export interface FriendshipRow {
+  profile_min: string;
+  profile_max: string;
+  status: FriendshipStatus;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SessionMemberRole = 'owner' | 'member';
+
+export interface SharedSession {
+  id: string;
+  created_by: string;
+  title: string | null;
+  created_at: string;
+  closed_at: string | null;
+}
+
+export interface SessionMember {
+  shared_session_id: string;
+  user_id: string;
+  role: SessionMemberRole;
+  joined_at: string;
+}
+
+export type SessionInviteStatus = 'pending' | 'accepted' | 'declined' | 'expired';
+
+export interface SessionInvite {
+  id: string;
+  shared_session_id: string;
+  inviter_id: string;
+  invitee_id: string;
+  status: SessionInviteStatus;
+  token: string;
+  created_at: string;
+  expires_at: string;
+}
+
+/** Trip timeline event with attribution for merged Group view. */
+export interface TripEventWithSource extends TripEvent {
+  source_user_id: string;
+  source_display_name: string;
 }
 
 export type AccessPointStatus = 'pending' | 'approved';
@@ -119,6 +176,10 @@ export interface Trip {
   created_at: string;
   /** Soft delete — excluded from location usage checks when set. */
   deleted_at?: string | null;
+  /** When set, this trip is part of a shared fishing session (group timeline). */
+  shared_session_id?: string | null;
+  /** Override profile default for album photos on profile; null = use profile default. */
+  trip_photo_visibility?: TripPhotoVisibility | null;
 }
 
 export interface TripEvent {

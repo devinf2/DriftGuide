@@ -3,6 +3,7 @@ import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrary
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { uploadProfileAvatar } from '@/src/services/photoService';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,7 +11,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
@@ -34,24 +35,33 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 /** Matches in-app avatar: square crop from the editor is clipped to this circle. */
 const AVATAR_PREVIEW_DIAMETER = Math.min(248, SCREEN_WIDTH - Spacing.md * 4);
 
-type QuickTileProps = {
+export type ProfileQuickTileProps = {
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   label: string;
   onPress: () => void;
   colors: ThemeColors;
-  styles: any;
+  styles: ReturnType<typeof createProfileStyles>;
+  /** Shows a red “!” when incoming friend requests need attention. */
+  showAttentionMark?: boolean;
 };
 
-function QuickTile({ icon, label, onPress, colors, styles }: QuickTileProps) {
+export function QuickTile({ icon, label, onPress, colors, styles, showAttentionMark }: ProfileQuickTileProps) {
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [styles.quickTile, pressed && styles.quickTilePressed]}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={showAttentionMark ? `${label}, pending friend requests` : label}
     >
-      <View style={styles.quickTileIconWrap}>
-        <MaterialCommunityIcons name={icon} size={20} color={colors.primary} />
+      <View style={styles.quickTileIconStack}>
+        <View style={styles.quickTileIconWrap}>
+          <MaterialCommunityIcons name={icon} size={20} color={colors.primary} />
+        </View>
+        {showAttentionMark ? (
+          <View style={[styles.quickTileAttentionBadge, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <Text style={[styles.quickTileAttentionMark, { color: colors.error }]}>!</Text>
+          </View>
+        ) : null}
       </View>
       <Text style={styles.quickTileLabel} numberOfLines={2}>
         {label}
@@ -67,20 +77,38 @@ export default function ProfileScreen() {
   const effectiveTop = useEffectiveSafeTopInset();
   const router = useRouter();
   const { user, profile, fetchProfile } = useAuthStore();
+  const { friendships, refresh: refreshFriends } = useFriendsStore();
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [photoLibraryRefreshSignal, setPhotoLibraryRefreshSignal] = useState(0);
 
+  const userId = user?.id ?? null;
+
+  const pendingIncomingFriendRequests = useMemo(
+    () =>
+      friendships.filter(
+        (f) => f.status === 'pending' && userId != null && f.requested_by !== userId,
+      ).length,
+    [friendships, userId],
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshFriends(userId);
+    }, [userId, refreshFriends]),
+  );
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await fetchProfile();
+      await refreshFriends(userId);
       setPhotoLibraryRefreshSignal((n) => n + 1);
     } finally {
       setRefreshing(false);
     }
-  }, [fetchProfile]);
+  }, [fetchProfile, refreshFriends, userId]);
 
   const pickAvatarForPreview = useCallback(async (source: 'library' | 'camera') => {
     if (!user) return;
@@ -241,7 +269,19 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.quickRow}>
-          <QuickTile icon="hook" label="Fly Box" onPress={() => router.push('/fly-box')} colors={colors} styles={styles} />
+          <QuickTile icon="hook" label="Fly Box" onPress={() => router.push('/profile/fly-box')} colors={colors} styles={styles} />
+          <QuickTile
+            icon="account-multiple"
+            label="Friends"
+            onPress={() =>
+              pendingIncomingFriendRequests > 0
+                ? router.push({ pathname: '/profile/friends', params: { seg: 'requests' } })
+                : router.push('/profile/friends')
+            }
+            colors={colors}
+            styles={styles}
+            showAttentionMark={pendingIncomingFriendRequests > 0}
+          />
           <QuickTile icon="map-outline" label="Offline maps" onPress={() => router.push('/profile/offline-maps')} colors={colors} styles={styles} />
           <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
         </View>
@@ -315,7 +355,7 @@ export default function ProfileScreen() {
   );
 }
 
-function createProfileStyles(colors: ThemeColors) {
+export function createProfileStyles(colors: ThemeColors) {
   return StyleSheet.create({
     safeAreaFill: {
       position: 'absolute',
@@ -414,6 +454,12 @@ function createProfileStyles(colors: ThemeColors) {
       }),
     },
     quickTilePressed: { opacity: 0.92 },
+    quickTileIconStack: {
+      position: 'relative',
+      marginBottom: 2,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     quickTileIconWrap: {
       width: 36,
       height: 36,
@@ -421,7 +467,23 @@ function createProfileStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      marginBottom: 2,
+    },
+    quickTileAttentionBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -6,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      borderWidth: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 3,
+    },
+    quickTileAttentionMark: {
+      fontSize: 12,
+      fontWeight: '800',
+      lineHeight: 14,
     },
     quickTileLabel: {
       fontSize: FontSize.sm,

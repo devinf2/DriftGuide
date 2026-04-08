@@ -1,9 +1,11 @@
+import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
 import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';
 import { matchStoredProfileHomeState } from '@/src/constants/usStates';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import type { TripPhotoVisibility } from '@/src/types';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -72,6 +74,14 @@ function createStyles(colors: ThemeColors) {
     primaryBtnDisabled: { opacity: 0.6 },
     primaryBtnText: { color: colors.textInverse, fontSize: FontSize.lg, fontWeight: '700' },
     error: { color: colors.error, fontSize: FontSize.sm, textAlign: 'center', marginBottom: Spacing.md },
+    photoVisBlock: {
+      marginBottom: Spacing.lg,
+      padding: Spacing.md,
+      borderRadius: BorderRadius.md,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
   });
 }
 
@@ -90,6 +100,8 @@ export default function OnboardingScreen() {
   const [stateModalOpen, setStateModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaultTripPhotoVisibility, setDefaultTripPhotoVisibility] =
+    useState<TripPhotoVisibility>('private');
 
   useEffect(() => {
     setFirstName(profile?.first_name?.trim() ?? '');
@@ -110,6 +122,7 @@ export default function OnboardingScreen() {
         lastName,
         homeState: homeState?.name ?? '',
         darkModeEnabled: darkPref,
+        defaultTripPhotoVisibility: defaultTripPhotoVisibility,
       });
       if (result.error) {
         setError(result.error);
@@ -159,6 +172,19 @@ export default function OnboardingScreen() {
             autoCapitalize="words"
             autoCorrect={false}
           />
+
+          <View style={styles.photoVisBlock}>
+            <Text style={styles.label}>Trip photos on profile</Text>
+            <Text style={[styles.subtitle, { marginBottom: Spacing.md, marginTop: -4 }]}>
+              Default for new trips. You can change this later in Settings.
+            </Text>
+            <TripPhotoVisibilityDropdown
+              fullWidth
+              label="Visible to"
+              value={defaultTripPhotoVisibility}
+              onChange={setDefaultTripPhotoVisibility}
+            />
+          </View>
 
           <Text style={styles.label}>Home state</Text>
           <Pressable style={styles.pickerButton} onPress={() => setStateModalOpen(true)}>

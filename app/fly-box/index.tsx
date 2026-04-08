@@ -14,7 +14,7 @@ import {
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
@@ -29,6 +29,7 @@ import {
 } from '@/src/constants/fishingTypes';
 import type { Fly, FlyPresentation } from '@/src/types';
 import {
+  fetchFlies,
   fetchFliesOrCache,
   fetchFlyCatalog,
   loadFlyCatalogFromCache,
@@ -53,12 +54,14 @@ function FlyRow({
   fly,
   onEdit,
   onDelete,
+  readOnly,
   colors,
   styles,
 }: {
   fly: Fly;
   onEdit: () => void;
   onDelete: () => void;
+  readOnly?: boolean;
   colors: ThemeColors;
   styles: any;
 }) {
@@ -90,26 +93,45 @@ function FlyRow({
           )}
         </View>
       </View>
-      <View style={styles.flyRowActions}>
-        <Pressable style={styles.iconButton} onPress={onEdit} hitSlop={8}>
-          <Ionicons name="pencil" size={20} color={colors.primary} />
-        </Pressable>
-        <Pressable style={styles.iconButton} onPress={onDelete} hitSlop={8}>
-          <Ionicons name="trash-outline" size={20} color={colors.error} />
-        </Pressable>
-      </View>
+      {!readOnly ? (
+        <View style={styles.flyRowActions}>
+          <Pressable style={styles.iconButton} onPress={onEdit} hitSlop={8}>
+            <Ionicons name="pencil" size={20} color={colors.primary} />
+          </Pressable>
+          <Pressable style={styles.iconButton} onPress={onDelete} hitSlop={8}>
+            <Ionicons name="trash-outline" size={20} color={colors.error} />
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
+}
+
+function parseForUserIdParam(raw: string | string[] | undefined): string | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== 'string' || !v.trim()) return null;
+  return v.trim();
 }
 
 export default function FlyBoxScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createFlyBoxStyles(colors), [colors]);
   const router = useRouter();
+  const { forUserId: forUserIdParam, ownerName: ownerNameParam } = useLocalSearchParams<{
+    forUserId?: string | string[];
+    ownerName?: string | string[];
+  }>();
+  const forUserId = useMemo(() => parseForUserIdParam(forUserIdParam), [forUserIdParam]);
+  const ownerNameFromParam = useMemo(() => {
+    const v = Array.isArray(ownerNameParam) ? ownerNameParam[0] : ownerNameParam;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }, [ownerNameParam]);
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const { isConnected } = useNetworkStatus();
   const { user } = useAuthStore();
+  const resolvedOwnerId = forUserId ?? user?.id ?? null;
+  const readOnly = Boolean(user && forUserId && forUserId !== user.id);
   const [flies, setFlies] = useState<Fly[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -130,10 +152,14 @@ export default function FlyBoxScreen() {
   const [quantity, setQuantity] = useState(1);
 
   const loadFlies = useCallback(async () => {
-    if (!user) return;
+    if (!resolvedOwnerId) return;
     setLoading(true);
     try {
-      const list = await fetchFliesOrCache(user.id);
+      const list = readOnly
+        ? await fetchFlies(resolvedOwnerId)
+        : user
+          ? await fetchFliesOrCache(resolvedOwnerId)
+          : [];
       list.sort((a, b) => a.name.localeCompare(b.name));
       setFlies(list);
     } catch (e) {
@@ -141,7 +167,7 @@ export default function FlyBoxScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [resolvedOwnerId, readOnly, user]);
 
   useFocusEffect(
     useCallback(() => {
@@ -362,7 +388,7 @@ export default function FlyBoxScreen() {
         </Pressable>
         <View style={styles.screenHeaderCenter}>
           <Text style={styles.screenHeaderTitle} numberOfLines={1}>
-            Fly Box
+            {readOnly && ownerNameFromParam ? `${ownerNameFromParam}'s fly box` : 'Fly Box'}
           </Text>
         </View>
         <View style={styles.screenHeaderSide} />
@@ -374,7 +400,9 @@ export default function FlyBoxScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.subtitle}>
-          Keep inventory of your flies for quick switching on trips. The AI will use your fly box in recommendations.
+          {readOnly
+            ? 'Patterns they have saved to their fly box.'
+            : 'Keep inventory of your flies for quick switching on trips. The AI will use your fly box in recommendations.'}
         </Text>
 
         {loading ? (
@@ -383,7 +411,9 @@ export default function FlyBoxScreen() {
           <View style={styles.empty}>
             <Ionicons name="fish-outline" size={48} color={colors.textTertiary} />
             <Text style={styles.emptyText}>No flies yet</Text>
-            <Text style={styles.emptySubtext}>Tap Add Fly to build your tackle box</Text>
+            <Text style={styles.emptySubtext}>
+              {readOnly ? 'No flies in this box yet.' : 'Tap Add Fly to build your tackle box'}
+            </Text>
           </View>
         ) : (
           <View style={styles.list}>
@@ -393,6 +423,7 @@ export default function FlyBoxScreen() {
                 fly={fly}
                 onEdit={() => openEdit(fly)}
                 onDelete={() => handleDelete(fly)}
+                readOnly={readOnly}
                 colors={colors}
                 styles={styles}
               />
@@ -401,10 +432,12 @@ export default function FlyBoxScreen() {
         )}
       </ScrollView>
 
-      <Pressable style={[styles.fab, { bottom: insets.bottom + Spacing.lg }]} onPress={openAdd}>
-        <Ionicons name="add" size={28} color={colors.textInverse} />
-        <Text style={styles.fabLabel}>Add Fly</Text>
-      </Pressable>
+      {!readOnly ? (
+        <Pressable style={[styles.fab, { bottom: insets.bottom + Spacing.lg }]} onPress={openAdd}>
+          <Ionicons name="add" size={28} color={colors.textInverse} />
+          <Text style={styles.fabLabel}>Add Fly</Text>
+        </Pressable>
+      ) : null}
 
       <Modal
         visible={modalOpen}

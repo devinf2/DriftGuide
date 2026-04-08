@@ -52,9 +52,11 @@ function formatPhotoThumbDate(iso: string | null | undefined): string | null {
 type ProfilePhotoLibrarySectionProps = {
   /** Increment to reload the grid (e.g. parent pull-to-refresh). */
   refreshSignal?: number;
+  /** When set, loads that user’s album (RLS). Read-only: no add/delete. */
+  peerUserId?: string | null;
 };
 
-export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLibrarySectionProps) {
+export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = null }: ProfilePhotoLibrarySectionProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProfilePhotoLibraryStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
@@ -62,6 +64,8 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
   const { isConnected } = useNetworkStatus();
+  const albumOwnerId = peerUserId ?? user?.id ?? null;
+  const readOnlyAlbum = Boolean(peerUserId && user?.id && peerUserId !== user.id);
 
   const thumbSize = useMemo(
     () => (winWidth - GRID_H_INSET * 2 - GRID_GAP * (NUM_COLS - 1)) / NUM_COLS,
@@ -93,7 +97,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
   const [hasTripsSavedForOffline, setHasTripsSavedForOffline] = useState(false);
 
   const loadPhotos = useCallback(async () => {
-    if (!user?.id) return;
+    if (!albumOwnerId) return;
     setLoading(true);
     try {
       const pinnedIds = await getPinnedTripIds();
@@ -102,7 +106,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
         setPhotos([]);
         return;
       }
-      const list = await fetchPhotosWithTrip(user.id);
+      const list = await fetchPhotosWithTrip(albumOwnerId);
       setPhotos(list);
     } catch (e) {
       if (!isConnected) {
@@ -114,7 +118,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
     } finally {
       setLoading(false);
     }
-  }, [user?.id, isConnected]);
+  }, [albumOwnerId, isConnected]);
 
   useEffect(() => {
     loadPhotos();
@@ -132,7 +136,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
   }, [refreshSignal, loadPhotos]);
 
   useEffect(() => {
-    if (!addPhotoUri || !user?.id) return;
+    if (!addPhotoUri || !user?.id || readOnlyAlbum) return;
     let cancelled = false;
     setAddPhotoTripsLoading(true);
     fetchTripsFromCloud(user.id)
@@ -145,7 +149,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
     return () => {
       cancelled = true;
     };
-  }, [addPhotoUri, user?.id]);
+  }, [addPhotoUri, user?.id, readOnlyAlbum]);
 
   const locations = useMemo(() => {
     const map = new Map<string, string>();
@@ -348,22 +352,27 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
               {hasActiveFilters ? <View style={styles.filterBadge} /> : null}
             </View>
           </Pressable>
-          <Pressable
-            onPress={handlePickAddPhoto}
-            style={styles.headerIconBtn}
-            hitSlop={12}
-            disabled={uploading}
-            accessibilityRole="button"
-            accessibilityLabel="Add photo"
-          >
-            {uploading ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
-            )}
-          </Pressable>
+          {!readOnlyAlbum ? (
+            <Pressable
+              onPress={handlePickAddPhoto}
+              style={styles.headerIconBtn}
+              hitSlop={12}
+              disabled={uploading}
+              accessibilityRole="button"
+              accessibilityLabel="Add photo"
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
+              )}
+            </Pressable>
+          ) : null}
         </View>
       </View>
+      {readOnlyAlbum ? (
+        <Text style={styles.peerAlbumHint}>Trip photos they chose to show on their profile.</Text>
+      ) : null}
 
       {loading ? (
         <View style={styles.placeholder}>
@@ -753,22 +762,24 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0 }: ProfilePhotoLi
                 {selectedPhoto.caption ? (
                   <Text style={styles.photoInfoCaption}>{selectedPhoto.caption}</Text>
                 ) : null}
-                <Pressable
-                  style={styles.deletePhotoButton}
-                  onPress={() => handleConfirmDeletePhoto(selectedPhoto)}
-                  disabled={deletingPhotoId === selectedPhoto.id}
-                  accessibilityRole="button"
-                  accessibilityLabel="Delete photo"
-                >
-                  {deletingPhotoId === selectedPhoto.id ? (
-                    <ActivityIndicator size="small" color={colors.error} />
-                  ) : (
-                    <>
-                      <MaterialCommunityIcons name="trash-can-outline" size={20} color={colors.error} />
-                      <Text style={styles.deletePhotoButtonText}>Delete photo</Text>
-                    </>
-                  )}
-                </Pressable>
+                {!readOnlyAlbum ? (
+                  <Pressable
+                    style={styles.deletePhotoButton}
+                    onPress={() => handleConfirmDeletePhoto(selectedPhoto)}
+                    disabled={deletingPhotoId === selectedPhoto.id}
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete photo"
+                  >
+                    {deletingPhotoId === selectedPhoto.id ? (
+                      <ActivityIndicator size="small" color={colors.error} />
+                    ) : (
+                      <>
+                        <MaterialCommunityIcons name="trash-can-outline" size={20} color={colors.error} />
+                        <Text style={styles.deletePhotoButtonText}>Delete photo</Text>
+                      </>
+                    )}
+                  </Pressable>
+                ) : null}
               </View>
             </ScrollView>
           )}
@@ -793,6 +804,12 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
     fontSize: FontSize.md,
     fontWeight: '700',
     color: colors.text,
+  },
+  peerAlbumHint: {
+    fontSize: FontSize.sm,
+    color: colors.textSecondary,
+    marginBottom: Spacing.sm,
+    lineHeight: 20,
   },
   sectionHeaderActions: {
     flexDirection: 'row',

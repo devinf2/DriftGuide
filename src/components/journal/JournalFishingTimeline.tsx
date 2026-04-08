@@ -42,6 +42,7 @@ import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinM
 import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { formatEventTime } from '@/src/utils/formatters';
+import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
 
 type RowAction = { label: string; destructive?: boolean; onPress: () => void };
 
@@ -113,6 +114,8 @@ export interface JournalFishingTimelineProps {
   onCatchPhotoPress?: (event: TripEvent) => void;
   /** Journal summary: open trip start/end pin editor */
   onRequestEditTripPin?: (kind: TripEndpointKind) => void;
+  /** Group timeline: show a name label per row (e.g. angler attribution). */
+  attributionLabelForEvent?: (event: TripEvent) => string | undefined;
 }
 
 export function JournalFishingTimeline({
@@ -125,6 +128,7 @@ export function JournalFishingTimeline({
   onTripPatch,
   onCatchPhotoPress,
   onRequestEditTripPin,
+  attributionLabelForEvent,
 }: JournalFishingTimelineProps) {
   const sorted = useMemo(() => sortEventsByTime(events), [events]);
 
@@ -494,47 +498,58 @@ export function JournalFishingTimeline({
           {sorted.length === 0 ? (
             <Text style={styles.emptyHint}>No events recorded for this trip.</Text>
           ) : (
-            sorted.map((event, index) => (
-              <View key={event.id} style={styles.timelineItem}>
-                <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
-                <View style={styles.timelineContent}>
-                  <View style={styles.timelineDot}>
-                    {event.event_type === 'catch' ? (
-                      <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
-                    ) : event.event_type === 'fly_change' ? (
-                      <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
-                    ) : event.event_type === 'ai_query' ? (
-                      <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
-                    ) : (
-                      <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
-                    )}
-                  </View>
-                  <View style={styles.timelineTextBlock}>
-                    <Text style={styles.timelineText}>{getEventDescription(event)}</Text>
-                    {event.event_type === 'catch' ? (
-                      <CatchDetailsBlock data={event.data as CatchData} />
+            sorted.map((event, index) => {
+              const lifecycleIcon =
+                event.event_type === 'note'
+                  ? tripLifecycleNoteTimelineIcon((event.data as NoteData).text, Colors)
+                  : null;
+              return (
+                <View key={event.id} style={styles.timelineItem}>
+                  <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
+                  <View style={styles.timelineContent}>
+                    <View style={styles.timelineDot}>
+                      {event.event_type === 'catch' ? (
+                        <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
+                      ) : event.event_type === 'fly_change' ? (
+                        <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
+                      ) : event.event_type === 'ai_query' ? (
+                        <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
+                      ) : lifecycleIcon ? (
+                        <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
+                      ) : (
+                        <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
+                      )}
+                    </View>
+                    <View style={styles.timelineTextBlock}>
+                      {attributionLabelForEvent?.(event) ? (
+                        <Text style={styles.timelineAttribution}>{attributionLabelForEvent(event)}</Text>
+                      ) : null}
+                      <Text style={styles.timelineText}>{getEventDescription(event)}</Text>
+                      {event.event_type === 'catch' ? (
+                        <CatchDetailsBlock data={event.data as CatchData} />
+                      ) : null}
+                      {event.event_type === 'catch' ? (
+                        <TimelineCatchPhotoStrip
+                          data={event.data as CatchData}
+                          onPress={() => onCatchPhotoPress?.(event)}
+                          imageStyle={styles.timelineCatchThumb}
+                        />
+                      ) : null}
+                    </View>
+                    {editMode ? (
+                      <Pressable
+                        style={styles.rowMenuBtn}
+                        onPress={() => openRowMenu(event, index)}
+                        hitSlop={12}
+                        disabled={saving}
+                      >
+                        <MaterialIcons name="more-vert" size={22} color={Colors.textSecondary} />
+                      </Pressable>
                     ) : null}
-                    {event.event_type === 'catch' ? (
-                      <TimelineCatchPhotoStrip
-                        data={event.data as CatchData}
-                        onPress={() => onCatchPhotoPress?.(event)}
-                        imageStyle={styles.timelineCatchThumb}
-                      />
-                    ) : null}
                   </View>
-                  {editMode ? (
-                    <Pressable
-                      style={styles.rowMenuBtn}
-                      onPress={() => openRowMenu(event, index)}
-                      hitSlop={12}
-                      disabled={saving}
-                    >
-                      <MaterialIcons name="more-vert" size={22} color={Colors.textSecondary} />
-                    </Pressable>
-                  ) : null}
                 </View>
-              </View>
-            ))
+              );
+            })
           )}
         </View>
       </ScrollView>
@@ -776,6 +791,12 @@ const styles = StyleSheet.create({
   timelineContent: { flex: 1, flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start' },
   timelineDot: { width: 20, alignItems: 'center', paddingTop: 2 },
   timelineTextBlock: { flex: 1, gap: Spacing.sm },
+  timelineAttribution: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.primary,
+    marginBottom: -Spacing.xs,
+  },
   timelineText: { fontSize: FontSize.sm, color: Colors.text },
   timelineCatchThumb: { width: 72, height: 72, borderRadius: BorderRadius.sm, backgroundColor: Colors.surface },
   timelineCatchDetails: { marginTop: Spacing.xs, gap: 2 },

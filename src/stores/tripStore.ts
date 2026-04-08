@@ -120,6 +120,8 @@ interface TripState {
   refreshSmartRecommendation: () => Promise<void>;
   clearActiveTrip: () => void;
   replaceActiveTripEvents: (events: TripEvent[]) => void;
+  /** Merge fields into the active trip (e.g. shared_session_id after creating a fishing group). */
+  patchActiveTrip: (patch: Partial<Trip>) => void;
   /** Wipe persisted trip / pending-sync state (e.g. after account deletion). */
   clearAllLocalTripData: () => Promise<void>;
 }
@@ -816,6 +818,13 @@ export const useTripStore = create<TripState>()(
           currentFlyEventId: rig.eventId,
         });
         setTimeout(() => get().refreshSmartRecommendation(), 100);
+        get().scheduleInTripSync();
+      },
+
+      patchActiveTrip: (patch) => {
+        const { activeTrip } = get();
+        if (!activeTrip) return;
+        set({ activeTrip: { ...activeTrip, ...patch } });
         get().scheduleInTripSync();
       },
 

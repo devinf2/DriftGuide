@@ -4,7 +4,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { fetchProfileStats, ProfileStats } from '@/src/services/profileStats';
 import { useAuthStore } from '@/src/stores/authStore';
 import { endOfMonth, startOfMonth, subMonths } from 'date-fns';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -32,6 +32,12 @@ const CHART_VISIBLE_MONTHS = 6;
 const CHART_HEIGHT = 150;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+function parseForUserIdParam(raw: string | string[] | undefined): string | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== 'string' || !v.trim()) return null;
+  return v.trim();
+}
+
 function StatCard({ label, value, styles }: { label: string; value: number; styles: any }) {
   return (
     <View style={styles.statCard}>
@@ -46,21 +52,34 @@ export default function ProfileStatsScreen() {
   const styles = useMemo(() => createStatsStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
+  const { forUserId: forUserIdParam, ownerName: ownerNameParam } = useLocalSearchParams<{
+    forUserId?: string | string[];
+    ownerName?: string | string[];
+  }>();
+  const forUserId = useMemo(() => parseForUserIdParam(forUserIdParam), [forUserIdParam]);
+  const ownerNameFromParam = useMemo(() => {
+    const v = Array.isArray(ownerNameParam) ? ownerNameParam[0] : ownerNameParam;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }, [ownerNameParam]);
+  const statsUserId = forUserId ?? user?.id ?? null;
+  const viewingPeer = Boolean(user && forUserId && forUserId !== user.id);
+  const reportTitle =
+    viewingPeer && ownerNameFromParam ? `${ownerNameFromParam}'s report` : 'Your report';
   const [rangeIdx, setRangeIdx] = useState(1);
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
 
   const loadStats = useCallback(async () => {
-    if (!user) return;
+    if (!statsUserId) return;
     setLoading(true);
     const now = new Date();
     const end = endOfMonth(now);
     const start = startOfMonth(subMonths(now, RANGES[rangeIdx].months - 1));
-    const result = await fetchProfileStats(user.id, start, end);
+    const result = await fetchProfileStats(statsUserId, start, end);
     setStats(result);
     setLoading(false);
-  }, [user, rangeIdx]);
+  }, [statsUserId, rangeIdx]);
 
   useFocusEffect(
     useCallback(() => {
@@ -89,7 +108,7 @@ export default function ProfileStatsScreen() {
     >
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <Text style={styles.sectionTitle}>Your report</Text>
+          <Text style={styles.sectionTitle}>{reportTitle}</Text>
           <Pressable style={styles.dropdown} onPress={() => setRangePickerOpen(true)}>
             <Text style={styles.dropdownText}>{RANGES[rangeIdx].label}</Text>
             <Text style={styles.dropdownChevron}>▾</Text>

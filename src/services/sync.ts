@@ -21,10 +21,10 @@ export interface PendingSyncData {
   events: TripEvent[];
 }
 
-function tripToUpsertPayload(trip: Trip) {
+function tripToUpsertPayload(trip: Trip, ownerUserId: string) {
   return {
     id: trip.id,
-    user_id: trip.user_id,
+    user_id: ownerUserId,
     location_id: trip.location_id,
     access_point_id: trip.access_point_id ?? null,
     status: trip.status,
@@ -46,11 +46,56 @@ function tripToUpsertPayload(trip: Trip) {
     user_reported_clarity: trip.user_reported_clarity ?? null,
     imported: trip.imported ?? false,
     active_fishing_ms: trip.active_fishing_ms ?? null,
+    shared_session_id: trip.shared_session_id ?? null,
+    trip_photo_visibility: trip.trip_photo_visibility ?? null,
   };
 }
 
+/** RLS requires membership when shared_session_id is set; omit if user is not in session_members. */
+async function effectiveSharedSessionIdForSync(
+  sharedSessionId: string | null | undefined,
+  authUserId: string,
+): Promise<string | null> {
+  const sid =
+    typeof sharedSessionId === 'string' && sharedSessionId.trim().length > 0
+      ? sharedSessionId.trim()
+      : null;
+  if (!sid) return null;
+  const { data, error } = await supabase
+    .from('session_members')
+    .select('user_id')
+    .eq('shared_session_id', sid)
+    .eq('user_id', authUserId)
+    .maybeSingle();
+  if (error) {
+    console.warn('Could not verify session membership; syncing trip without group link', error);
+    return null;
+  }
+  if (!data) {
+    console.warn(
+      'Trip shared_session_id is set but this account is not in that group; syncing without group link. Re-link from the trip screen if needed.',
+    );
+    return null;
+  }
+  return sid;
+}
+
 async function upsertTripToSupabase(trip: Trip): Promise<boolean> {
-  const { error } = await supabase.from('trips').upsert(tripToUpsertPayload(trip));
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const user = authData?.user;
+  if (authError || !user) {
+    console.error('Error syncing trip: not authenticated', authError);
+    return false;
+  }
+
+  const payload = tripToUpsertPayload(trip, user.id);
+  if (trip.user_id !== user.id) {
+    console.warn('Sync: trip.user_id did not match session; using authenticated user id for upsert');
+  }
+
+  payload.shared_session_id = await effectiveSharedSessionIdForSync(trip.shared_session_id, user.id);
+
+  const { error } = await supabase.from('trips').upsert(payload);
   if (error) {
     console.error('Error syncing trip:', error);
     return false;
@@ -321,6 +366,23 @@ export async function fetchCommunityCatchesInBounds(
   } catch (e) {
     console.warn('[fetchCommunityCatchesInBounds]', e);
     return [];
+  }
+}
+
+/** Single trip if RLS allows (owner or same shared session). */
+export async function fetchTripById(tripId: string): Promise<Trip | null> {
+  try {
+    const { data, error } = await supabase
+      .from('trips')
+      .select('*, location:locations(*)')
+      .eq('id', tripId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as Trip) ?? null;
+  } catch (error) {
+    console.error('Error fetching trip by id:', error);
+    return null;
   }
 }
 

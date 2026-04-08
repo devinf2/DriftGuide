@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
 import { signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
-import { Profile } from '@/src/types';
+import { Profile, type TripPhotoVisibility } from '@/src/types';
 import { supabase } from '@/src/services/supabase';
 import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useThemeStore } from '@/src/stores/themeStore';
@@ -20,6 +20,7 @@ interface AuthState {
   setProfile: (profile: Profile | null) => void;
   fetchProfile: () => Promise<void>;
   updateProfileNames: (firstName: string, lastName: string) => Promise<{ error: string | null }>;
+  updateUsername: (username: string) => Promise<{ error: string | null }>;
   updateHomeState: (homeState: string | null) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -29,7 +30,9 @@ interface AuthState {
     lastName: string;
     homeState: string;
     darkModeEnabled: boolean;
+    defaultTripPhotoVisibility: TripPhotoVisibility;
   }) => Promise<{ error: string | null }>;
+  updateDefaultTripPhotoVisibility: (v: TripPhotoVisibility) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   /** Soft-delete cloud data for the current user, clear local trip state, then sign out. */
   softDeleteAccount: () => Promise<{ error: string | null }>;
@@ -97,6 +100,18 @@ export const useAuthStore = create<AuthState>()(
         return { error: null };
       },
 
+      updateUsername: async (raw) => {
+        const user = get().user;
+        if (!user) return { error: 'Not signed in' };
+        const trimmed = raw.trim();
+        const { error } = await supabase.rpc('set_my_username', {
+          p_username: trimmed.length ? trimmed : null,
+        });
+        if (error) return { error: error.message };
+        await get().fetchProfile();
+        return { error: null };
+      },
+
       updateHomeState: async (homeState) => {
         const user = get().user;
         if (!user) return { error: 'Not signed in' };
@@ -152,7 +167,13 @@ export const useAuthStore = create<AuthState>()(
         return { error: null };
       },
 
-      completeProfileOnboarding: async ({ firstName, lastName, homeState, darkModeEnabled }) => {
+      completeProfileOnboarding: async ({
+        firstName,
+        lastName,
+        homeState,
+        darkModeEnabled,
+        defaultTripPhotoVisibility,
+      }) => {
         const user = get().user;
         if (!user) return { error: 'Not signed in' };
 
@@ -173,6 +194,7 @@ export const useAuthStore = create<AuthState>()(
             home_state: hs,
             display_name,
             onboarding_completed_at: new Date().toISOString(),
+            default_trip_photo_visibility: defaultTripPhotoVisibility,
           })
           .eq('id', user.id);
 
@@ -181,6 +203,18 @@ export const useAuthStore = create<AuthState>()(
         useThemeStore.getState().setDarkModeEnabled(darkModeEnabled);
         await get().fetchProfile();
 
+        return { error: null };
+      },
+
+      updateDefaultTripPhotoVisibility: async (v) => {
+        const user = get().user;
+        if (!user) return { error: 'Not signed in' };
+        const { error } = await supabase
+          .from('profiles')
+          .update({ default_trip_photo_visibility: v })
+          .eq('id', user.id);
+        if (error) return { error: error.message };
+        await get().fetchProfile();
         return { error: null };
       },
 

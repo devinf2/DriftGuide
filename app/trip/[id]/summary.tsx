@@ -22,19 +22,35 @@ import {
   patchTripEndpointCoords,
   type TripEndpointKind,
 } from '@/src/components/journal/TripEndpointPinModal';
+import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
+import { effectiveTripPhotoVisibility } from '@/src/constants/tripPhotoVisibility';
 import { fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
-import { Trip, TripEvent, CatchData, FlyChangeData, NoteData, AIQueryData, WaterFlowData, NextFlyRecommendation, EventConditionsSnapshot, Photo } from '@/src/types';
+import {
+  Trip,
+  TripEvent,
+  TripPhotoVisibility,
+  CatchData,
+  FlyChangeData,
+  NoteData,
+  AIQueryData,
+  WaterFlowData,
+  NextFlyRecommendation,
+  EventConditionsSnapshot,
+  Photo,
+} from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
-import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
+import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
+import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
@@ -65,7 +81,7 @@ export default function TripSummaryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
-  const { user } = useAuthStore();
+  const { user, profile } = useAuthStore();
   const { deleteTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
   const { colors: themeColors } = useAppTheme();
@@ -91,6 +107,10 @@ export default function TripSummaryScreen() {
   const [mapCatchDetailEvent, setMapCatchDetailEvent] = useState<TripEvent | null>(null);
   const [keepOfflinePinned, setKeepOfflinePinned] = useState(false);
   const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
+  const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
+  const [photoVisSaving, setPhotoVisSaving] = useState(false);
+  const friendships = useFriendsStore((s) => s.friendships);
+  const refreshFriends = useFriendsStore((s) => s.refresh);
 
   useEffect(() => {
     setJournalEditMode(false);
@@ -109,6 +129,10 @@ export default function TripSummaryScreen() {
   }, [id]);
 
   useEffect(() => {
+    void refreshFriends(user?.id ?? null);
+  }, [user?.id, refreshFriends]);
+
+  useEffect(() => {
     async function load() {
       if (!user || !id) return;
       const trips = await fetchTripsFromCloud(user.id);
@@ -121,6 +145,10 @@ export default function TripSummaryScreen() {
     }
     load();
   }, [id, user]);
+
+  const handleSessionChanged = useCallback((sid: string | null) => {
+    setTrip((prev) => (prev ? { ...prev, shared_session_id: sid } : null));
+  }, []);
 
   const loadTripPhotos = useCallback(async () => {
     if (!user || !id) return;
@@ -274,6 +302,11 @@ export default function TripSummaryScreen() {
       }
     },
     [id, user, isConnected],
+  );
+
+  const effectivePhotoVisibility = useMemo(
+    () => (trip ? effectiveTripPhotoVisibility(trip, profile) : 'private'),
+    [trip, profile],
   );
 
   const tripDurationLabel = useMemo(() => {
@@ -489,6 +522,14 @@ export default function TripSummaryScreen() {
         </View>
         <View style={styles.headerActions}>
           <Pressable
+            onPress={() => setPeopleSheetVisible(true)}
+            style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+            hitSlop={8}
+            accessibilityLabel="Fishing group"
+          >
+            <MaterialIcons name="group" size={22} color={Colors.textInverse} />
+          </Pressable>
+          <Pressable
             onPress={() => setJournalEditMode((v) => !v)}
             style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
             hitSlop={8}
@@ -510,17 +551,46 @@ export default function TripSummaryScreen() {
         </View>
       </View>
 
-      <View style={styles.keepOfflineRow}>
-        <Text style={styles.keepOfflineLabel} numberOfLines={1}>
-          Save offline
-        </Text>
-        <Switch
-          value={keepOfflinePinned}
-          onValueChange={handleKeepOfflineChange}
-          trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
-          thumbColor={themeColors.textInverse}
-          ios_backgroundColor={themeColors.textSecondary}
-          style={styles.keepOfflineSwitch}
+      <View style={styles.topBarRow}>
+        <View style={styles.offlineLeft}>
+          <Text style={styles.keepOfflineLabel} numberOfLines={1}>
+            Save offline
+          </Text>
+          <Switch
+            value={keepOfflinePinned}
+            onValueChange={handleKeepOfflineChange}
+            trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
+            thumbColor={themeColors.textInverse}
+            ios_backgroundColor={themeColors.textSecondary}
+            style={styles.keepOfflineSwitch}
+          />
+        </View>
+        <TripPhotoVisibilityDropdown
+          colorTokens={Colors}
+          label="Visibility"
+          value={effectivePhotoVisibility}
+          onChange={(v: TripPhotoVisibility) => {
+            void (async () => {
+              if (!trip || !user) return;
+              if (!isConnected) {
+                Alert.alert('Offline', 'Connect to the internet to update this.');
+                return;
+              }
+              setPhotoVisSaving(true);
+              const updated: Trip = { ...trip, trip_photo_visibility: v };
+              setTrip(updated);
+              const ok = await syncTripToCloud(updated, events);
+              setPhotoVisSaving(false);
+              if (!ok) {
+                Alert.alert('Could not save', 'Try again when you have a stable connection.');
+                const trips = await fetchTripsFromCloud(user.id);
+                const found = trips.find((t) => t.id === id);
+                if (found) setTrip(found);
+              }
+            })();
+          }}
+          disabled={!user || !isConnected}
+          saving={photoVisSaving}
         />
       </View>
 
@@ -568,11 +638,11 @@ export default function TripSummaryScreen() {
 
       {/* Tab Content */}
       {activeTab === 'fishing' && user && trip && (
-        <JournalFishingTimeline
+        <SharedTripTimelineSection
           trip={trip}
-          events={events}
           userId={user.id}
           isConnected={isConnected}
+          events={events}
           editMode={journalEditMode}
           onEventsChange={setEvents}
           onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
@@ -682,6 +752,18 @@ export default function TripSummaryScreen() {
       >
         <MaterialIcons name="chat" size={26} color={Colors.textInverse} />
       </Pressable>
+
+      {user && trip && id ? (
+        <TripSessionPeopleSheet
+          visible={peopleSheetVisible}
+          onClose={() => setPeopleSheetVisible(false)}
+          tripId={id}
+          userId={user.id}
+          sharedSessionId={trip.shared_session_id ?? null}
+          acceptedFriendships={friendships}
+          onSessionChanged={handleSessionChanged}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1134,23 +1216,32 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  keepOfflineRow: {
+  topBarRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginHorizontal: Spacing.lg,
+    marginHorizontal: Spacing.md,
     marginTop: Spacing.sm,
     marginBottom: Spacing.xs,
-    paddingVertical: 4,
-    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    paddingLeft: Spacing.xs,
+    paddingRight: Spacing.sm,
     gap: Spacing.sm,
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.sm,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
   },
-  keepOfflineLabel: {
+  offlineLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  keepOfflineLabel: {
+    flexShrink: 1,
     fontSize: FontSize.xs,
     fontWeight: '600',
     color: Colors.textSecondary,

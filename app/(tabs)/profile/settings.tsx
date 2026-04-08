@@ -1,4 +1,6 @@
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
+import { showTripPhotoVisibilityInfoAlert } from '@/src/constants/tripPhotoVisibility';
 import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';
 import { matchStoredProfileHomeState, type UsStateOption } from '@/src/constants/usStates';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -11,7 +13,6 @@ import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/util
 import { profileInitialLetter } from '@/src/utils/profileDisplay';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -25,6 +26,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -35,6 +37,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 const CONTACT_EMAIL = 'DriftGuideApp@gmail.com';
+/** Lowercase a–z, digits, underscore; 3–20 chars (matches server `set_my_username`). */
+const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
 const CONTACT_MAILTO = `mailto:${CONTACT_EMAIL}`;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const AVATAR_PREVIEW_DIAMETER = Math.min(248, SCREEN_WIDTH - Spacing.md * 4);
@@ -161,14 +165,15 @@ function createStyles(colors: ThemeColors) {
     profileCard: {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      padding: Spacing.lg + 2,
+      paddingHorizontal: Spacing.md + 2,
+      paddingVertical: Spacing.md,
     },
     profileHeaderRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginBottom: Spacing.lg,
-      paddingBottom: Spacing.md,
+      marginBottom: Spacing.md,
+      paddingBottom: Spacing.sm,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.borderLight,
       gap: Spacing.sm,
@@ -327,32 +332,35 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
     },
     readOnlyCell: {
-      backgroundColor: colors.background,
-      borderRadius: BorderRadius.md,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      paddingHorizontal: Spacing.md,
-      paddingVertical: Spacing.md,
+      paddingHorizontal: 0,
+      paddingTop: Spacing.sm,
+      paddingBottom: Spacing.sm,
+    },
+    readOnlyCellSeparator: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.borderLight,
+      marginBottom: Spacing.xs,
+      paddingBottom: Spacing.sm,
     },
     readOnlyCellLabel: {
       fontSize: FontSize.xs,
       fontWeight: '600',
       color: colors.textTertiary,
       textTransform: 'uppercase',
-      letterSpacing: 0.8,
-      marginBottom: Spacing.sm,
+      letterSpacing: 0.6,
+      marginBottom: Spacing.xs,
     },
     readOnlyCellLabelRow: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: Spacing.xs,
-      marginBottom: Spacing.sm,
+      marginBottom: Spacing.xs,
     },
     readOnlyCellLabelFlex: { flex: 1 },
     readOnlyCellLabelInRow: { marginBottom: 0 },
     readOnlyValue: {
-      fontSize: FontSize.lg,
-      fontWeight: '500',
+      fontSize: FontSize.md,
+      fontWeight: '600',
       color: colors.text,
       letterSpacing: -0.1,
     },
@@ -380,8 +388,17 @@ export default function ProfileSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { colors, darkModeEnabled, setDarkModeEnabled } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { user, signOut, softDeleteAccount, profile, updateHomeState, updateProfileNames, fetchProfile } =
-    useAuthStore();
+  const {
+    user,
+    signOut,
+    softDeleteAccount,
+    profile,
+    updateHomeState,
+    updateProfileNames,
+    updateUsername,
+    fetchProfile,
+    updateDefaultTripPhotoVisibility,
+  } = useAuthStore();
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
   const { pendingSyncTrips, retryPendingSyncs, isSyncingPending } = useTripStore();
   const [homeStateSelected, setHomeStateSelected] = useState<UsStateOption | null>(null);
@@ -390,9 +407,11 @@ export default function ProfileSettingsScreen() {
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [firstNameDraft, setFirstNameDraft] = useState('');
   const [lastNameDraft, setLastNameDraft] = useState('');
+  const [usernameDraft, setUsernameDraft] = useState('');
   const [editingProfileSection, setEditingProfileSection] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
+  const [savingPhotoVisibility, setSavingPhotoVisibility] = useState(false);
 
   useEffect(() => {
     setHomeStateSelected(matchStoredProfileHomeState(profile?.home_state));
@@ -401,7 +420,8 @@ export default function ProfileSettingsScreen() {
   useEffect(() => {
     setFirstNameDraft(profile?.first_name?.trim() ?? '');
     setLastNameDraft(profile?.last_name?.trim() ?? '');
-  }, [profile?.first_name, profile?.last_name]);
+    setUsernameDraft(profile?.username?.trim() ?? '');
+  }, [profile?.first_name, profile?.last_name, profile?.username]);
 
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -456,7 +476,10 @@ export default function ProfileSettingsScreen() {
           'Contact us',
           `Mail could not be opened on this device (for example, the iOS Simulator has no Mail app).\n\n${CONTACT_EMAIL}`,
           [
-            { text: 'Copy address', onPress: () => void Clipboard.setStringAsync(CONTACT_EMAIL) },
+            {
+              text: 'Share email',
+              onPress: () => void Share.share({ message: CONTACT_EMAIL, title: 'DriftGuide support' }),
+            },
             { text: 'OK', style: 'cancel' },
           ],
         );
@@ -481,8 +504,9 @@ export default function ProfileSettingsScreen() {
   const resetProfileDraftsFromProfile = useCallback(() => {
     setFirstNameDraft(profile?.first_name?.trim() ?? '');
     setLastNameDraft(profile?.last_name?.trim() ?? '');
+    setUsernameDraft(profile?.username?.trim() ?? '');
     setHomeStateSelected(matchStoredProfileHomeState(profile?.home_state));
-  }, [profile?.first_name, profile?.last_name, profile?.home_state]);
+  }, [profile?.first_name, profile?.last_name, profile?.username, profile?.home_state]);
 
   const handleCancelProfileEdit = useCallback(() => {
     resetProfileDraftsFromProfile();
@@ -566,6 +590,23 @@ export default function ProfileSettingsScreen() {
       Alert.alert('Could not save', nameResult.error);
       return;
     }
+
+    const unameTrim = usernameDraft.trim().toLowerCase();
+    if (usernameDraft.trim().length > 0 && !USERNAME_PATTERN.test(unameTrim)) {
+      setSavingProfileSection(false);
+      Alert.alert(
+        'Invalid username',
+        'Use 3–20 characters: lowercase letters, numbers, and underscores only. Leave blank to remove your username.',
+      );
+      return;
+    }
+    const unameResult = await updateUsername(usernameDraft);
+    if (unameResult.error) {
+      setSavingProfileSection(false);
+      Alert.alert('Could not save', unameResult.error);
+      return;
+    }
+
     const homeResult = await updateHomeState(homeStateSelected?.name ?? null);
     setSavingProfileSection(false);
     if (homeResult.error) {
@@ -578,8 +619,10 @@ export default function ProfileSettingsScreen() {
   }, [
     firstNameDraft,
     lastNameDraft,
+    usernameDraft,
     homeStateSelected,
     updateProfileNames,
+    updateUsername,
     updateHomeState,
     fetchProfile,
     fetchLocations,
@@ -713,6 +756,15 @@ export default function ProfileSettingsScreen() {
 
         {!editingProfileSection ? (
           <>
+            <View style={[styles.readOnlyCell, styles.readOnlyCellSeparator]}>
+              <Text style={styles.readOnlyCellLabel}>Username</Text>
+              <Text
+                style={[styles.readOnlyValue, !profile?.username?.trim() && styles.readOnlyPlaceholder]}
+                numberOfLines={1}
+              >
+                {profile?.username?.trim() ? `@${profile.username.trim()}` : 'Not set — add one when editing profile'}
+              </Text>
+            </View>
             <View style={styles.readOnlyCell}>
               <View style={styles.readOnlyCellLabelRow}>
                 <Text
@@ -749,6 +801,21 @@ export default function ProfileSettingsScreen() {
           </>
         ) : (
           <>
+            <Text style={styles.nameFieldLabel}>Username</Text>
+            <Text style={[styles.bodyText, { marginBottom: Spacing.sm }]}>
+              Optional handle for friend search (lowercase letters, numbers, underscores). Leave blank to remove.
+            </Text>
+            <TextInput
+              style={styles.nameInput}
+              value={usernameDraft}
+              onChangeText={setUsernameDraft}
+              placeholder="e.g. river_rat_42"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              editable={!savingProfileSection && !avatarUploading}
+            />
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionTitleInRow}>Offline maps</Text>
               <Pressable
@@ -840,6 +907,40 @@ export default function ProfileSettingsScreen() {
           </Pressable>
         </View>
       ) : null}
+
+      <View style={[styles.card, styles.sectionSpacing]}>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.sectionTitleInRow}>Trip photos on profile</Text>
+          <Pressable
+            style={styles.sectionInfoHit}
+            onPress={() => showTripPhotoVisibilityInfoAlert()}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="What trip photo sharing means"
+          >
+            <MaterialIcons name="info-outline" size={22} color={colors.textSecondary} />
+          </Pressable>
+        </View>
+        <Text style={[styles.bodyText, { marginBottom: Spacing.md }]}>
+          Default for new trips. You can override each trip on its summary screen.
+        </Text>
+        <TripPhotoVisibilityDropdown
+          fullWidth
+          showInfo={false}
+          label="Visible to"
+          value={profile?.default_trip_photo_visibility ?? 'private'}
+          onChange={(v) => {
+            void (async () => {
+              setSavingPhotoVisibility(true);
+              const r = await updateDefaultTripPhotoVisibility(v);
+              setSavingPhotoVisibility(false);
+              if (r.error) Alert.alert('Could not save', r.error);
+            })();
+          }}
+          disabled={savingPhotoVisibility}
+          saving={savingPhotoVisibility}
+        />
+      </View>
 
       <View style={[styles.card, styles.sectionSpacing]}>
         <Text style={styles.sectionTitle}>Appearance</Text>

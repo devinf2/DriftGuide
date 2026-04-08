@@ -178,6 +178,9 @@ const JournalTripGridCard = memo(function JournalTripGridCard({
               {formatFishCount(trip.total_fish)}
             </Text>
           </View>
+          {trip.shared_session_id ? (
+            <MaterialIcons name="group" size={14} color={colors.textSecondary} style={{ marginRight: 4 }} />
+          ) : null}
           <Text style={styles.tripGridDate} numberOfLines={1}>
             {formatTripDate(trip.start_time)}
           </Text>
@@ -188,6 +191,7 @@ const JournalTripGridCard = memo(function JournalTripGridCard({
 }, (prev, next) => {
   if (prev.trip.id !== next.trip.id) return false;
   if (prev.trip.total_fish !== next.trip.total_fish) return false;
+  if (prev.trip.shared_session_id !== next.trip.shared_session_id) return false;
   if (prev.cardWidth !== next.cardWidth) return false;
   if (prev.imageUrls.length !== next.imageUrls.length) return false;
   for (let i = 0; i < prev.imageUrls.length; i++) {
@@ -540,6 +544,13 @@ export default function JournalScreen() {
               />
             </Pressable>
           </View>
+          <Pressable
+            style={styles.filterButton}
+            onPress={() => router.push('/journal/create-group')}
+            accessibilityLabel="Create fishing group from trips"
+          >
+            <MaterialIcons name="group-add" size={22} color={headerInactive} />
+          </Pressable>
         </View>
         {viewMode === 'map' && (
           <View style={styles.mapLayerRow}>

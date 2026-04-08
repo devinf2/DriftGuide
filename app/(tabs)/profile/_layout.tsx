@@ -29,10 +29,32 @@ export default function ProfileTabLayout() {
         }}
       />
       <Stack.Screen
+        name="fly-box"
+        options={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          headerBackTitle: 'Profile',
+        }}
+      />
+      <Stack.Screen
         name="settings"
         options={{
           title: 'Settings',
           headerBackTitle: 'Profile',
+        }}
+      />
+      <Stack.Screen
+        name="friends"
+        options={{
+          title: 'Friends',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="friend/[id]"
+        options={{
+          title: 'Angler',
+          headerBackTitle: 'Friends',
         }}
       />
     </Stack>

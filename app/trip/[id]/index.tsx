@@ -38,7 +38,7 @@ import {
   type CachedCatchPin,
 } from '@/src/services/mapCatchLocalStore';
 import { prefetchCatchesForBounds } from '@/src/services/mapCatchPrefetch';
-import { fetchCatchesInBounds, upsertCatchEventToCloud } from '@/src/services/sync';
+import { fetchCatchesInBounds, fetchTripById, upsertCatchEventToCloud } from '@/src/services/sync';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { COMMON_FLIES_BY_NAME, FLY_COLORS, FLY_NAMES, FLY_SIZES, COMMON_SPECIES as SPECIES_OPTIONS } from '@/src/constants/fishingTypes';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -54,6 +54,9 @@ import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/p
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
+import { useAuthStore } from '@/src/stores/authStore';
+import { useFriendsStore } from '@/src/stores/friendsStore';
+import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import {
   AIQueryData,
   CatchData,
@@ -71,6 +74,7 @@ import {
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
+import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
 import {
   findActiveFlyEventIdBefore,
   sortEventsByTime,
@@ -144,8 +148,16 @@ export default function TripDashboardScreen() {
     weatherData, waterFlowData, conditionsLoading, recommendationLoading,
     addCatch, removeCatch, changeFly, updateFlyChangeEvent, addNote, addBite, addFishOn, addAIQuery, endTrip,
     resumeTrip, isTripPaused,
-    fetchConditions, refreshSmartRecommendation, replaceActiveTripEvents,
+    fetchConditions,
+    refreshSmartRecommendation,
+    replaceActiveTripEvents,
+    patchActiveTrip,
   } = useTripStore();
+
+  const { user } = useAuthStore();
+  const friendships = useFriendsStore((s) => s.friendships);
+  const refreshFriends = useFriendsStore((s) => s.refresh);
+  const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
 
   const locations = useLocationStore((s) => s.locations);
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
@@ -231,6 +243,24 @@ export default function TripDashboardScreen() {
   useEffect(() => {
     if (locations.length === 0) void fetchLocations();
   }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    void refreshFriends(user?.id ?? null);
+  }, [user?.id, refreshFriends]);
+
+  useEffect(() => {
+    if (!activeTrip?.id || !isConnected) return;
+    let cancelled = false;
+    void fetchTripById(activeTrip.id).then((t) => {
+      if (cancelled || !t) return;
+      const sid = t.shared_session_id ?? null;
+      const cur = activeTrip.shared_session_id ?? null;
+      if (sid !== cur) patchActiveTrip({ shared_session_id: sid });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrip?.id, activeTrip?.shared_session_id, isConnected, patchActiveTrip]);
 
   useEffect(() => {
     (async () => {
@@ -964,6 +994,14 @@ export default function TripDashboardScreen() {
               <Text style={styles.offlineBadgeText}>Offline</Text>
             </View>
           )}
+          <Pressable
+            style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1, marginRight: Spacing.sm }]}
+            onPress={() => setPeopleSheetVisible(true)}
+            hitSlop={8}
+            accessibilityLabel="Fishing group"
+          >
+            <MaterialIcons name="group" size={22} color={colors.textInverse} />
+          </Pressable>
           {isTripPaused ? (
             <Pressable style={styles.pauseResumeButton} onPress={handleResumeTrip}>
               <Text style={styles.pauseResumeButtonText}>Resume</Text>
@@ -1143,6 +1181,18 @@ export default function TripDashboardScreen() {
         >
           <MaterialIcons name="chat" size={26} color={colors.textInverse} />
         </Pressable>
+      ) : null}
+
+      {user && activeTrip ? (
+        <TripSessionPeopleSheet
+          visible={peopleSheetVisible}
+          onClose={() => setPeopleSheetVisible(false)}
+          tripId={activeTrip.id}
+          userId={user.id}
+          sharedSessionId={activeTrip.shared_session_id ?? null}
+          acceptedFriendships={friendships}
+          onSessionChanged={(sid) => patchActiveTrip({ shared_session_id: sid })}
+        />
       ) : null}
     </SafeAreaView>
   );
@@ -1452,6 +1502,10 @@ function FishingTab({
         </Text>
         {[...sortedEvents].reverse().map((event: TripEvent, revIdx: number) => {
           const index = sortedEvents.length - 1 - revIdx;
+          const lifecycleIcon =
+            event.event_type === 'note'
+              ? tripLifecycleNoteTimelineIcon((event.data as NoteData).text, colors)
+              : null;
           return (
             <View key={event.id} style={styles.timelineItem}>
               <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
@@ -1469,6 +1523,8 @@ function FishingTab({
                     <MaterialIcons name="touch-app" size={14} color={colors.primary} />
                   ) : event.event_type === 'got_off' ? (
                     <MaterialIcons name="highlight-off" size={14} color={colors.textSecondary} />
+                  ) : lifecycleIcon ? (
+                    <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
                   ) : (
                     <MaterialIcons name="edit-note" size={14} color={colors.textSecondary} />
                   )}
