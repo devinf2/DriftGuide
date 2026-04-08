@@ -12,6 +12,19 @@ function dedupePreserveOrder(urls: string[]): string[] {
   return out;
 }
 
+/**
+ * Merge photo URLs from `local` into `remote` catch JSON (deduped, remote order first).
+ * Used when the merged group timeline has a stale server event and local state has uploads.
+ */
+export function mergeCatchDataPhotoUrls(remote: CatchData, local: CatchData): CatchData {
+  const r = normalizeCatchPhotoUrls(remote);
+  const l = normalizeCatchPhotoUrls(local);
+  const merged = dedupePreserveOrder([...r, ...l]);
+  if (merged.length === 0) return remote;
+  if (merged.length === r.length && r.every((u, i) => u === merged[i])) return remote;
+  return { ...remote, photo_urls: merged, photo_url: merged[0] ?? null };
+}
+
 /** Ordered image URLs for a catch (remote or local file URIs). */
 export function normalizeCatchPhotoUrls(data: CatchData): string[] {
   const fromUrls = (data.photo_urls ?? []).map((u) => u?.trim()).filter(Boolean) as string[];

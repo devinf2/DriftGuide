@@ -38,7 +38,12 @@ import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { getCachedConditions } from '@/src/services/waterwayCache';
-import { latestFlyChangeRigFromEvents, totalFishFromEvents } from '@/src/utils/journalTimeline';
+import {
+  filterEventsToViewerTripLog,
+  latestFlyChangeRigFromEvents,
+  nextSequentialTimelineTimestamp,
+  totalFishFromEvents,
+} from '@/src/utils/journalTimeline';
 import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
 import {
   catchDataWithAppendedPhotoUrl,
@@ -99,6 +104,7 @@ interface TripState {
     /** Stable client id for offline-first sync (omit to assign a new uuid). */
     clientEventId?: string | null,
     options?: {
+      /** @deprecated Ignored: new catches always use {@link nextSequentialTimelineTimestamp} so the log stays in add order. */
       timestampIso?: string;
       conditionsSnapshot?: EventConditionsSnapshot | null;
     },
@@ -119,7 +125,10 @@ interface TripState {
   fetchConditions: () => Promise<void>;
   refreshSmartRecommendation: () => Promise<void>;
   clearActiveTrip: () => void;
-  replaceActiveTripEvents: (events: TripEvent[]) => void;
+  replaceActiveTripEvents: (
+    events: TripEvent[],
+    opts?: { viewerUserId?: string },
+  ) => void;
   /** Merge fields into the active trip (e.g. shared_session_id after creating a fishing group). */
   patchActiveTrip: (patch: Partial<Trip>) => void;
   /** Wipe persisted trip / pending-sync state (e.g. after account deletion). */
@@ -245,10 +254,17 @@ export const useTripStore = create<TripState>()(
       },
 
       startPlannedTrip: async (tripId) => {
-        if (get().activeTrip?.status === 'active') return null;
         const { plannedTrips, weatherData, waterFlowData } = get();
         const planned = plannedTrips.find(t => t.id === tripId);
         if (!planned) return null;
+        const active = get().activeTrip;
+        if (
+          active?.status === 'active' &&
+          !active.deleted_at &&
+          active.user_id === planned.user_id
+        ) {
+          return null;
+        }
 
         const startCoords = await captureTripBookmarkCoordsFast();
         const startLat = startCoords?.latitude ?? null;
@@ -325,7 +341,13 @@ export const useTripStore = create<TripState>()(
 
       startTrip: async (userId, locationId, fishingType, location, sessionType) => {
         const existing = get().activeTrip;
-        if (existing?.status === 'active') return existing.id;
+        if (
+          existing?.status === 'active' &&
+          !existing.deleted_at &&
+          existing.user_id === userId
+        ) {
+          return existing.id;
+        }
 
         const tripId = uuidv4();
         const startCoords = await captureTripBookmarkCoordsFast();
@@ -456,6 +478,12 @@ export const useTripStore = create<TripState>()(
 
         const resumeEventId = uuidv4();
         const resumeTripId = activeTrip.id;
+        const cleanedPrior = filterEventsToViewerTripLog(events, resumeTripId, activeTrip.user_id);
+        if (cleanedPrior.length !== events.length) {
+          console.warn(
+            `[tripStore] resumeTrip: removed ${events.length - cleanedPrior.length} events not in this trip log`,
+          );
+        }
         const resumeEvent: TripEvent = {
           id: resumeEventId,
           trip_id: resumeTripId,
@@ -466,7 +494,7 @@ export const useTripStore = create<TripState>()(
           latitude: null,
           longitude: null,
         };
-        const nextEvents = [...events, resumeEvent];
+        const nextEvents = [...cleanedPrior, resumeEvent];
         set({
           fishingSegmentStartedAt: new Date().toISOString(),
           isTripPaused: false,
@@ -534,6 +562,8 @@ export const useTripStore = create<TripState>()(
           ai_recommendation_cache: nextFlyRecommendation
             ? (nextFlyRecommendation as unknown as Record<string, unknown>)
             : activeTrip.ai_recommendation_cache,
+          // Keep fishing-group link: only this row completes; peers + shared session stay as-is.
+          shared_session_id: activeTrip.shared_session_id ?? null,
         };
 
         const endEventId = uuidv4();
@@ -703,10 +733,7 @@ export const useTripStore = create<TripState>()(
             ? clientEventId.trim()
             : uuidv4();
 
-        const timestamp =
-          options?.timestampIso && !Number.isNaN(Date.parse(options.timestampIso))
-            ? options.timestampIso
-            : new Date().toISOString();
+        const timestamp = nextSequentialTimelineTimestamp(activeTrip, get().events);
 
         const conditions_snapshot =
           options?.conditionsSnapshot !== undefined
@@ -773,6 +800,7 @@ export const useTripStore = create<TripState>()(
               : e,
           ),
         }));
+        get().scheduleInTripSync();
       },
 
       resolveCatchEventPhotoUpload: (tripId, eventId, localUri, remoteUrl) => {
@@ -802,15 +830,36 @@ export const useTripStore = create<TripState>()(
             };
           }),
         }));
+        get().scheduleInTripSync();
       },
 
-      replaceActiveTripEvents: (events) => {
+      replaceActiveTripEvents: (events, opts) => {
         const { activeTrip, isTripPaused } = get();
-        if (!activeTrip || isTripPaused) return;
-        const fishCount = totalFishFromEvents(events);
-        const rig = latestFlyChangeRigFromEvents(events);
+        if (!activeTrip) return;
+        const viewerUserId = opts?.viewerUserId ?? activeTrip.user_id;
+        if (activeTrip.user_id !== viewerUserId) {
+          console.warn('[tripStore] replaceActiveTripEvents skipped: active trip owner does not match viewer');
+          return;
+        }
+        const ownOnly = filterEventsToViewerTripLog(events, activeTrip.id, viewerUserId);
+        if (ownOnly.length !== events.length) {
+          console.warn(
+            `[tripStore] replaceActiveTripEvents: dropped ${events.length - ownOnly.length} foreign/merged rows`,
+          );
+        }
+        if (isTripPaused) {
+          const pausedFish = totalFishFromEvents(ownOnly);
+          set({
+            events: ownOnly,
+            fishCount: pausedFish,
+            activeTrip: { ...activeTrip, total_fish: pausedFish },
+          });
+          return;
+        }
+        const fishCount = totalFishFromEvents(ownOnly);
+        const rig = latestFlyChangeRigFromEvents(ownOnly);
         set({
-          events,
+          events: ownOnly,
           fishCount,
           activeTrip: { ...activeTrip, total_fish: fishCount },
           currentFly: rig.primary,

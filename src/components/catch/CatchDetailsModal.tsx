@@ -1300,18 +1300,13 @@ export function CatchDetailsModal({
           | { timestamp?: string; conditions_snapshot?: EventConditionsSnapshot | null }
           | undefined;
         const addedLocalPhoto = newLocalUris.length > 0;
-        if (addedLocalPhoto && photoExifMeta?.takenAt) {
-          if (lat != null && lon != null) {
-            const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
-            eventOverrides = {
-              timestamp: photoExifMeta.takenAt.toISOString(),
-              conditions_snapshot: hist
-                ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
-                : null,
-            };
-          } else {
-            eventOverrides = { timestamp: photoExifMeta.takenAt.toISOString() };
-          }
+        if (addedLocalPhoto && photoExifMeta?.takenAt && lat != null && lon != null) {
+          const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
+          eventOverrides = {
+            conditions_snapshot: hist
+              ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
+              : null,
+          };
         }
 
         const nextEvents = mergeEditCatchEvents(

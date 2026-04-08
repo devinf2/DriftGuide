@@ -13,7 +13,7 @@ import type {
   SessionType,
   WaterClarity,
 } from '@/src/types';
-import { totalFishFromEvents } from '@/src/utils/journalTimeline';
+import { normalizeTripEventForClient, totalFishFromEvents } from '@/src/utils/journalTimeline';
 import { getCatchHeroPhotoUrl, normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 
 export interface PendingSyncData {
@@ -51,32 +51,40 @@ function tripToUpsertPayload(trip: Trip, ownerUserId: string) {
   };
 }
 
-/** RLS requires membership when shared_session_id is set; omit if user is not in session_members. */
+/**
+ * RLS uses `is_session_member()` (session_members row OR shared_sessions.created_by).
+ * Use the same check via RPC so we never send `shared_session_id` on upsert unless Postgres would allow it.
+ */
 async function effectiveSharedSessionIdForSync(
   sharedSessionId: string | null | undefined,
-  authUserId: string,
+  _authUserId: string,
 ): Promise<string | null> {
   const sid =
     typeof sharedSessionId === 'string' && sharedSessionId.trim().length > 0
       ? sharedSessionId.trim()
       : null;
   if (!sid) return null;
-  const { data, error } = await supabase
-    .from('session_members')
-    .select('user_id')
-    .eq('shared_session_id', sid)
-    .eq('user_id', authUserId)
-    .maybeSingle();
+
+  const { data, error } = await supabase.rpc('is_current_user_session_member', {
+    p_session_id: sid,
+  });
+
   if (error) {
-    console.warn('Could not verify session membership; syncing trip without group link', error);
-    return null;
-  }
-  if (!data) {
     console.warn(
-      'Trip shared_session_id is set but this account is not in that group; syncing without group link. Re-link from the trip screen if needed.',
+      '[sync] is_current_user_session_member RPC failed; omitting shared_session_id this attempt.',
+      error,
     );
     return null;
   }
+
+  if (data !== true) {
+    console.warn(
+      '[sync] Trip has shared_session_id but DB says user is not in that session; syncing without group link. Re-link from the trip if needed.',
+      { sessionId: sid },
+    );
+    return null;
+  }
+
   return sid;
 }
 
@@ -95,9 +103,38 @@ async function upsertTripToSupabase(trip: Trip): Promise<boolean> {
 
   payload.shared_session_id = await effectiveSharedSessionIdForSync(trip.shared_session_id, user.id);
 
-  const { error } = await supabase.from('trips').upsert(payload);
+  let { error } = await supabase.from('trips').upsert(payload);
+
+  if (error?.code === '42501' && payload.shared_session_id) {
+    console.warn(
+      '[sync] Trip upsert blocked by RLS with shared_session_id; retrying once without it so the trip row can save.',
+      { tripId: trip.id, shared_session_id: payload.shared_session_id },
+    );
+    const retry = { ...payload, shared_session_id: null as string | null };
+    const second = await supabase.from('trips').upsert(retry);
+    error = second.error;
+    if (!error) {
+      console.warn(
+        '[sync] Trip saved without group link. Open People on the trip and ensure you are in the session, then sync again.',
+      );
+    }
+  }
+
   if (error) {
-    console.error('Error syncing trip:', error);
+    if (error.code === '42501') {
+      console.error(
+        'Error syncing trip: RLS blocked this upsert. Apply migrations through 060_is_current_user_session_member_rpc (and 057–059). Confirm you own this trip (trip.user_id vs auth) and it is not soft-deleted.',
+        {
+          tripId: trip.id,
+          tripUserId: trip.user_id,
+          authUserId: user.id,
+          shared_session_id: payload.shared_session_id,
+        },
+        error,
+      );
+    } else {
+      console.error('Error syncing trip:', error);
+    }
     return false;
   }
   return true;
@@ -694,6 +731,45 @@ async function mergeCatchCoordsFromCatchesTable(events: TripEvent[]): Promise<Tr
   });
 }
 
+/** When `trip_events.data` has no photo URLs, copy hero URL from `catches` (session peers + group timeline). */
+async function mergeCatchPhotosFromCatchesTable(events: TripEvent[]): Promise<TripEvent[]> {
+  const needIds = events
+    .filter((e) => e.event_type === 'catch')
+    .filter((e) => normalizeCatchPhotoUrls(e.data as CatchData).length === 0)
+    .map((e) => e.id);
+  if (needIds.length === 0) return events;
+
+  const { data: rows, error } = await supabase
+    .from('catches')
+    .select('id, photo_url')
+    .in('id', needIds);
+
+  if (error || !rows?.length) return events;
+
+  const urlById = new Map<string, string>();
+  for (const r of rows as { id: string; photo_url: string | null }[]) {
+    const u = r.photo_url?.trim();
+    if (u) urlById.set(r.id, u);
+  }
+  if (urlById.size === 0) return events;
+
+  return events.map((ev) => {
+    if (ev.event_type !== 'catch') return ev;
+    if (normalizeCatchPhotoUrls(ev.data as CatchData).length > 0) return ev;
+    const u = urlById.get(ev.id);
+    if (!u) return ev;
+    const d = ev.data as CatchData;
+    return {
+      ...ev,
+      data: {
+        ...d,
+        photo_url: u,
+        photo_urls: [u],
+      },
+    };
+  });
+}
+
 export async function fetchTripEvents(tripId: string): Promise<TripEvent[]> {
   try {
     const { data, error } = await supabase
@@ -703,8 +779,10 @@ export async function fetchTripEvents(tripId: string): Promise<TripEvent[]> {
       .order('timestamp', { ascending: true });
 
     if (error) throw error;
-    const events = (data as TripEvent[]) || [];
-    return mergeCatchCoordsFromCatchesTable(events);
+    const raw = (data as TripEvent[]) || [];
+    const events = raw.map(normalizeTripEventForClient);
+    const withCoords = await mergeCatchCoordsFromCatchesTable(events);
+    return mergeCatchPhotosFromCatchesTable(withCoords);
   } catch (error) {
     console.error('Error fetching events:', error);
     return [];

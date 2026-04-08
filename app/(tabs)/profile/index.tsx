@@ -371,6 +371,7 @@ export function createProfileStyles(colors: ThemeColors) {
     },
     headerCard: {
       position: 'relative',
+      zIndex: 2,
       backgroundColor: colors.surface,
       borderRadius: R,
       padding: Spacing.md,
@@ -436,7 +437,7 @@ export function createProfileStyles(colors: ThemeColors) {
     headerActionBtn: {
       padding: Spacing.xs,
     },
-    quickRow: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.md },
+    quickRow: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.md, zIndex: 1 },
     quickTile: {
       flex: 1,
       backgroundColor: colors.surface,

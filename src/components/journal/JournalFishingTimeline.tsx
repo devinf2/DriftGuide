@@ -11,7 +11,10 @@ import {
   Text,
   TextInput,
   View,
+  type TextStyle,
+  type ViewStyle,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { v4 as uuidv4 } from 'uuid';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { FLY_NAMES } from '@/src/constants/fishingTypes';
@@ -22,7 +25,7 @@ import {
   mergeFlyPickerSelection,
   splitFlyChangeData,
 } from '@/src/components/fly/ChangeFlyPickerModal';
-import { BorderRadius, Colors, FontSize, Spacing } from '@/src/constants/theme';
+import { BorderRadius, Colors, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import {
   deleteJournalTripEvent,
   fetchTripEvents,
@@ -32,7 +35,9 @@ import {
   upsertJournalTripEvent,
 } from '@/src/services/sync';
 import {
+  coerceTripEventDataObject,
   findActiveFlyEventIdBefore,
+  getTripEventDescription,
   sortEventsByTime,
   timestampBetween,
   totalFishFromEvents,
@@ -46,11 +51,20 @@ import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon'
 
 type RowAction = { label: string; destructive?: boolean; onPress: () => void };
 
+const TIMELINE_EDIT_HELP =
+  'Tap ⋮ on a row to edit, insert notes, fish, or fly changes, adjust start/end locations from Trip started or Trip ended, or delete.';
+
 function formatCatchLabel(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function CatchDetailsBlock({ data }: { data: CatchData }) {
+function CatchDetailsBlock({
+  data,
+  detailStyles,
+}: {
+  data: CatchData;
+  detailStyles: { wrap: ViewStyle; line: TextStyle };
+}) {
   const lines: string[] = [];
   if (data.note?.trim()) lines.push(data.note.trim());
   if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
@@ -59,48 +73,14 @@ function CatchDetailsBlock({ data }: { data: CatchData }) {
   if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
   if (lines.length === 0) return null;
   return (
-    <View style={styles.timelineCatchDetails}>
+    <View style={detailStyles.wrap}>
       {lines.map((line, i) => (
-        <Text key={i} style={styles.timelineCatchDetailLine}>
+        <Text key={i} style={detailStyles.line}>
           {line}
         </Text>
       ))}
     </View>
   );
-}
-
-function getEventDescription(event: TripEvent): string {
-  switch (event.event_type) {
-    case 'catch': {
-      const data = event.data as CatchData;
-      const parts: string[] = [];
-      if (data.species) parts.push(data.species);
-      if (data.size_inches != null) parts.push(`${data.size_inches}"`);
-      const qty = data.quantity != null && data.quantity > 1 ? data.quantity : 1;
-      return parts.length
-        ? `Caught ${parts.join(' · ')}${qty > 1 ? ` (×${qty})` : ''}`
-        : qty > 1
-          ? `${qty} fish caught!`
-          : 'Fish caught!';
-    }
-    case 'fly_change': {
-      const data = event.data as FlyChangeData;
-      const primary = `${data.pattern}${data.size ? ` #${data.size}` : ''}`;
-      return data.pattern2
-        ? `Changed to ${primary} / ${data.pattern2}${data.size2 ? ` #${data.size2}` : ''}`
-        : `Changed to ${primary}`;
-    }
-    case 'note': {
-      const data = event.data as NoteData;
-      return data.text;
-    }
-    case 'ai_query': {
-      const data = event.data as AIQueryData;
-      return `Asked: ${data.question}`;
-    }
-    default:
-      return 'Event';
-  }
 }
 
 export interface JournalFishingTimelineProps {
@@ -116,6 +96,15 @@ export interface JournalFishingTimelineProps {
   onRequestEditTripPin?: (kind: TripEndpointKind) => void;
   /** Group timeline: show a name label per row (e.g. angler attribution). */
   attributionLabelForEvent?: (event: TripEvent) => string | undefined;
+  /** Group timeline: profile photo URL for the angler who recorded the event (initials if null). */
+  attributionAvatarUriForEvent?: (event: TripEvent) => string | null | undefined;
+  /**
+   * When set with attribution callbacks, hides the per-row name line (avatar only).
+   * Use for single-angler views (Me / peer) so rows stay compact.
+   */
+  compactAttributionLabels?: boolean;
+  /** When embedded in a dark surface (e.g. active trip), pass `useAppTheme().colors` for readable text. */
+  colorTokens?: ThemeColors;
 }
 
 export function JournalFishingTimeline({
@@ -129,8 +118,19 @@ export function JournalFishingTimeline({
   onCatchPhotoPress,
   onRequestEditTripPin,
   attributionLabelForEvent,
+  attributionAvatarUriForEvent,
+  compactAttributionLabels = false,
+  colorTokens,
 }: JournalFishingTimelineProps) {
+  const palette = colorTokens ?? Colors;
+  const styles = useMemo(() => createJournalFishingTimelineStyles(palette), [palette]);
+  const catchDetailStyles = useMemo(
+    () => ({ wrap: styles.timelineCatchDetails, line: styles.timelineCatchDetailLine }),
+    [styles],
+  );
+
   const sorted = useMemo(() => sortEventsByTime(events), [events]);
+  const useRecorderColumn = attributionLabelForEvent != null;
 
   const [rowActions, setRowActions] = useState<{ event: TripEvent; index: number } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -139,6 +139,7 @@ export function JournalFishingTimeline({
   const [noteModal, setNoteModal] = useState<TripEvent | null>(null);
   const [flyModal, setFlyModal] = useState<TripEvent | null>(null);
   const [aiModal, setAiModal] = useState<TripEvent | null>(null);
+  const [timelineHelpVisible, setTimelineHelpVisible] = useState(false);
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
   const [flyCatalog, setFlyCatalog] = useState<FlyCatalog[]>([]);
 
@@ -165,19 +166,33 @@ export function JournalFishingTimeline({
   }, []);
 
   const reloadFromCloud = useCallback(async () => {
+    // Peer / group rows use this Journal with `trip` = another angler's trip. Never merge that row or
+    // their events into the signed-in user's active trip store (would make "You" show their log).
+    if (trip.user_id !== userId) {
+      return;
+    }
     const trips = await fetchTripsFromCloud(userId);
     const found = trips.find((t) => t.id === trip.id);
-    if (found) onTripPatch(found);
+    if (found && found.user_id === userId) {
+      onTripPatch(found);
+    }
     const ev = await fetchTripEvents(trip.id);
-    onEventsChange(ev);
-  }, [trip.id, userId, onEventsChange, onTripPatch]);
+    const ownRows = ev.filter((e) => e.trip_id === trip.id);
+    if (ownRows.length !== ev.length) {
+      console.warn(
+        `[Journal] fetchTripEvents returned ${ev.length - ownRows.length} rows for other trip_ids; dropped`,
+      );
+    }
+    onEventsChange(ownRows);
+  }, [trip.id, trip.user_id, userId, onEventsChange, onTripPatch]);
 
   const applyEventsAndTotals = useCallback(
     (next: TripEvent[]) => {
+      if (trip.user_id !== userId) return;
       onEventsChange(next);
       onTripPatch({ total_fish: totalFishFromEvents(next) });
     },
-    [onEventsChange, onTripPatch],
+    [trip.user_id, userId, onEventsChange, onTripPatch],
   );
 
   const submitJournalCatchEdit = useCallback(
@@ -392,8 +407,10 @@ export function JournalFishingTimeline({
   const uniqueFlies = [
     ...new Set(
       flyChanges.flatMap((e) => {
-        const d = e.data as FlyChangeData;
-        return d.pattern2 ? [d.pattern, d.pattern2] : [d.pattern];
+        const d = coerceTripEventDataObject(e);
+        const p1 = typeof d.pattern === 'string' ? d.pattern : '';
+        const p2 = typeof d.pattern2 === 'string' ? d.pattern2.trim() : '';
+        return p2 ? [p1, p2].filter(Boolean) : [p1].filter(Boolean);
       }),
     ),
   ];
@@ -474,7 +491,7 @@ export function JournalFishingTimeline({
   return (
     <View style={styles.root}>
       <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
-        {uniqueFlies.length > 0 && (
+        {trip.status === 'completed' && uniqueFlies.length > 0 ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Flies Used</Text>
             <View style={styles.flyChips}>
@@ -485,48 +502,95 @@ export function JournalFishingTimeline({
               ))}
             </View>
           </View>
-        )}
+        ) : null}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Timeline</Text>
-          {editMode ? (
-            <Text style={styles.editHint}>
-              Tap ⋮ on a row to edit, insert notes, fish, or fly changes, adjust start/end locations from Trip
-              started or Trip ended, or delete.
-            </Text>
-          ) : null}
+          <View style={styles.timelineSectionHeader}>
+            <Text style={styles.sectionTitle}>Timeline</Text>
+            {editMode ? (
+              <Pressable
+                onPress={() => setTimelineHelpVisible(true)}
+                hitSlop={12}
+                style={styles.timelineHelpIconHit}
+                accessibilityRole="button"
+                accessibilityLabel="Timeline editing help"
+              >
+                <MaterialIcons name="info-outline" size={20} color={palette.text} />
+              </Pressable>
+            ) : null}
+          </View>
           {sorted.length === 0 ? (
             <Text style={styles.emptyHint}>No events recorded for this trip.</Text>
           ) : (
             sorted.map((event, index) => {
+              const noteTextForIcon =
+                event.event_type === 'note'
+                  ? (() => {
+                      const o = coerceTripEventDataObject(event);
+                      return typeof o.text === 'string' ? o.text : '';
+                    })()
+                  : '';
               const lifecycleIcon =
                 event.event_type === 'note'
-                  ? tripLifecycleNoteTimelineIcon((event.data as NoteData).text, Colors)
+                  ? tripLifecycleNoteTimelineIcon(noteTextForIcon, palette)
                   : null;
+              const recorderLabel = useRecorderColumn
+                ? (attributionLabelForEvent?.(event)?.trim() || 'Angler')
+                : '';
+              const attributionUri = useRecorderColumn
+                ? attributionAvatarUriForEvent?.(event)?.trim() || null
+                : null;
+              const attributionInitial =
+                recorderLabel.length > 0 ? recorderLabel.charAt(0).toUpperCase() : '?';
+              // Match recorderLabel fallback so a missing/blank callback string does not hide the name row while an avatar still shows.
+              const showNameLine =
+                useRecorderColumn && !compactAttributionLabels && recorderLabel.length > 0;
+
               return (
                 <View key={event.id} style={styles.timelineItem}>
                   <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
+                  {useRecorderColumn ? (
+                    <View style={styles.timelineAttributionAvatarCol}>
+                      {attributionUri ? (
+                        <Image
+                          source={{ uri: attributionUri }}
+                          style={styles.timelineAttributionAvatar}
+                          contentFit="cover"
+                          accessibilityIgnoresInvertColors
+                        />
+                      ) : (
+                        <View
+                          style={[
+                            styles.timelineAttributionAvatar,
+                            styles.timelineAttributionAvatarPlaceholder,
+                          ]}
+                        >
+                          <Text style={styles.timelineAttributionAvatarLetter}>{attributionInitial}</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
                   <View style={styles.timelineContent}>
                     <View style={styles.timelineDot}>
                       {event.event_type === 'catch' ? (
-                        <MaterialCommunityIcons name="fish" size={14} color={Colors.primary} />
+                        <MaterialCommunityIcons name="fish" size={14} color={palette.primaryLight} />
                       ) : event.event_type === 'fly_change' ? (
-                        <MaterialCommunityIcons name="hook" size={14} color={Colors.accent} />
+                        <MaterialCommunityIcons name="hook" size={14} color={palette.secondaryLight} />
                       ) : event.event_type === 'ai_query' ? (
-                        <MaterialIcons name="smart-toy" size={14} color={Colors.info} />
+                        <MaterialIcons name="smart-toy" size={14} color={palette.info} />
                       ) : lifecycleIcon ? (
                         <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
                       ) : (
-                        <MaterialIcons name="edit-note" size={14} color={Colors.textSecondary} />
+                        <MaterialIcons name="edit-note" size={14} color={palette.textSecondary} />
                       )}
                     </View>
                     <View style={styles.timelineTextBlock}>
-                      {attributionLabelForEvent?.(event) ? (
-                        <Text style={styles.timelineAttribution}>{attributionLabelForEvent(event)}</Text>
+                      {showNameLine ? (
+                        <Text style={styles.timelineAttribution}>{recorderLabel}</Text>
                       ) : null}
-                      <Text style={styles.timelineText}>{getEventDescription(event)}</Text>
+                      <Text style={styles.timelineText}>{getTripEventDescription(event)}</Text>
                       {event.event_type === 'catch' ? (
-                        <CatchDetailsBlock data={event.data as CatchData} />
+                        <CatchDetailsBlock data={event.data as CatchData} detailStyles={catchDetailStyles} />
                       ) : null}
                       {event.event_type === 'catch' ? (
                         <TimelineCatchPhotoStrip
@@ -543,7 +607,7 @@ export function JournalFishingTimeline({
                         hitSlop={12}
                         disabled={saving}
                       >
-                        <MaterialIcons name="more-vert" size={22} color={Colors.textSecondary} />
+                        <MaterialIcons name="more-vert" size={22} color={palette.textSecondary} />
                       </Pressable>
                     ) : null}
                   </View>
@@ -553,6 +617,33 @@ export function JournalFishingTimeline({
           )}
         </View>
       </ScrollView>
+
+      <Modal
+        visible={timelineHelpVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTimelineHelpVisible(false)}
+      >
+        <View style={styles.timelineHelpOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setTimelineHelpVisible(false)}
+            accessibilityLabel="Dismiss help"
+          />
+          <View style={styles.timelineHelpCard}>
+            <Text style={styles.timelineHelpTitle}>Editing the timeline</Text>
+            <Text style={styles.timelineHelpBody}>{TIMELINE_EDIT_HELP}</Text>
+            <Pressable
+              style={styles.timelineHelpDismiss}
+              onPress={() => setTimelineHelpVisible(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Got it"
+            >
+              <Text style={styles.timelineHelpDismissText}>Got it</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={rowActions != null} transparent animationType="fade" onRequestClose={closeRowMenu}>
         <View style={styles.actionOverlay}>
@@ -580,7 +671,7 @@ export function JournalFishingTimeline({
 
       {saving ? (
         <View style={styles.savingOverlay} pointerEvents="none">
-          <ActivityIndicator color={Colors.primary} />
+          <ActivityIndicator color={palette.primaryLight} />
         </View>
       ) : null}
 
@@ -602,6 +693,8 @@ export function JournalFishingTimeline({
         visible={noteModal != null}
         event={noteModal}
         allEvents={events}
+        styles={styles}
+        themeColors={palette}
         onClose={() => setNoteModal(null)}
         onSaved={(updated, nextEvents) => {
           applyEventsAndTotals(nextEvents);
@@ -632,6 +725,7 @@ export function JournalFishingTimeline({
         visible={aiModal != null}
         event={aiModal}
         allEvents={events}
+        styles={styles}
         onClose={() => setAiModal(null)}
         onSaved={(updated, nextEvents) => {
           applyEventsAndTotals(nextEvents);
@@ -643,16 +737,183 @@ export function JournalFishingTimeline({
   );
 }
 
+function createJournalFishingTimelineStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    root: { flex: 1 },
+    tabContent: { flex: 1 },
+    tabContentInner: { padding: Spacing.lg, gap: Spacing.md },
+    section: { gap: Spacing.sm },
+    sectionTitle: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: c.text,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+      opacity: 0.85,
+    },
+    timelineSectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+    },
+    timelineHelpIconHit: { padding: 2 },
+    timelineHelpOverlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: Spacing.lg,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+    },
+    timelineHelpCard: {
+      backgroundColor: c.surfaceElevated,
+      borderRadius: BorderRadius.lg,
+      padding: Spacing.lg,
+      maxWidth: 360,
+      width: '100%',
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    timelineHelpTitle: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: c.text,
+      marginBottom: Spacing.sm,
+    },
+    timelineHelpBody: { fontSize: FontSize.sm, color: c.text, lineHeight: 22 },
+    timelineHelpDismiss: {
+      marginTop: Spacing.md,
+      alignSelf: 'flex-end',
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+    },
+    timelineHelpDismissText: { fontSize: FontSize.sm, fontWeight: '600', color: c.primaryLight },
+    emptyHint: { fontSize: FontSize.sm, color: c.text, textAlign: 'center', opacity: 0.75 },
+    flyChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+    flyChip: {
+      backgroundColor: c.surfaceElevated,
+      borderRadius: BorderRadius.full,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    flyChipText: { fontSize: FontSize.sm, fontWeight: '500', color: c.text },
+    timelineItem: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start', alignSelf: 'stretch' },
+    timelineTime: { fontSize: FontSize.xs, color: c.text, width: 65, paddingTop: 2, opacity: 0.75 },
+    timelineAttributionAvatarCol: { paddingTop: 2 },
+    timelineAttributionAvatar: {
+      width: 28,
+      height: 28,
+      borderRadius: BorderRadius.full,
+      backgroundColor: c.borderLight,
+      overflow: 'hidden',
+    },
+    timelineAttributionAvatarPlaceholder: {
+      backgroundColor: c.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    timelineAttributionAvatarLetter: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: c.textInverse,
+    },
+    timelineContent: { flex: 1, minWidth: 0, flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start' },
+    timelineDot: { width: 20, alignItems: 'center', paddingTop: 2 },
+    timelineTextBlock: { flex: 1, minWidth: 0, flexShrink: 1, gap: Spacing.sm },
+    timelineAttribution: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: c.text,
+      marginBottom: -Spacing.xs,
+      opacity: 0.9,
+    },
+    timelineText: { fontSize: FontSize.sm, color: c.text, fontWeight: '500' },
+    timelineCatchThumb: { width: 72, height: 72, borderRadius: BorderRadius.sm, backgroundColor: c.surfaceElevated },
+    timelineCatchDetails: { marginTop: Spacing.xs, gap: 2 },
+    timelineCatchDetailLine: { fontSize: FontSize.xs, color: c.text, opacity: 0.85 },
+    rowMenuBtn: { padding: Spacing.xs },
+    actionOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+    actionSheet: {
+      backgroundColor: c.surface,
+      borderTopLeftRadius: BorderRadius.lg,
+      borderTopRightRadius: BorderRadius.lg,
+      paddingBottom: Spacing.xl,
+    },
+    actionRow: {
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.lg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    actionLabel: { fontSize: FontSize.md, color: c.text },
+    actionLabelDestructive: { color: c.error },
+    actionCancel: { fontSize: FontSize.md, fontWeight: '600', color: c.primaryLight, textAlign: 'center' },
+    savingOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,0,0,0.25)',
+    },
+    modalRoot: { flex: 1, backgroundColor: c.background },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    modalTitle: { fontSize: FontSize.md, fontWeight: '700', color: c.text },
+    modalCancel: { fontSize: FontSize.md, color: c.textSecondary },
+    modalSave: { fontSize: FontSize.md, fontWeight: '600', color: c.primaryLight },
+    modalScroll: { flex: 1, padding: Spacing.lg },
+    fieldLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: c.textSecondary,
+      marginBottom: Spacing.xs,
+      marginTop: Spacing.sm,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      fontSize: FontSize.md,
+      color: c.text,
+      backgroundColor: c.surface,
+    },
+    tallInput: { minHeight: 80, textAlignVertical: 'top' },
+    noteBody: {
+      flex: 1,
+      margin: Spacing.lg,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      fontSize: FontSize.md,
+      color: c.text,
+      textAlignVertical: 'top',
+    },
+  });
+}
+
 function EditNoteModal({
   visible,
   event,
   allEvents,
+  styles,
+  themeColors,
   onClose,
   onSaved,
 }: {
   visible: boolean;
   event: TripEvent | null;
   allEvents: TripEvent[];
+  styles: ReturnType<typeof createJournalFishingTimelineStyles>;
+  themeColors: ThemeColors;
   onClose: () => void;
   onSaved: (e: TripEvent, all: TripEvent[]) => void;
 }) {
@@ -690,7 +951,7 @@ function EditNoteModal({
           value={text}
           onChangeText={setText}
           placeholder="Write a note…"
-          placeholderTextColor={Colors.textTertiary}
+          placeholderTextColor={themeColors.textTertiary}
           multiline
         />
       </KeyboardAvoidingView>
@@ -702,12 +963,14 @@ function EditAiModal({
   visible,
   event,
   allEvents,
+  styles,
   onClose,
   onSaved,
 }: {
   visible: boolean;
   event: TripEvent | null;
   allEvents: TripEvent[];
+  styles: ReturnType<typeof createJournalFishingTimelineStyles>;
   onClose: () => void;
   onSaved: (e: TripEvent, all: TripEvent[]) => void;
 }) {
@@ -761,98 +1024,3 @@ function EditAiModal({
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1 },
-  tabContent: { flex: 1 },
-  tabContentInner: { padding: Spacing.lg, gap: Spacing.md },
-  section: { gap: Spacing.sm },
-  sectionTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  editHint: { fontSize: FontSize.sm, color: Colors.textTertiary, marginBottom: Spacing.xs },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.textTertiary, textAlign: 'center' },
-  flyChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  flyChip: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  flyChipText: { fontSize: FontSize.sm, fontWeight: '500', color: Colors.text },
-  timelineItem: { flexDirection: 'row', gap: Spacing.md },
-  timelineTime: { fontSize: FontSize.xs, color: Colors.textTertiary, width: 65, paddingTop: 2 },
-  timelineContent: { flex: 1, flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start' },
-  timelineDot: { width: 20, alignItems: 'center', paddingTop: 2 },
-  timelineTextBlock: { flex: 1, gap: Spacing.sm },
-  timelineAttribution: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: Colors.primary,
-    marginBottom: -Spacing.xs,
-  },
-  timelineText: { fontSize: FontSize.sm, color: Colors.text },
-  timelineCatchThumb: { width: 72, height: 72, borderRadius: BorderRadius.sm, backgroundColor: Colors.surface },
-  timelineCatchDetails: { marginTop: Spacing.xs, gap: 2 },
-  timelineCatchDetailLine: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  rowMenuBtn: { padding: Spacing.xs },
-  actionOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  actionSheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: BorderRadius.lg,
-    borderTopRightRadius: BorderRadius.lg,
-    paddingBottom: Spacing.xl,
-  },
-  actionRow: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.lg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border },
-  actionLabel: { fontSize: FontSize.md, color: Colors.text },
-  actionLabelDestructive: { color: Colors.error },
-  actionCancel: { fontSize: FontSize.md, fontWeight: '600', color: Colors.primary, textAlign: 'center' },
-  savingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.35)',
-  },
-  modalRoot: { flex: 1, backgroundColor: Colors.background },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  modalTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.text },
-  modalCancel: { fontSize: FontSize.md, color: Colors.textSecondary },
-  modalSave: { fontSize: FontSize.md, fontWeight: '600', color: Colors.primary },
-  modalScroll: { flex: 1, padding: Spacing.lg },
-  fieldLabel: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginBottom: Spacing.xs, marginTop: Spacing.sm },
-  input: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    backgroundColor: Colors.surface,
-  },
-  tallInput: { minHeight: 80, textAlignVertical: 'top' },
-  noteBody: {
-    flex: 1,
-    margin: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.text,
-    textAlignVertical: 'top',
-  },
-});

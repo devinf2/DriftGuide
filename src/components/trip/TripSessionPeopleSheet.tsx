@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -10,10 +11,13 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useAuthStore } from '@/src/stores/authStore';
 import { fetchProfile, otherUserIdFromFriendship } from '@/src/services/friendsService';
+import { profileInitialLetter } from '@/src/utils/profileDisplay';
 import {
   acceptSessionInvite,
   attachTripToSession,
@@ -29,6 +33,16 @@ import {
   listSharedSessionIdsForUser,
 } from '@/src/services/sharedSessionService';
 import type { FriendshipRow, SessionInvite, SessionMember } from '@/src/types';
+import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
+
+const MEMBER_AVATAR = 40;
+
+type FriendRow = { id: string; label: string; avatarUrl: string | null };
+
+function initialFromDisplayName(name: string): string {
+  const t = name.trim();
+  return t ? t.charAt(0).toUpperCase() : '?';
+}
 
 export interface TripSessionPeopleSheetProps {
   visible: boolean;
@@ -50,12 +64,14 @@ export function TripSessionPeopleSheet({
   acceptedFriendships,
   onSessionChanged,
 }: TripSessionPeopleSheetProps) {
+  const router = useRouter();
   const { colors } = useAppTheme();
+  const profile = useAuthStore((s) => s.profile);
   const [members, setMembers] = useState<SessionMember[]>([]);
   const [invitesOut, setInvitesOut] = useState<SessionInvite[]>([]);
   const [invitesIn, setInvitesIn] = useState<SessionInvite[]>([]);
   const [loading, setLoading] = useState(false);
-  const [friendRows, setFriendRows] = useState<{ id: string; label: string }[]>([]);
+  const [friendRows, setFriendRows] = useState<FriendRow[]>([]);
   const [sessionsWithoutLinkedTrip, setSessionsWithoutLinkedTrip] = useState<string[]>([]);
 
   const acceptedFriends = useMemo(
@@ -69,29 +85,53 @@ export function TripSessionPeopleSheet({
       const incoming = await listPendingSessionInvitesForUser(userId);
       setInvitesIn(incoming);
       let sessionMembers: SessionMember[] = [];
+      let outgoingInvites: SessionInvite[] = [];
       if (sharedSessionId) {
         const [m, o] = await Promise.all([
           listSessionMembers(sharedSessionId),
           listSessionInvitesSentFromSession(sharedSessionId),
         ]);
         sessionMembers = m;
+        outgoingInvites = o;
         setMembers(m);
-        setInvitesOut(o.filter((i) => i.status === 'pending'));
+        setInvitesOut(o);
       } else {
         setMembers([]);
         setInvitesOut([]);
       }
 
-      const rows: { id: string; label: string }[] = [];
+      const rows: FriendRow[] = [];
       for (const f of acceptedFriends) {
         const oid = otherUserIdFromFriendship(f, userId);
         const p = await fetchProfile(oid);
-        rows.push({ id: oid, label: p?.display_name?.trim() || 'Friend' });
+        const av = p?.avatar_url?.trim();
+        rows.push({
+          id: oid,
+          label: p?.display_name?.trim() || 'Friend',
+          avatarUrl: av || null,
+        });
       }
       for (const mem of sessionMembers) {
         if (!rows.some((r) => r.id === mem.user_id)) {
           const p = await fetchProfile(mem.user_id);
-          rows.push({ id: mem.user_id, label: p?.display_name?.trim() || 'Angler' });
+          const av = p?.avatar_url?.trim();
+          rows.push({
+            id: mem.user_id,
+            label: p?.display_name?.trim() || 'Angler',
+            avatarUrl: av || null,
+          });
+        }
+      }
+      for (const inv of outgoingInvites) {
+        const aid = inv.invitee_id;
+        if (aid && !rows.some((r) => r.id === aid)) {
+          const p = await fetchProfile(aid);
+          const av = p?.avatar_url?.trim();
+          rows.push({
+            id: aid,
+            label: p?.display_name?.trim() || 'Friend',
+            avatarUrl: av || null,
+          });
         }
       }
       setFriendRows(rows);
@@ -114,28 +154,36 @@ export function TripSessionPeopleSheet({
 
   const memberIds = useMemo(() => new Set(members.map((m) => m.user_id)), [members]);
 
+  const pendingInviteeIds = useMemo(
+    () => new Set(invitesOut.map((i) => i.invitee_id)),
+    [invitesOut],
+  );
+
   const friendsNotInSession = useMemo(() => {
-    return friendRows.filter((r) => !memberIds.has(r.id));
-  }, [friendRows, memberIds]);
+    return friendRows.filter((r) => !memberIds.has(r.id) && !pendingInviteeIds.has(r.id));
+  }, [friendRows, memberIds, pendingInviteeIds]);
 
   const handleCreateSession = async () => {
-    const sid = await createSharedSession(null, userId);
-    if (!sid) {
-      Alert.alert('Could not create group', 'Try again.');
+    const created = await createSharedSession(null, userId);
+    if (!created.ok) {
+      Alert.alert('Could not create group', created.message);
       return;
     }
-    const ok = await attachTripToSession(tripId, sid);
+    const ok = await attachTripToSession(tripId, created.sessionId);
     if (!ok) {
       Alert.alert('Could not link trip', 'Try again.');
       return;
     }
-    onSessionChanged(sid);
+    onSessionChanged(created.sessionId);
     await load();
   };
 
   const handleInvite = async (friendId: string) => {
     if (!sharedSessionId) return;
-    const ok = await inviteToSession(sharedSessionId, userId, friendId);
+    const ok = await inviteToSession(sharedSessionId, userId, friendId, {
+      inviterTripId: tripId,
+      mergeWindowAnchorAt: null,
+    });
     if (!ok) Alert.alert('Invite failed', 'They may already be invited or in the group.');
     await load();
   };
@@ -162,11 +210,9 @@ export function TripSessionPeopleSheet({
       Alert.alert('Could not accept', 'Try again.');
       return;
     }
-    Alert.alert(
-      'You joined the group',
-      'Link this trip: tap “Link this trip to this group” below, or reopen this sheet after opening the trip you want to share.',
-    );
     await load();
+    onClose();
+    router.push(buildLinkTripAfterAcceptPath(inv));
   };
 
   const handleLinkTripToSession = async (sessionId: string) => {
@@ -203,8 +249,7 @@ export function TripSessionPeopleSheet({
               {invitesIn.map((inv) => (
                 <View key={inv.id} style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
                   <Text style={{ color: colors.textSecondary, fontSize: FontSize.sm }}>
-                    Someone invited you to fish together. Accept to join; then link your trip from this screen or the
-                    journal.
+                    {`Accept to join the group. You'll pick which of your trips to connect (same outing, within 5 days of theirs). Your trips stay separate in your journal.`}
                   </Text>
                   <View style={styles.rowBtns}>
                     <Pressable
@@ -266,23 +311,77 @@ export function TripSessionPeopleSheet({
                 {members.length === 0 ? (
                   <Text style={{ color: colors.textSecondary }}>No members loaded.</Text>
                 ) : (
-                  members.map((m) => (
-                    <Text key={m.user_id} style={{ color: colors.text, marginBottom: Spacing.xs }}>
-                      {m.user_id === userId ? 'You' : friendRows.find((f) => f.id === m.user_id)?.label ?? m.user_id}
-                      {m.role === 'owner' ? ' (owner)' : ''}
-                    </Text>
-                  ))
+                  members.map((m) => {
+                    const isSelf = m.user_id === userId;
+                    const row = friendRows.find((f) => f.id === m.user_id);
+                    const displayName = isSelf ? 'You' : row?.label ?? m.user_id;
+                    const uri = isSelf
+                      ? profile?.avatar_url?.trim() || row?.avatarUrl || null
+                      : row?.avatarUrl ?? null;
+                    const letter = isSelf
+                      ? profileInitialLetter(profile)
+                      : initialFromDisplayName(row?.label ?? '');
+                    const suffix = m.role === 'owner' ? ' (owner)' : '';
+                    return (
+                      <View key={m.user_id} style={styles.memberRow}>
+                        {uri ? (
+                          <Image
+                            source={{ uri }}
+                            style={[styles.memberAvatar, { backgroundColor: colors.borderLight }]}
+                            contentFit="cover"
+                            accessibilityIgnoresInvertColors
+                          />
+                        ) : (
+                          <View style={[styles.memberAvatar, { backgroundColor: colors.primary }]}>
+                            <Text style={[styles.memberAvatarLetter, { color: colors.textInverse }]}>{letter}</Text>
+                          </View>
+                        )}
+                        <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>
+                          {displayName}
+                          {suffix}
+                        </Text>
+                      </View>
+                    );
+                  })
                 )}
               </View>
 
               {invitesOut.length > 0 ? (
                 <View style={styles.section}>
                   <Text style={[styles.sectionTitle, { color: colors.text }]}>Pending invites</Text>
-                  {invitesOut.map((i) => (
-                    <Text key={i.id} style={{ color: colors.textSecondary, fontSize: FontSize.sm }}>
-                      Waiting for response…
-                    </Text>
-                  ))}
+                  <Text style={[styles.hint, { color: colors.textSecondary, marginBottom: Spacing.sm }]}>
+                    Waiting for them to accept from their Home or Friends screen.
+                  </Text>
+                  {invitesOut.map((i) => {
+                    const row = friendRows.find((f) => f.id === i.invitee_id);
+                    const label = row?.label ?? 'Friend';
+                    const uri = row?.avatarUrl;
+                    const letter = initialFromDisplayName(label);
+                    return (
+                      <View key={i.id} style={styles.memberRow}>
+                        {uri ? (
+                          <Image
+                            source={{ uri }}
+                            style={[styles.memberAvatar, { backgroundColor: colors.borderLight }]}
+                            contentFit="cover"
+                            accessibilityIgnoresInvertColors
+                          />
+                        ) : (
+                          <View style={[styles.memberAvatar, { backgroundColor: colors.primary }]}>
+                            <Text style={[styles.memberAvatarLetter, { color: colors.textInverse }]}>{letter}</Text>
+                          </View>
+                        )}
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>
+                            {label}
+                          </Text>
+                          <Text style={{ color: colors.textSecondary, fontSize: FontSize.sm }} numberOfLines={1}>
+                            Waiting for response…
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
                 </View>
               ) : null}
 
@@ -293,16 +392,36 @@ export function TripSessionPeopleSheet({
                     Add friends from Profile → Friends, then invite them here.
                   </Text>
                 ) : (
-                  friendsNotInSession.map((f) => (
-                    <Pressable
-                      key={f.id}
-                      style={[styles.inviteRow, { borderColor: colors.border }]}
-                      onPress={() => void handleInvite(f.id)}
-                    >
-                      <Text style={{ color: colors.text }}>{f.label}</Text>
-                      <MaterialIcons name="person-add" size={22} color={colors.primary} />
-                    </Pressable>
-                  ))
+                  friendsNotInSession.map((f) => {
+                    const uri = f.avatarUrl;
+                    const letter = initialFromDisplayName(f.label);
+                    return (
+                      <Pressable
+                        key={f.id}
+                        style={[styles.inviteRow, { borderColor: colors.border }]}
+                        onPress={() => void handleInvite(f.id)}
+                      >
+                        <View style={styles.inviteRowLeft}>
+                          {uri ? (
+                            <Image
+                              source={{ uri }}
+                              style={[styles.memberAvatar, { backgroundColor: colors.borderLight }]}
+                              contentFit="cover"
+                              accessibilityIgnoresInvertColors
+                            />
+                          ) : (
+                            <View style={[styles.memberAvatar, { backgroundColor: colors.primary }]}>
+                              <Text style={[styles.memberAvatarLetter, { color: colors.textInverse }]}>{letter}</Text>
+                            </View>
+                          )}
+                          <Text style={[styles.inviteRowLabel, { color: colors.text }]} numberOfLines={1}>
+                            {f.label}
+                          </Text>
+                        </View>
+                        <MaterialIcons name="person-add" size={22} color={colors.primary} />
+                      </Pressable>
+                    );
+                  })
                 )}
               </View>
 
@@ -354,5 +473,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.sm,
   },
+  inviteRowLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minWidth: 0 },
+  inviteRowLabel: { flex: 1, fontSize: FontSize.md, fontWeight: '500' },
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+    minHeight: MEMBER_AVATAR,
+  },
+  memberAvatar: {
+    width: MEMBER_AVATAR,
+    height: MEMBER_AVATAR,
+    borderRadius: BorderRadius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  memberAvatarLetter: { fontSize: FontSize.md, fontWeight: '700' },
+  memberName: { flex: 1, fontSize: FontSize.md, fontWeight: '500', minWidth: 0 },
 });

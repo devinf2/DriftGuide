@@ -229,6 +229,10 @@ function ThemedNavigation() {
             name="trip/[id]"
             options={{ headerShown: false, animation: 'slide_from_right' }}
           />
+          <Stack.Screen
+            name="session/link-trip"
+            options={{ headerShown: false, animation: 'slide_from_right' }}
+          />
           <Stack.Screen name="photos" options={{ headerShown: false }} />
           <Stack.Screen
             name="fly-box"

@@ -7,16 +7,24 @@ import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constan
 import { useGuideChatContext } from '@/src/hooks/useGuideChatContext';
 import { useHomeHatchBriefing } from '@/src/hooks/useHomeHatchBriefing';
 import { useHomeHotSpots } from '@/src/hooks/useHomeHotSpots';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { fetchProfile } from '@/src/services/friendsService';
+import {
+  acceptSessionInvite,
+  declineSessionInvite,
+  listPendingSessionInvitesForUser,
+} from '@/src/services/sharedSessionService';
+import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
 import { useAuthStore } from '@/src/stores/authStore';
 import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { Trip } from '@/src/types';
+import { Trip, type SessionInvite } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
 import { profileFirstName } from '@/src/utils/profileDisplay';
 import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
@@ -91,6 +99,14 @@ function createHomeStyles(colors: ThemeColors) {
       alignItems: 'center',
       marginTop: Spacing.sm,
     },
+    /** Invite UI must stack vertically; row + sibling End was drawing End off to the right edge. */
+    pausedTripInviteColumn: {
+      flex: 1,
+      flexDirection: 'column',
+      alignSelf: 'stretch',
+      minWidth: 0,
+      gap: 0,
+    },
     resumeTripBtn: {
       flex: 1,
       flexDirection: 'row',
@@ -117,6 +133,65 @@ function createHomeStyles(colors: ThemeColors) {
       color: colors.error,
       fontSize: FontSize.sm,
       fontWeight: '600',
+    },
+    groupInviteBlock: {
+      marginBottom: Spacing.md,
+    },
+    groupInviteBlockLast: {
+      marginBottom: 0,
+    },
+    groupInviteHint: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      marginBottom: Spacing.sm,
+    },
+    groupInviteBtnRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      alignItems: 'center',
+    },
+    acceptInviteBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: Spacing.xs,
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.md,
+      paddingVertical: Spacing.sm,
+    },
+    acceptInviteBtnText: {
+      color: colors.textInverse,
+      fontSize: FontSize.sm,
+      fontWeight: '700',
+    },
+    declineInviteBtn: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: Spacing.sm,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surfaceElevated,
+    },
+    declineInviteBtnText: {
+      color: colors.text,
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+    },
+    groupInviteSectionTitle: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: Spacing.sm,
+    },
+    groupInviteHomeBanner: {
+      paddingHorizontal: Spacing.xl,
+      paddingBottom: Spacing.md,
     },
     activeTripCard: {
       backgroundColor: colors.primary,
@@ -183,9 +258,37 @@ export default function HomeScreen() {
   } = useTripStore();
   const fullHome = !activeTrip || isTripPaused;
   const { profile, user } = useAuthStore();
+  const { isConnected } = useNetworkStatus();
   const [elapsed, setElapsed] = useState('0m');
   const [refreshing, setRefreshing] = useState(false);
   const [briefingRefreshKey, setBriefingRefreshKey] = useState(0);
+  const [sessionInviteRows, setSessionInviteRows] = useState<
+    { invite: SessionInvite; inviterName: string }[]
+  >([]);
+
+  const loadSessionInvites = useCallback(async () => {
+    const uid = user?.id;
+    if (!uid) {
+      setSessionInviteRows([]);
+      return;
+    }
+    const list = await listPendingSessionInvitesForUser(uid);
+    const rows: { invite: SessionInvite; inviterName: string }[] = [];
+    for (const inv of list) {
+      const p = await fetchProfile(inv.inviter_id);
+      rows.push({
+        invite: inv,
+        inviterName: p?.display_name?.trim() || 'A friend',
+      });
+    }
+    setSessionInviteRows(rows);
+  }, [user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadSessionInvites();
+    }, [loadSessionInvites]),
+  );
 
   const getContext = useGuideChatContext();
   const { hotSpotList, hotSpotLoading, watersForRegionalBriefing, userCoords } = useHomeHotSpots(
@@ -265,8 +368,9 @@ export default function HomeScreen() {
     setRefreshing(true);
     if (user?.id && fullHome) fetchPlannedTrips(user.id);
     if (fullHome) setBriefingRefreshKey((k) => k + 1);
+    void loadSessionInvites();
     setRefreshing(false);
-  }, [user?.id, fullHome, fetchPlannedTrips]);
+  }, [user?.id, fullHome, fetchPlannedTrips, loadSessionInvites]);
 
   const handleResumeTrip = useCallback(() => {
     const s = useTripStore.getState();
@@ -276,9 +380,43 @@ export default function HomeScreen() {
     router.push(`/trip/${tripId}`);
   }, [router]);
 
+  const handleAcceptSessionInvite = useCallback(
+    async (inv: SessionInvite) => {
+      const uid = user?.id;
+      if (!uid) return;
+      if (!isConnected) {
+        Alert.alert('Offline', 'Connect to the internet to accept this invite.');
+        return;
+      }
+      const ok = await acceptSessionInvite(inv, uid);
+      if (!ok) {
+        Alert.alert('Could not accept', 'Try again.');
+        return;
+      }
+      await loadSessionInvites();
+      router.push(buildLinkTripAfterAcceptPath(inv));
+    },
+    [user?.id, isConnected, loadSessionInvites, router],
+  );
+
+  const handleDeclineSessionInvite = useCallback(
+    async (inv: SessionInvite) => {
+      if (!isConnected) {
+        Alert.alert('Offline', 'Connect to the internet to decline this invite.');
+        return;
+      }
+      await declineSessionInvite(inv.id);
+      void loadSessionInvites();
+    },
+    [isConnected, loadSessionInvites],
+  );
+
   const handleEndTripFromHome = useCallback(() => {
     if (!activeTrip) return;
-    Alert.alert('End Trip', `End this trip with ${formatFishCount(fishCount)}?`, [
+    const endMsg = activeTrip.shared_session_id
+      ? `This ends only your trip. Friends in your fishing group keep their own trips; the group stays active.\n\nEnd with ${formatFishCount(fishCount)}?`
+      : `End this trip with ${formatFishCount(fishCount)}?`;
+    Alert.alert('End Trip', endMsg, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'End Trip',
@@ -304,6 +442,8 @@ export default function HomeScreen() {
     },
     [router],
   );
+
+  const hasPendingGroupInvites = sessionInviteRows.length > 0;
 
   if (activeTrip && !isTripPaused) {
     return (
@@ -364,13 +504,54 @@ export default function HomeScreen() {
               <MaterialCommunityIcons name="chevron-right" size={22} color={colors.textTertiary} />
             </Pressable>
             <View style={styles.pausedTripActions}>
-              <Pressable style={styles.resumeTripBtn} onPress={handleResumeTrip}>
-                <MaterialCommunityIcons name="play" size={20} color={colors.textInverse} />
-                <Text style={styles.resumeTripBtnText}>Resume</Text>
-              </Pressable>
-              <Pressable style={styles.endTripFromHomeBtn} onPress={handleEndTripFromHome}>
-                <Text style={styles.endTripFromHomeBtnText}>End trip</Text>
-              </Pressable>
+              {hasPendingGroupInvites ? (
+                <View style={styles.pausedTripInviteColumn}>
+                  {sessionInviteRows.map(({ invite, inviterName }, idx) => (
+                    <View
+                      key={invite.id}
+                      style={[
+                        styles.groupInviteBlock,
+                        idx === sessionInviteRows.length - 1 ? styles.groupInviteBlockLast : undefined,
+                      ]}
+                    >
+                      <Text style={styles.groupInviteHint}>
+                        {`${inviterName} invited you to a shared fishing group. Accept to choose which trip to link, or decline. After you respond, you can resume or end your trip from here.`}
+                      </Text>
+                      <View style={styles.groupInviteBtnRow}>
+                        <Pressable
+                          style={[styles.acceptInviteBtn, !isConnected && { opacity: 0.5 }]}
+                          onPress={() => void handleAcceptSessionInvite(invite)}
+                          disabled={!isConnected}
+                          accessibilityRole="button"
+                          accessibilityLabel="Accept fishing group invite"
+                        >
+                          <MaterialCommunityIcons name="account-group" size={18} color={colors.textInverse} />
+                          <Text style={styles.acceptInviteBtnText}>Accept</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.declineInviteBtn, !isConnected && { opacity: 0.5 }]}
+                          onPress={() => void handleDeclineSessionInvite(invite)}
+                          disabled={!isConnected}
+                          accessibilityRole="button"
+                          accessibilityLabel="Decline fishing group invite"
+                        >
+                          <Text style={styles.declineInviteBtnText}>Decline</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <>
+                  <Pressable style={styles.resumeTripBtn} onPress={handleResumeTrip}>
+                    <MaterialCommunityIcons name="play" size={20} color={colors.textInverse} />
+                    <Text style={styles.resumeTripBtnText}>Resume</Text>
+                  </Pressable>
+                  <Pressable style={styles.endTripFromHomeBtn} onPress={handleEndTripFromHome}>
+                    <Text style={styles.endTripFromHomeBtnText}>End trip</Text>
+                  </Pressable>
+                </>
+              )}
             </View>
           </View>
         </View>
@@ -389,6 +570,45 @@ export default function HomeScreen() {
           listHeaderComponent={
             fullHome ? (
               <View>
+                {hasPendingGroupInvites && !(activeTrip && isTripPaused) ? (
+                  <View style={styles.groupInviteHomeBanner}>
+                    <Text style={styles.groupInviteSectionTitle}>Fishing group invites</Text>
+                    {sessionInviteRows.map(({ invite, inviterName }, idx) => (
+                      <View
+                        key={invite.id}
+                        style={[
+                          styles.groupInviteBlock,
+                          idx === sessionInviteRows.length - 1 ? styles.groupInviteBlockLast : undefined,
+                        ]}
+                      >
+                        <Text style={styles.groupInviteHint}>
+                          {`${inviterName} invited you to fish together. After you accept, you'll pick which of your trips to link (within 5 days of their outing).`}
+                        </Text>
+                        <View style={styles.groupInviteBtnRow}>
+                          <Pressable
+                            style={[styles.acceptInviteBtn, !isConnected && { opacity: 0.5 }]}
+                            onPress={() => void handleAcceptSessionInvite(invite)}
+                            disabled={!isConnected}
+                            accessibilityRole="button"
+                            accessibilityLabel="Accept fishing group invite"
+                          >
+                            <MaterialCommunityIcons name="account-group" size={18} color={colors.textInverse} />
+                            <Text style={styles.acceptInviteBtnText}>Accept</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.declineInviteBtn, !isConnected && { opacity: 0.5 }]}
+                            onPress={() => void handleDeclineSessionInvite(invite)}
+                            disabled={!isConnected}
+                            accessibilityRole="button"
+                            accessibilityLabel="Decline fishing group invite"
+                          >
+                            <Text style={styles.declineInviteBtnText}>Decline</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
                 <FishHomeIntro
                   userFirstName={profileFirstName(profile)}
                   briefingLoading={hotSpotLoading}

@@ -35,6 +35,7 @@ import {
   listPendingSessionInvitesForUser,
 } from '@/src/services/sharedSessionService';
 import type { FriendshipRow, SessionInvite } from '@/src/types';
+import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { profileInitialLetter } from '@/src/utils/profileDisplay';
@@ -327,8 +328,8 @@ export default function FriendsScreen() {
       Alert.alert('Error', 'Could not accept invite.');
       return;
     }
-    Alert.alert('Joined', 'Open a trip and use the group (people) button to link your trip to this fishing group.');
     void loadSessionInvites();
+    router.push(buildLinkTripAfterAcceptPath(inv));
   };
 
   return (
@@ -355,7 +356,9 @@ export default function FriendsScreen() {
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Fishing group invites</Text>
             {sessionInvites.map((inv) => (
               <View key={inv.id} style={[styles.card, { borderColor: colors.border }]}>
-                <Text style={{ color: colors.text, marginBottom: Spacing.sm }}>You’re invited to fish together.</Text>
+                <Text style={{ color: colors.text, marginBottom: Spacing.sm }}>
+                  {"You're invited to fish together. Accept to pick which trip to link to the group."}
+                </Text>
                 <View style={styles.row}>
                   <Pressable
                     style={[styles.smallBtn, { backgroundColor: colors.primary }]}

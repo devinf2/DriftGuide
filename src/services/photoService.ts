@@ -59,6 +59,28 @@ export async function fetchPhotosForTripIds(userId: string, tripIds: string[]): 
   return list;
 }
 
+/**
+ * Album rows for the given trips visible to the signed-in user (RLS: own rows, shared-session peers,
+ * and trip photo visibility rules). No `user_id` filter — peers' trip photos are included when allowed.
+ */
+export async function fetchPhotosVisibleForTripIds(tripIds: string[]): Promise<Photo[]> {
+  if (tripIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*')
+    .in('trip_id', tripIds)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.warn('[fetchPhotosVisibleForTripIds] query failed', { tripIds: tripIds.length, error });
+    throw error;
+  }
+  const list = (data as Photo[]) || [];
+  console.log('[fetchPhotosVisibleForTripIds] photos table', { count: list.length });
+  return list;
+}
+
 /** Photo with optional trip and location for library + filters */
 export interface PhotoWithTrip extends Photo {
   trip?: { id: string; location_id: string | null; location?: { id: string; name: string } | null } | null;

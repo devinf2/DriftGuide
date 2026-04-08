@@ -17,7 +17,8 @@ export function formatTripDuration(
 ): string {
   if (options?.imported) return 'Imported';
   const active = options?.activeFishingMs;
-  if (active != null && Number.isFinite(active) && active >= 0) {
+  // `0` often means "unset" after sync/rehydration bugs; prefer wall-clock when the trip has an end time.
+  if (active != null && Number.isFinite(active) && active > 0) {
     return formatDurationFromMs(active);
   }
   const start = new Date(startTime);

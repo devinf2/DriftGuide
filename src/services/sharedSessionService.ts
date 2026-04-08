@@ -1,7 +1,8 @@
 import { supabase } from '@/src/services/supabase';
 import { fetchProfile } from '@/src/services/friendsService';
-import { fetchTripEvents } from '@/src/services/sync';
+import { fetchTripById, fetchTripEvents } from '@/src/services/sync';
 import type {
+  Location,
   SessionInvite,
   SessionMember,
   SharedSession,
@@ -10,7 +11,14 @@ import type {
 } from '@/src/types';
 import { sortEventsByTime } from '@/src/utils/journalTimeline';
 
-export async function createSharedSession(title: string | null, creatorId: string): Promise<string | null> {
+export type CreateSharedSessionResult =
+  | { ok: true; sessionId: string }
+  | { ok: false; message: string };
+
+export async function createSharedSession(
+  title: string | null,
+  creatorId: string,
+): Promise<CreateSharedSessionResult> {
   const { data: session, error: sErr } = await supabase
     .from('shared_sessions')
     .insert({ created_by: creatorId, title: title?.trim() || null })
@@ -19,7 +27,10 @@ export async function createSharedSession(title: string | null, creatorId: strin
 
   if (sErr || !session?.id) {
     console.warn('[createSharedSession]', sErr);
-    return null;
+    return {
+      ok: false,
+      message: sErr?.message?.trim() || 'Could not create group.',
+    };
   }
 
   const sid = session.id as string;
@@ -32,10 +43,13 @@ export async function createSharedSession(title: string | null, creatorId: strin
   if (mErr) {
     console.warn('[createSharedSession] member', mErr);
     await supabase.from('shared_sessions').delete().eq('id', sid);
-    return null;
+    return {
+      ok: false,
+      message: mErr.message?.trim() || 'Could not add you to the group.',
+    };
   }
 
-  return sid;
+  return { ok: true, sessionId: sid };
 }
 
 export async function fetchSharedSession(sessionId: string): Promise<SharedSession | null> {
@@ -69,6 +83,25 @@ export async function listSessionMembers(sessionId: string): Promise<SessionMemb
 }
 
 export async function listTripsInSession(sessionId: string): Promise<Trip[]> {
+  const { data: rpcData, error: rpcError } = await supabase.rpc('list_trips_in_shared_session', {
+    p_session_id: sessionId,
+  });
+  if (!rpcError && rpcData != null) {
+    const rows = (rpcData as Trip[]) ?? [];
+    if (rows.length === 0) return [];
+    const locationIds = [...new Set(rows.map((t) => t.location_id).filter(Boolean))] as string[];
+    if (locationIds.length === 0) return rows;
+    const { data: locRows, error: locErr } = await supabase
+      .from('locations')
+      .select('*')
+      .in('id', locationIds);
+    if (locErr || !locRows?.length) return rows;
+    const locById = new Map((locRows as Location[]).map((l) => [l.id, l]));
+    return rows.map((t) => (t.location_id ? { ...t, location: locById.get(t.location_id) } : t));
+  }
+  if (rpcError) {
+    console.warn('[listTripsInSession] rpc failed, falling back to direct select', rpcError);
+  }
   const { data, error } = await supabase
     .from('trips')
     .select('*, location:locations(*)')
@@ -82,13 +115,27 @@ export async function listTripsInSession(sessionId: string): Promise<Trip[]> {
   return (data as Trip[]) ?? [];
 }
 
-export async function inviteToSession(sessionId: string, inviterId: string, inviteeId: string): Promise<boolean> {
+export type InviteToSessionOptions = {
+  /** Inviter's trip row (the outing they are grouping). */
+  inviterTripId?: string | null;
+  /** Copied from that trip's `start_time` so the invitee can pick a trip within ±5 days without reading your row. */
+  mergeWindowAnchorAt?: string | null;
+};
+
+export async function inviteToSession(
+  sessionId: string,
+  inviterId: string,
+  inviteeId: string,
+  options?: InviteToSessionOptions,
+): Promise<boolean> {
   if (inviterId === inviteeId) return false;
   const { error } = await supabase.from('session_invites').insert({
     shared_session_id: sessionId,
     inviter_id: inviterId,
     invitee_id: inviteeId,
     status: 'pending',
+    inviter_trip_id: options?.inviterTripId ?? null,
+    merge_window_anchor_at: options?.mergeWindowAnchorAt ?? null,
   });
   if (error) {
     console.warn('[inviteToSession]', error);
@@ -109,11 +156,17 @@ export async function listPendingSessionInvitesForUser(userId: string): Promise<
     console.warn('[listPendingSessionInvitesForUser]', error);
     return [];
   }
-  return (data as SessionInvite[]) ?? [];
+  const rows = (data as SessionInvite[]) ?? [];
+  return rows.filter((inv) => inv.inviter_id !== inv.invitee_id);
 }
 
 export async function listSessionInvitesSentFromSession(sessionId: string): Promise<SessionInvite[]> {
-  const { data, error } = await supabase.from('session_invites').select('*').eq('shared_session_id', sessionId);
+  const { data, error } = await supabase
+    .from('session_invites')
+    .select('*')
+    .eq('shared_session_id', sessionId)
+    .eq('status', 'pending')
+    .gt('expires_at', new Date().toISOString());
   if (error) {
     console.warn('[listSessionInvitesSentFromSession]', error);
     return [];
@@ -122,7 +175,9 @@ export async function listSessionInvitesSentFromSession(sessionId: string): Prom
 }
 
 export async function acceptSessionInvite(invite: SessionInvite, userId: string): Promise<boolean> {
-  if (invite.invitee_id !== userId || invite.status !== 'pending') return false;
+  if (invite.invitee_id !== userId || invite.status !== 'pending' || invite.inviter_id === invite.invitee_id) {
+    return false;
+  }
 
   const { error: uErr } = await supabase
     .from('session_invites')
@@ -145,6 +200,34 @@ export async function acceptSessionInvite(invite: SessionInvite, userId: string)
     return false;
   }
   return true;
+}
+
+export async function fetchSessionInviteById(inviteId: string): Promise<SessionInvite | null> {
+  const { data, error } = await supabase.from('session_invites').select('*').eq('id', inviteId).maybeSingle();
+  if (error) {
+    console.warn('[fetchSessionInviteById]', error);
+    return null;
+  }
+  return (data as SessionInvite) ?? null;
+}
+
+/**
+ * Trip to copy location / fishing context from when the invitee has no outing yet.
+ * Uses `inviter_trip_id` when present; otherwise the inviter’s most recent trip in the session.
+ */
+export async function resolveInviterTemplateTripForJoin(
+  sessionId: string,
+  invite: SessionInvite,
+): Promise<Trip | null> {
+  const tid = invite.inviter_trip_id?.trim();
+  if (tid) {
+    const t = await fetchTripById(tid);
+    if (t && !t.deleted_at && t.user_id === invite.inviter_id) return t;
+  }
+  const trips = await listTripsInSession(sessionId);
+  const inviterTrips = trips.filter((x) => x.user_id === invite.inviter_id && !x.deleted_at);
+  inviterTrips.sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
+  return inviterTrips[0] ?? null;
 }
 
 export async function declineSessionInvite(inviteId: string): Promise<boolean> {
@@ -188,9 +271,8 @@ export async function leaveSession(sessionId: string, userId: string): Promise<b
   return true;
 }
 
-/** Merged Group timeline: all events from trips in the session, sorted, with attribution. */
-export async function fetchMergedSessionEvents(sessionId: string): Promise<TripEventWithSource[]> {
-  const trips = await listTripsInSession(sessionId);
+/** Merged Group timeline: all events from the given session child trips, sorted, with attribution by trip + user. */
+export async function fetchMergedSessionEventsForTrips(trips: Trip[]): Promise<TripEventWithSource[]> {
   if (trips.length === 0) return [];
 
   const nameByUser = new Map<string, string>();
@@ -202,14 +284,15 @@ export async function fetchMergedSessionEvents(sessionId: string): Promise<TripE
   }
 
   const merged: TripEventWithSource[] = [];
-  for (const trip of trips) {
-    const events = await fetchTripEvents(trip.id);
-    const name = nameByUser.get(trip.user_id) ?? 'Angler';
-    for (const e of events) {
+  for (const tr of trips) {
+    const evs = await fetchTripEvents(tr.id);
+    const name = nameByUser.get(tr.user_id) ?? 'Angler';
+    for (const e of evs) {
       merged.push({
         ...e,
-        source_user_id: trip.user_id,
+        source_user_id: tr.user_id,
         source_display_name: name,
+        source_trip_id: tr.id,
       });
     }
   }
@@ -217,18 +300,15 @@ export async function fetchMergedSessionEvents(sessionId: string): Promise<TripE
   return sortEventsByTime(merged as import('@/src/types').TripEvent[]) as TripEventWithSource[];
 }
 
-export async function findTripForUserInSession(sessionId: string, userId: string): Promise<Trip | null> {
-  const { data, error } = await supabase
-    .from('trips')
-    .select('*, location:locations(*)')
-    .eq('shared_session_id', sessionId)
-    .eq('user_id', userId)
-    .is('deleted_at', null)
-    .maybeSingle();
+export async function fetchMergedSessionEvents(sessionId: string): Promise<TripEventWithSource[]> {
+  const trips = await listTripsInSession(sessionId);
+  return fetchMergedSessionEventsForTrips(trips);
+}
 
-  if (error) {
-    console.warn('[findTripForUserInSession]', error);
-    return null;
-  }
-  return data as Trip | null;
+export async function findTripForUserInSession(sessionId: string, userId: string): Promise<Trip | null> {
+  const trips = await listTripsInSession(sessionId);
+  const mine = trips.filter((t) => t.user_id === userId);
+  if (mine.length === 0) return null;
+  mine.sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
+  return mine[0] ?? null;
 }

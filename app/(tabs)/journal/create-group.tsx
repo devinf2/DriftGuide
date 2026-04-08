@@ -61,13 +61,13 @@ export default function CreateGroupSessionScreen() {
     }
     setSaving(true);
     try {
-      const sid = await createSharedSession('Fishing group', user.id);
-      if (!sid) {
-        Alert.alert('Error', 'Could not create group.');
+      const created = await createSharedSession('Fishing group', user.id);
+      if (!created.ok) {
+        Alert.alert('Could not create group', created.message);
         return;
       }
       for (const tripId of selected) {
-        const ok = await attachTripToSession(tripId, sid);
+        const ok = await attachTripToSession(tripId, created.sessionId);
         if (!ok) {
           Alert.alert('Partial success', 'Some trips may not have linked. Check each trip’s group settings.');
           break;

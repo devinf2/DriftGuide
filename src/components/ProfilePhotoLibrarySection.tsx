@@ -14,14 +14,15 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { getPinnedTripIds } from '@/src/services/tripPhotoOfflineCache';
 import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -72,6 +73,8 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     [winWidth],
   );
 
+  const photoModalHeroHeight = useMemo(() => Math.round(winHeight * 0.55), [winHeight]);
+
   const [photos, setPhotos] = useState<PhotoWithTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -96,19 +99,26 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [hasTripsSavedForOffline, setHasTripsSavedForOffline] = useState(false);
 
+  /** Prevents parallel loadPhotos() runs (useFocusEffect + effects) from clearing loading too early. */
+  const loadPhotosSeqRef = useRef(0);
+
   const loadPhotos = useCallback(async () => {
     if (!albumOwnerId) return;
+    const seq = ++loadPhotosSeqRef.current;
     setLoading(true);
     try {
       const pinnedIds = await getPinnedTripIds();
+      if (seq !== loadPhotosSeqRef.current) return;
       setHasTripsSavedForOffline(pinnedIds.length > 0);
       if (!isConnected) {
         setPhotos([]);
         return;
       }
       const list = await fetchPhotosWithTrip(albumOwnerId);
+      if (seq !== loadPhotosSeqRef.current) return;
       setPhotos(list);
     } catch (e) {
+      if (seq !== loadPhotosSeqRef.current) return;
       if (!isConnected) {
         setPhotos([]);
       } else {
@@ -116,19 +126,18 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
         setPhotos([]);
       }
     } finally {
-      setLoading(false);
+      if (seq === loadPhotosSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [albumOwnerId, isConnected]);
 
+  const isFocused = useIsFocused();
+  /** One entry point: focus + `loadPhotos` identity (owner, connectivity) replaces useFocusEffect + duplicate effect. */
   useEffect(() => {
-    loadPhotos();
-  }, [loadPhotos]);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadPhotos();
-    }, [loadPhotos]),
-  );
+    if (!isFocused) return;
+    void loadPhotos();
+  }, [isFocused, loadPhotos]);
 
   useEffect(() => {
     if (refreshSignal === 0) return;
@@ -332,7 +341,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   );
 
   return (
-    <View style={styles.wrap}>
+    <View style={styles.wrap} pointerEvents="box-none">
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Photos</Text>
         <View style={styles.sectionHeaderActions}>
@@ -375,11 +384,18 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
       ) : null}
 
       {loading ? (
-        <View style={styles.placeholder}>
-          <ActivityIndicator color={colors.primary} />
+        <View
+          style={styles.empty}
+          pointerEvents="none"
+          accessibilityRole="progressbar"
+          accessibilityState={{ busy: true }}
+          accessibilityLabel="Loading photos"
+        >
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.emptyText}>Loading photos…</Text>
         </View>
       ) : filteredPhotos.length === 0 ? (
-        <View style={styles.empty}>
+        <View style={styles.empty} pointerEvents="none">
           <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
           <Text style={styles.emptyText}>
             {!isConnected && photos.length === 0
@@ -723,11 +739,32 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
               ]}
               showsVerticalScrollIndicator={false}
             >
-              <OfflineTripPhotoImage
-                remoteUri={selectedPhoto.url}
-                style={[styles.fullScreenImage, { width: winWidth, height: Math.round(winHeight * 0.55) }]}
-                contentFit="contain"
-              />
+              {Platform.OS === 'ios' ? (
+                <ScrollView
+                  style={[styles.fullScreenZoomViewport, { width: winWidth, height: photoModalHeroHeight }]}
+                  contentContainerStyle={{ width: winWidth, height: photoModalHeroHeight }}
+                  minimumZoomScale={1}
+                  maximumZoomScale={4}
+                  centerContent
+                  bouncesZoom
+                  showsHorizontalScrollIndicator={false}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={{ width: winWidth, height: photoModalHeroHeight }}>
+                    <OfflineTripPhotoImage
+                      remoteUri={selectedPhoto.url}
+                      style={{ width: winWidth, height: photoModalHeroHeight }}
+                      contentFit="contain"
+                    />
+                  </View>
+                </ScrollView>
+              ) : (
+                <OfflineTripPhotoImage
+                  remoteUri={selectedPhoto.url}
+                  style={[styles.fullScreenImage, { width: winWidth, height: photoModalHeroHeight }]}
+                  contentFit="contain"
+                />
+              )}
               <View style={styles.photoInfo}>
                 {selectedPhoto.trip?.location?.name ? (
                   <Text style={styles.photoInfoRow}>
@@ -837,11 +874,6 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
     height: 8,
     borderRadius: 4,
     backgroundColor: colors.primary,
-  },
-  placeholder: {
-    minHeight: 120,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   empty: {
     minHeight: 120,
@@ -1085,6 +1117,10 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
     flexGrow: 1,
   },
   fullScreenImage: {
+    marginTop: Spacing.sm,
+  },
+  /** iOS: single child for UIScrollView pinch zoom (see full-screen photo modal). */
+  fullScreenZoomViewport: {
     marginTop: Spacing.sm,
   },
   photoInfo: {

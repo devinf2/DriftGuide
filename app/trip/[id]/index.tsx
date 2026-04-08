@@ -56,7 +56,10 @@ import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
+import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
+import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
+import { listPendingSessionInvitesForUser } from '@/src/services/sharedSessionService';
 import {
   AIQueryData,
   CatchData,
@@ -73,6 +76,7 @@ import {
 } from '@/src/types';
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
+import { getTripEventDescription } from '@/src/utils/journalTimeline';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
 import {
@@ -86,7 +90,7 @@ import { tripMapDefaultCenterCoordinate, tripMapDefaultZoom } from '@/src/utils/
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { v4 as uuidv4 } from 'uuid';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -152,12 +156,34 @@ export default function TripDashboardScreen() {
     refreshSmartRecommendation,
     replaceActiveTripEvents,
     patchActiveTrip,
+    clearActiveTrip,
   } = useTripStore();
 
   const { user } = useAuthStore();
   const friendships = useFriendsStore((s) => s.friendships);
   const refreshFriends = useFriendsStore((s) => s.refresh);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
+  const [pendingGroupSessionInvites, setPendingGroupSessionInvites] = useState(false);
+
+  const refreshPendingGroupInvites = useCallback(async () => {
+    const uid = user?.id;
+    if (!uid) {
+      setPendingGroupSessionInvites(false);
+      return;
+    }
+    const list = await listPendingSessionInvitesForUser(uid);
+    setPendingGroupSessionInvites(list.length > 0);
+  }, [user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshPendingGroupInvites();
+    }, [refreshPendingGroupInvites]),
+  );
+
+  useEffect(() => {
+    if (!peopleSheetVisible) void refreshPendingGroupInvites();
+  }, [peopleSheetVisible, refreshPendingGroupInvites]);
 
   const locations = useLocationStore((s) => s.locations);
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
@@ -253,6 +279,10 @@ export default function TripDashboardScreen() {
     let cancelled = false;
     void fetchTripById(activeTrip.id).then((t) => {
       if (cancelled || !t) return;
+      if (user?.id && t.user_id !== user.id) {
+        clearActiveTrip();
+        return;
+      }
       const sid = t.shared_session_id ?? null;
       const cur = activeTrip.shared_session_id ?? null;
       if (sid !== cur) patchActiveTrip({ shared_session_id: sid });
@@ -260,7 +290,23 @@ export default function TripDashboardScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeTrip?.id, activeTrip?.shared_session_id, isConnected, patchActiveTrip]);
+  }, [
+    activeTrip?.id,
+    activeTrip?.shared_session_id,
+    activeTrip?.user_id,
+    isConnected,
+    user?.id,
+    patchActiveTrip,
+    clearActiveTrip,
+  ]);
+
+  /** Live trip UI is driven by the store; keep the URL aligned so deep links don’t show another id while editing a different active trip. */
+  useEffect(() => {
+    if (!id || !activeTrip?.id || activeTrip.status !== 'active') return;
+    if (!user?.id || activeTrip.user_id !== user.id) return;
+    if (id === activeTrip.id) return;
+    router.replace(`/trip/${activeTrip.id}`);
+  }, [id, activeTrip?.id, activeTrip?.status, activeTrip?.user_id, user?.id, router]);
 
   useEffect(() => {
     (async () => {
@@ -522,12 +568,7 @@ export default function TripDashboardScreen() {
       };
 
       const catchOptions =
-        catchTimestampIso != null || conditionsSnapshot !== undefined
-          ? {
-              ...(catchTimestampIso != null ? { timestampIso: catchTimestampIso } : {}),
-              ...(conditionsSnapshot !== undefined ? { conditionsSnapshot } : {}),
-            }
-          : undefined;
+        conditionsSnapshot !== undefined ? { conditionsSnapshot } : undefined;
 
       const hasPhotos = photoUris.length > 0;
       const eventId = addCatch(
@@ -601,13 +642,27 @@ export default function TripDashboardScreen() {
 
   const handleCatchSubmitEdit = useCallback(
     async (nextEvents: TripEvent[]) => {
-      replaceActiveTripEvents(nextEvents);
+      replaceActiveTripEvents(nextEvents, {
+        viewerUserId: user?.id ?? activeTrip?.user_id,
+      });
     },
-    [replaceActiveTripEvents],
+    [replaceActiveTripEvents, user?.id, activeTrip?.user_id],
   );
 
   const handleEndTrip = () => {
-    Alert.alert('End Trip', `End this trip with ${formatFishCount(fishCount)}?`, [
+    if (!activeTrip) return;
+    if (pendingGroupSessionInvites) {
+      Alert.alert(
+        'Fishing group invite',
+        'Accept or decline the invite on Home first. After that you can end your trip if you want.',
+        [{ text: 'OK', onPress: () => router.replace('/home') }],
+      );
+      return;
+    }
+    const endMsg = activeTrip.shared_session_id
+      ? `This ends only your trip. Friends in your fishing group keep their own trips; the group stays active.\n\nEnd with ${formatFishCount(fishCount)}?`
+      : `End this trip with ${formatFishCount(fishCount)}?`;
+    Alert.alert('End Trip', endMsg, [
       { text: 'Keep Fishing', style: 'cancel' },
       {
         text: 'End Trip',
@@ -647,6 +702,17 @@ export default function TripDashboardScreen() {
   };
 
   const handleResumeTrip = async () => {
+    if (pendingGroupSessionInvites) {
+      Alert.alert(
+        'Fishing group invite',
+        'Accept or decline on the Fish tab before resuming this trip.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Go to Fish tab', onPress: () => router.replace('/home') },
+        ],
+      );
+      return;
+    }
     await resumeTrip();
   };
 
@@ -1011,9 +1077,11 @@ export default function TripDashboardScreen() {
               <Text style={styles.pauseResumeButtonText}>Pause</Text>
             </Pressable>
           )}
-          <Pressable style={styles.endButton} onPress={handleEndTrip}>
-            <Text style={styles.endButtonText}>End</Text>
-          </Pressable>
+          {!pendingGroupSessionInvites ? (
+            <Pressable style={styles.endButton} onPress={handleEndTrip}>
+              <Text style={styles.endButtonText}>End</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
 
@@ -1046,6 +1114,7 @@ export default function TripDashboardScreen() {
           <FishingTab
             activeTrip={activeTrip}
             replaceActiveTripEvents={replaceActiveTripEvents}
+            patchActiveTrip={patchActiveTrip}
             currentFly={currentFly}
             currentFly2={currentFly2}
             openFlyPicker={openFlyPicker}
@@ -1066,6 +1135,8 @@ export default function TripDashboardScreen() {
             userFlies={userFlies}
             onCatchPhotoPress={handleCatchPhotoPress}
             tripPaused={isTripPaused}
+            userId={user?.id ?? activeTrip.user_id}
+            isConnected={isConnected}
             styles={styles}
             colors={colors}
           />
@@ -1105,16 +1176,29 @@ export default function TripDashboardScreen() {
         recommendationLoading={recommendationLoading}
       />
 
-      {activeTab === 'photos' && (
-        <PhotosTab
-          tripPhotos={tripPhotos}
-          loading={tripPhotosLoading}
-          uploading={tripPhotoUploading}
-          onAddPhoto={handlePickTripPhoto}
-          onPhotoPress={handleTripPhotoPress}
-          styles={styles}
-          colors={colors}
-        />
+      {activeTab === 'photos' && activeTrip && (
+        activeTrip.shared_session_id ? (
+          <SharedTripPhotosSection
+            trip={activeTrip}
+            viewerUserId={user?.id ?? activeTrip.user_id}
+            isConnected={isConnected}
+            myTripPhotos={tripPhotos}
+            myPhotosLoading={tripPhotosLoading}
+            onPhotoPress={handleTripPhotoPress}
+            onAddPhoto={handlePickTripPhoto}
+            uploading={tripPhotoUploading}
+          />
+        ) : (
+          <PhotosTab
+            tripPhotos={tripPhotos}
+            loading={tripPhotosLoading}
+            uploading={tripPhotoUploading}
+            onAddPhoto={handlePickTripPhoto}
+            onPhotoPress={handleTripPhotoPress}
+            styles={styles}
+            colors={colors}
+          />
+        )
       )}
 
       {activeTab === 'conditions' && (
@@ -1203,6 +1287,7 @@ export default function TripDashboardScreen() {
 function FishingTab({
   activeTrip,
   replaceActiveTripEvents,
+  patchActiveTrip,
   currentFly, currentFly2,
   openFlyPicker, fishCount, removeCatch, onFishPlus, onEditCatch, onEditFlyChange,
   showNoteInput, setShowNoteInput, noteText, setNoteText, handleAddNote,
@@ -1212,9 +1297,12 @@ function FishingTab({
   userFlies: _userFlies = [],
   onCatchPhotoPress,
   tripPaused = false,
+  userId,
+  isConnected,
   styles,
   colors,
 }: any) {
+  const useSharedGroupTimeline = Boolean(activeTrip.shared_session_id && userId);
   const sortedEvents = useMemo(() => sortEventsByTime(events), [events]);
   const [rowActions, setRowActions] = useState<{ event: TripEvent; index: number } | null>(null);
   const [noteModal, setNoteModal] = useState<TripEvent | null>(null);
@@ -1224,9 +1312,9 @@ function FishingTab({
 
   const applyEvents = useCallback(
     (next: TripEvent[]) => {
-      replaceActiveTripEvents(next);
+      replaceActiveTripEvents(next, { viewerUserId: userId });
     },
-    [replaceActiveTripEvents],
+    [replaceActiveTripEvents, userId],
   );
 
   const insertNoteAt = useCallback(
@@ -1494,108 +1582,125 @@ function FishingTab({
         </View>
       )}
 
-      {/* Event Timeline */}
-      <ScrollView style={[styles.timeline, { zIndex: 0 }]} keyboardShouldPersistTaps="handled">
-        <Text style={styles.timelineTitle}>Timeline</Text>
-        <Text style={styles.timelineEditHint}>
-          Tap ⋮ on a row to edit, add notes, fish, or fly changes above/below, or delete.
-        </Text>
-        {[...sortedEvents].reverse().map((event: TripEvent, revIdx: number) => {
-          const index = sortedEvents.length - 1 - revIdx;
-          const lifecycleIcon =
-            event.event_type === 'note'
-              ? tripLifecycleNoteTimelineIcon((event.data as NoteData).text, colors)
-              : null;
-          return (
-            <View key={event.id} style={styles.timelineItem}>
-              <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
-              <View style={styles.timelineContent}>
-                <View style={styles.timelineDot}>
-                  {event.event_type === 'catch' ? (
-                    <MaterialCommunityIcons name="fish" size={14} color={colors.primary} />
-                  ) : event.event_type === 'fly_change' ? (
-                    <MaterialCommunityIcons name="hook" size={14} color={colors.accent} />
-                  ) : event.event_type === 'ai_query' ? (
-                    <MaterialIcons name="smart-toy" size={14} color={colors.info} />
-                  ) : event.event_type === 'bite' ? (
-                    <MaterialCommunityIcons name="fish" size={14} color={colors.accent} />
-                  ) : event.event_type === 'fish_on' ? (
-                    <MaterialIcons name="touch-app" size={14} color={colors.primary} />
-                  ) : event.event_type === 'got_off' ? (
-                    <MaterialIcons name="highlight-off" size={14} color={colors.textSecondary} />
-                  ) : lifecycleIcon ? (
-                    <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
-                  ) : (
-                    <MaterialIcons name="edit-note" size={14} color={colors.textSecondary} />
-                  )}
+      {/* Event timeline: group + per-angler tabs when this trip is linked to a shared session */}
+      {useSharedGroupTimeline ? (
+        <View style={{ flex: 1, minHeight: 0, zIndex: 0 }}>
+          <SharedTripTimelineSection
+            trip={activeTrip}
+            userId={userId}
+            isConnected={isConnected}
+            events={events}
+            editMode={!tripPaused}
+            onEventsChange={applyEvents}
+            onTripPatch={patchActiveTrip}
+            onCatchPhotoPress={onCatchPhotoPress}
+          />
+        </View>
+      ) : (
+        <>
+          <ScrollView style={[styles.timeline, { zIndex: 0 }]} keyboardShouldPersistTaps="handled">
+            <Text style={styles.timelineTitle}>Timeline</Text>
+            <Text style={styles.timelineEditHint}>
+              Tap ⋮ on a row to edit, add notes, fish, or fly changes above/below, or delete.
+            </Text>
+            {[...sortedEvents].reverse().map((event: TripEvent, revIdx: number) => {
+              const index = sortedEvents.length - 1 - revIdx;
+              const lifecycleIcon =
+                event.event_type === 'note'
+                  ? tripLifecycleNoteTimelineIcon((event.data as NoteData).text, colors)
+                  : null;
+              return (
+                <View key={event.id} style={styles.timelineItem}>
+                  <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
+                  <View style={styles.timelineContent}>
+                    <View style={styles.timelineDot}>
+                      {event.event_type === 'catch' ? (
+                        <MaterialCommunityIcons name="fish" size={14} color={colors.primary} />
+                      ) : event.event_type === 'fly_change' ? (
+                        <MaterialCommunityIcons name="hook" size={14} color={colors.accent} />
+                      ) : event.event_type === 'ai_query' ? (
+                        <MaterialIcons name="smart-toy" size={14} color={colors.info} />
+                      ) : event.event_type === 'bite' ? (
+                        <MaterialCommunityIcons name="fish" size={14} color={colors.accent} />
+                      ) : event.event_type === 'fish_on' ? (
+                        <MaterialIcons name="touch-app" size={14} color={colors.primary} />
+                      ) : event.event_type === 'got_off' ? (
+                        <MaterialIcons name="highlight-off" size={14} color={colors.textSecondary} />
+                      ) : lifecycleIcon ? (
+                        <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
+                      ) : (
+                        <MaterialIcons name="edit-note" size={14} color={colors.textSecondary} />
+                      )}
+                    </View>
+                    <View style={styles.timelineTextBlock}>
+                      <Text style={styles.timelineText}>
+                        {getTripEventDescription(event)}
+                      </Text>
+                      {event.event_type === 'catch' ? (
+                        <CatchDetailsBlock data={event.data as CatchData} styles={styles} />
+                      ) : null}
+                      {event.event_type === 'catch' ? (
+                        <TimelineCatchPhotoStrip
+                          data={event.data as CatchData}
+                          onPress={() => onCatchPhotoPress?.(event)}
+                          imageStyle={styles.timelineCatchThumb}
+                        />
+                      ) : null}
+                    </View>
+                    <Pressable
+                      style={styles.timelineRowMenuBtn}
+                      onPress={() => setRowActions({ event, index })}
+                      hitSlop={12}
+                      accessibilityLabel="Timeline row actions"
+                    >
+                      <MaterialIcons name="more-vert" size={22} color={colors.textSecondary} />
+                    </Pressable>
+                  </View>
                 </View>
-                <View style={styles.timelineTextBlock}>
-                  <Text style={styles.timelineText}>
-                    {getEventDescription(event)}
-                  </Text>
-                  {event.event_type === 'catch' ? (
-                    <CatchDetailsBlock data={event.data as CatchData} styles={styles} />
-                  ) : null}
-                  {event.event_type === 'catch' ? (
-                    <TimelineCatchPhotoStrip
-                      data={event.data as CatchData}
-                      onPress={() => onCatchPhotoPress?.(event)}
-                      imageStyle={styles.timelineCatchThumb}
-                    />
-                  ) : null}
-                </View>
-                <Pressable
-                  style={styles.timelineRowMenuBtn}
-                  onPress={() => setRowActions({ event, index })}
-                  hitSlop={12}
-                  accessibilityLabel="Timeline row actions"
-                >
-                  <MaterialIcons name="more-vert" size={22} color={colors.textSecondary} />
+              );
+            })}
+          </ScrollView>
+
+          <Modal visible={rowActions != null} transparent animationType="fade" onRequestClose={closeRowMenu}>
+            <View style={styles.tripTimelineActionOverlay}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={closeRowMenu} />
+              <View style={styles.tripTimelineActionSheet}>
+                {rowMenuActions.map((a) => (
+                  <Pressable
+                    key={a.label}
+                    style={styles.tripTimelineActionRow}
+                    onPress={() => {
+                      a.onPress();
+                    }}
+                  >
+                    <Text style={[styles.tripTimelineActionLabel, a.destructive && styles.tripTimelineActionDestructive]}>
+                      {a.label}
+                    </Text>
+                  </Pressable>
+                ))}
+                <Pressable style={styles.tripTimelineActionRow} onPress={closeRowMenu}>
+                  <Text style={styles.tripTimelineActionCancel}>Cancel</Text>
                 </Pressable>
               </View>
             </View>
-          );
-        })}
-      </ScrollView>
+          </Modal>
 
-      <Modal visible={rowActions != null} transparent animationType="fade" onRequestClose={closeRowMenu}>
-        <View style={styles.tripTimelineActionOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeRowMenu} />
-          <View style={styles.tripTimelineActionSheet}>
-            {rowMenuActions.map((a) => (
-              <Pressable
-                key={a.label}
-                style={styles.tripTimelineActionRow}
-                onPress={() => {
-                  a.onPress();
-                }}
-              >
-                <Text style={[styles.tripTimelineActionLabel, a.destructive && styles.tripTimelineActionDestructive]}>
-                  {a.label}
-                </Text>
-              </Pressable>
-            ))}
-            <Pressable style={styles.tripTimelineActionRow} onPress={closeRowMenu}>
-              <Text style={styles.tripTimelineActionCancel}>Cancel</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
-      <TripTimelineNoteModal
-        visible={noteModal != null}
-        event={noteModal}
-        allEvents={events}
-        onClose={() => setNoteModal(null)}
-        onApply={applyEvents}
-      />
-      <TripTimelineAiModal
-        visible={aiModal != null}
-        event={aiModal}
-        allEvents={events}
-        onClose={() => setAiModal(null)}
-        onApply={applyEvents}
-      />
+          <TripTimelineNoteModal
+            visible={noteModal != null}
+            event={noteModal}
+            allEvents={events}
+            onClose={() => setNoteModal(null)}
+            onApply={applyEvents}
+          />
+          <TripTimelineAiModal
+            visible={aiModal != null}
+            event={aiModal}
+            allEvents={events}
+            onClose={() => setAiModal(null)}
+            onApply={applyEvents}
+          />
+        </>
+      )}
       </View>
     </View>
   );
@@ -2107,43 +2212,6 @@ function CatchDetailsBlock({ data, styles }: { data: CatchData; styles: any }) {
       ))}
     </View>
   );
-}
-
-function getEventDescription(event: TripEvent): string {
-  switch (event.event_type) {
-    case 'catch': {
-      const data = event.data as CatchData;
-      const parts: string[] = [];
-      if (data.species) parts.push(data.species);
-      if (data.size_inches != null) parts.push(`${data.size_inches}"`);
-      const qty = data.quantity != null && data.quantity > 1 ? data.quantity : 1;
-      const main = parts.length ? `Caught ${parts.join(' · ')}${qty > 1 ? ` (×${qty})` : ''}` : (qty > 1 ? `${qty} fish caught!` : 'Fish caught!');
-      return main;
-    }
-    case 'fly_change': {
-      const data = event.data as FlyChangeData;
-      const primary = `${data.pattern}${data.size ? ` #${data.size}` : ''}`;
-      return data.pattern2
-        ? `Changed to ${primary} / ${data.pattern2}${data.size2 ? ` #${data.size2}` : ''}`
-        : `Changed to ${primary}`;
-    }
-    case 'note': {
-      const data = event.data as NoteData;
-      return data.text;
-    }
-    case 'ai_query': {
-      const data = event.data as AIQueryData;
-      return `Asked AI: ${data.question}`;
-    }
-    case 'bite':
-      return 'Bite';
-    case 'fish_on':
-      return 'Fish On';
-    case 'got_off':
-      return 'Got off';
-    default:
-      return 'Event';
-  }
 }
 
 type TripTimelineRowAction = { label: string; destructive?: boolean; onPress: () => void };

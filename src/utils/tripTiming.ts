@@ -1,4 +1,5 @@
 import type { TripEvent } from '@/src/types';
+import { coerceTripEventDataObject } from '@/src/utils/journalTimeline';
 import { formatDurationFromMs, formatTripDuration } from './formatters';
 
 /** Re-export for screens that already import trip timing (keeps Metro/Hermes from dropping `formatTripDuration` when the timer bundle needs it). */
@@ -23,8 +24,8 @@ export function getLiveFishingElapsedMs(
 
 function pauseResumeNoteText(e: TripEvent): string | null {
   if (e.event_type !== 'note') return null;
-  const d = e.data as { text?: unknown };
-  return typeof d?.text === 'string' ? d.text : null;
+  const d = coerceTripEventDataObject(e);
+  return typeof d.text === 'string' ? d.text : null;
 }
 
 /**

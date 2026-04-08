@@ -94,12 +94,18 @@ export interface SessionInvite {
   token: string;
   created_at: string;
   expires_at: string;
+  /** Trip the inviter sent the invite from (optional). */
+  inviter_trip_id?: string | null;
+  /** Inviter trip start (or equivalent); invitee UI filters linkable trips to ±5 days. */
+  merge_window_anchor_at?: string | null;
 }
 
 /** Trip timeline event with attribution for merged Group view. */
 export interface TripEventWithSource extends TripEvent {
   source_user_id: string;
   source_display_name: string;
+  /** Child trip this row came from (session parent = trips.shared_session_id). */
+  source_trip_id: string;
 }
 
 export type AccessPointStatus = 'pending' | 'approved';

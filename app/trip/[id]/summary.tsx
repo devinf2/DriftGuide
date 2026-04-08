@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Colors, Spacing, FontSize, BorderRadius } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   getTripEndpointInitialCoords,
@@ -31,8 +31,6 @@ import {
   TripEvent,
   TripPhotoVisibility,
   CatchData,
-  FlyChangeData,
-  NoteData,
   AIQueryData,
   WaterFlowData,
   NextFlyRecommendation,
@@ -41,6 +39,7 @@ import {
 } from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
+import { getTripEventDescription } from '@/src/utils/journalTimeline';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
@@ -49,6 +48,7 @@ import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS } from '@/src/ser
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
+import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
@@ -85,6 +85,7 @@ export default function TripSummaryScreen() {
   const { deleteTrip } = useTripStore();
   const { isConnected } = useNetworkStatus();
   const { colors: themeColors } = useAppTheme();
+  const styles = useMemo(() => createTripSummaryStyles(themeColors), [themeColors]);
   const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -312,7 +313,7 @@ export default function TripSummaryScreen() {
   const tripDurationLabel = useMemo(() => {
     if (!trip) return '';
     let ms: number | null | undefined = trip.active_fishing_ms;
-    if (ms == null && events.length > 0) {
+    if ((ms == null || ms === 0) && events.length > 0) {
       const inferred = inferActiveFishingMsFromPauseResumeEvents(
         trip.start_time,
         trip.end_time,
@@ -330,7 +331,7 @@ export default function TripSummaryScreen() {
     return (
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={Colors.primary} />
+          <ActivityIndicator size="large" color={themeColors.primary} />
           <Text style={styles.loadingText}>Loading trip...</Text>
         </View>
       </SafeAreaView>
@@ -395,7 +396,7 @@ export default function TripSummaryScreen() {
             style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
             onPress={() => setFullScreenPhoto(null)}
           >
-            <MaterialCommunityIcons name="close" size={28} color={Colors.textInverse} />
+            <MaterialCommunityIcons name="close" size={28} color={themeColors.textInverse} />
           </Pressable>
           {fullScreenPhoto && (
             <ScrollView
@@ -411,22 +412,22 @@ export default function TripSummaryScreen() {
               <View style={styles.fullScreenPhotoInfo}>
                 {fullScreenPhoto.location ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={Colors.textInverse} /> {fullScreenPhoto.location}
+                    <MaterialCommunityIcons name="map-marker" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.location}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.fly ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="hook" size={16} color={Colors.textInverse} /> {fullScreenPhoto.fly}
+                    <MaterialCommunityIcons name="hook" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.fly}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.date ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialIcons name="calendar-today" size={16} color={Colors.textInverse} /> {fullScreenPhoto.date}
+                    <MaterialIcons name="calendar-today" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.date}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.species ? (
                   <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="fish" size={16} color={Colors.textInverse} /> {fullScreenPhoto.species}
+                    <MaterialCommunityIcons name="fish" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.species}
                   </Text>
                 ) : null}
                 {fullScreenPhoto.caption ? (
@@ -459,7 +460,7 @@ export default function TripSummaryScreen() {
                   </Text>
                 </View>
                 <Pressable onPress={() => setMapCatchDetailEvent(null)} hitSlop={12}>
-                  <MaterialIcons name="close" size={22} color={Colors.textSecondary} />
+                  <MaterialIcons name="close" size={22} color={themeColors.textSecondary} />
                 </Pressable>
               </View>
               {(() => {
@@ -468,18 +469,18 @@ export default function TripSummaryScreen() {
                   <>
                     {d.size_inches != null ? (
                       <Text style={styles.mapCatchModalRow}>
-                        <MaterialCommunityIcons name="ruler" size={16} color={Colors.textSecondary} /> {d.size_inches}
+                        <MaterialCommunityIcons name="ruler" size={16} color={themeColors.textSecondary} /> {d.size_inches}
                         {'"'}{' '}
                         {d.quantity != null && d.quantity > 1 ? `· ×${d.quantity}` : ''}
                       </Text>
                     ) : d.quantity != null && d.quantity > 1 ? (
                       <Text style={styles.mapCatchModalRow}>
-                        <MaterialCommunityIcons name="fish" size={16} color={Colors.textSecondary} /> ×{d.quantity}
+                        <MaterialCommunityIcons name="fish" size={16} color={themeColors.textSecondary} /> ×{d.quantity}
                       </Text>
                     ) : null}
                     {d.released ? (
                       <Text style={styles.mapCatchModalRow}>
-                        <MaterialCommunityIcons name="water" size={16} color={Colors.textSecondary} /> Released
+                        <MaterialCommunityIcons name="water" size={16} color={themeColors.textSecondary} /> Released
                       </Text>
                     ) : null}
                     {d.note?.trim() ? (
@@ -499,21 +500,21 @@ export default function TripSummaryScreen() {
         presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
         onRequestClose={() => setTripAiSummaryModalVisible(false)}
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top', 'bottom']}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: themeColors.background }} edges={['top', 'bottom']}>
           <View style={styles.summaryAiModalHeader}>
             <Text style={styles.summaryAiModalTitle}>Trip guide</Text>
             <Pressable onPress={() => setTripAiSummaryModalVisible(false)} hitSlop={12}>
               <Text style={styles.summaryAiModalDone}>Done</Text>
             </Pressable>
           </View>
-          <AIGuideTab trip={trip} events={events} />
+          <AIGuideTab trip={trip} events={events} summaryStyles={styles} palette={themeColors} />
         </SafeAreaView>
       </Modal>
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
         <Pressable onPress={() => exitTripSummary(router)}>
-          <MaterialIcons name="arrow-back" size={22} color={Colors.textInverse} />
+          <MaterialIcons name="arrow-back" size={22} color={themeColors.textInverse} />
         </Pressable>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle} numberOfLines={1}>
@@ -527,7 +528,7 @@ export default function TripSummaryScreen() {
             hitSlop={8}
             accessibilityLabel="Fishing group"
           >
-            <MaterialIcons name="group" size={22} color={Colors.textInverse} />
+            <MaterialIcons name="group" size={22} color={themeColors.textInverse} />
           </Pressable>
           <Pressable
             onPress={() => setJournalEditMode((v) => !v)}
@@ -537,7 +538,7 @@ export default function TripSummaryScreen() {
             <MaterialIcons
               name={journalEditMode ? 'check' : 'edit'}
               size={22}
-              color={Colors.textInverse}
+              color={themeColors.textInverse}
             />
           </Pressable>
           <Pressable
@@ -546,7 +547,7 @@ export default function TripSummaryScreen() {
             style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
             hitSlop={8}
           >
-            <MaterialIcons name="delete-outline" size={22} color={Colors.textInverse} />
+            <MaterialIcons name="delete-outline" size={22} color={themeColors.textInverse} />
           </Pressable>
         </View>
       </View>
@@ -566,7 +567,7 @@ export default function TripSummaryScreen() {
           />
         </View>
         <TripPhotoVisibilityDropdown
-          colorTokens={Colors}
+          colorTokens={themeColors}
           label="Visibility"
           value={effectivePhotoVisibility}
           onChange={(v: TripPhotoVisibility) => {
@@ -650,12 +651,25 @@ export default function TripSummaryScreen() {
           onRequestEditTripPin={openTripPinPlacement}
         />
       )}
-      {activeTab === 'photos' && (
-        <SummaryPhotosTab
-          tripPhotos={tripPhotos}
-          loading={tripPhotosLoading}
-          onPhotoPress={handleTripPhotoPress}
-        />
+      {activeTab === 'photos' && trip && (
+        trip.shared_session_id && user ? (
+          <SharedTripPhotosSection
+            trip={trip}
+            viewerUserId={user.id}
+            isConnected={isConnected}
+            myTripPhotos={tripPhotos}
+            myPhotosLoading={tripPhotosLoading}
+            onPhotoPress={handleTripPhotoPress}
+          />
+        ) : (
+          <SummaryPhotosTab
+            tripPhotos={tripPhotos}
+            loading={tripPhotosLoading}
+            onPhotoPress={handleTripPhotoPress}
+            summaryStyles={styles}
+            palette={themeColors}
+          />
+        )
       )}
       {activeTab === 'conditions' && (
         <ConditionsTab
@@ -683,17 +697,17 @@ export default function TripSummaryScreen() {
                     <View key={event.id} style={styles.snapshotCard}>
                       <View style={styles.snapshotHeader}>
                         <Text style={styles.snapshotTime}>{formatEventTime(event.timestamp)}</Text>
-                        <Text style={styles.snapshotEventType}>{getEventDescription(event)}</Text>
+                        <Text style={styles.snapshotEventType}>{getTripEventDescription(event)}</Text>
                       </View>
                       <View style={styles.snapshotGrid}>
                         {snapWeather && (
                           <>
                             <View style={styles.snapshotGridItem}>
-                              <MaterialIcons name="thermostat" size={14} color={Colors.textTertiary} />
+                              <MaterialIcons name="thermostat" size={14} color={themeColors.textTertiary} />
                               <Text style={styles.snapshotGridValue}>{snapWeather.temperature_f}°F</Text>
                             </View>
                             <View style={styles.snapshotGridItem}>
-                              <MaterialIcons name="air" size={14} color={Colors.textTertiary} />
+                              <MaterialIcons name="air" size={14} color={themeColors.textTertiary} />
                               <Text style={styles.snapshotGridValue}>{snapWeather.wind_speed_mph} mph</Text>
                             </View>
                           </>
@@ -701,12 +715,12 @@ export default function TripSummaryScreen() {
                         {snapWater && (
                           <>
                             <View style={styles.snapshotGridItem}>
-                              <MaterialIcons name="waves" size={14} color={Colors.water} />
+                              <MaterialIcons name="waves" size={14} color={themeColors.water} />
                               <Text style={styles.snapshotGridValue}>{formatFlowRate(snapWater.flow_cfs)}</Text>
                             </View>
                             {snapWater.water_temp_f !== null && (
                               <View style={styles.snapshotGridItem}>
-                                <MaterialIcons name="opacity" size={14} color={Colors.water} />
+                                <MaterialIcons name="opacity" size={14} color={themeColors.water} />
                                 <Text style={styles.snapshotGridValue}>{formatTemperature(snapWater.water_temp_f)}</Text>
                               </View>
                             )}
@@ -741,6 +755,8 @@ export default function TripSummaryScreen() {
           onSavePlacement={() => void saveTripPinPlacement()}
           placementSaving={tripPinPlacementSaving}
           onCatchWaypointPress={handleMapCatchWaypointPress}
+          summaryStyles={styles}
+          palette={themeColors}
         />
       )}
 
@@ -750,7 +766,7 @@ export default function TripSummaryScreen() {
         accessibilityRole="button"
         accessibilityLabel="Open trip guide"
       >
-        <MaterialIcons name="chat" size={26} color={Colors.textInverse} />
+        <MaterialIcons name="chat" size={26} color={themeColors.textInverse} />
       </Pressable>
 
       {user && trip && id ? (
@@ -770,40 +786,50 @@ export default function TripSummaryScreen() {
 
 /* ─── AI Guide Tab (read-only) ─── */
 
-function AIGuideTab({ trip, events }: { trip: Trip; events: TripEvent[] }) {
+function AIGuideTab({
+  trip,
+  events,
+  summaryStyles,
+  palette,
+}: {
+  trip: Trip;
+  events: TripEvent[];
+  summaryStyles: ReturnType<typeof createTripSummaryStyles>;
+  palette: ThemeColors;
+}) {
   const aiRecommendation = trip.ai_recommendation_cache as NextFlyRecommendation | null;
   const aiQueries = events.filter(e => e.event_type === 'ai_query');
   const hasAIData = aiRecommendation || aiQueries.length > 0;
 
   return (
-    <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
+    <ScrollView style={summaryStyles.tabContent} contentContainerStyle={summaryStyles.tabContentInner}>
       {!hasAIData && (
-        <View style={styles.emptyCard}>
-          <MaterialIcons name="smart-toy" size={32} color={Colors.textTertiary} />
-          <Text style={styles.emptyCardText}>No AI data for this trip</Text>
-          <Text style={styles.emptyHint}>AI recommendations and queries are saved when used during a trip.</Text>
+        <View style={summaryStyles.emptyCard}>
+          <MaterialIcons name="smart-toy" size={32} color={palette.textTertiary} />
+          <Text style={summaryStyles.emptyCardText}>No AI data for this trip</Text>
+          <Text style={summaryStyles.emptyHint}>AI recommendations and queries are saved when used during a trip.</Text>
         </View>
       )}
 
       {aiRecommendation && aiRecommendation.pattern && (
-        <View style={styles.aiRecCard}>
-          <View style={styles.aiRecCardHeader}>
-            <MaterialIcons name="auto-awesome" size={16} color={Colors.accent} />
-            <Text style={styles.aiRecCardLabel}>AI Fly Recommendation</Text>
+        <View style={summaryStyles.aiRecCard}>
+          <View style={summaryStyles.aiRecCardHeader}>
+            <MaterialIcons name="auto-awesome" size={16} color={palette.accent} />
+            <Text style={summaryStyles.aiRecCardLabel}>AI Fly Recommendation</Text>
           </View>
-          <Text style={styles.aiRecFly}>
+          <Text style={summaryStyles.aiRecFly}>
             {aiRecommendation.pattern}
             {aiRecommendation.size ? ` #${aiRecommendation.size}` : ''}
           </Text>
           {aiRecommendation.color && (
-            <Text style={styles.aiRecColor}>{aiRecommendation.color}</Text>
+            <Text style={summaryStyles.aiRecColor}>{aiRecommendation.color}</Text>
           )}
           {aiRecommendation.reason && (
-            <Text style={styles.aiRecReason}>{aiRecommendation.reason}</Text>
+            <Text style={summaryStyles.aiRecReason}>{aiRecommendation.reason}</Text>
           )}
           {aiRecommendation.confidence > 0 && (
-            <View style={styles.confidenceBadge}>
-              <Text style={styles.confidenceText}>
+            <View style={summaryStyles.confidenceBadge}>
+              <Text style={summaryStyles.confidenceText}>
                 {Math.round(aiRecommendation.confidence * 100)}% confidence
               </Text>
             </View>
@@ -812,35 +838,35 @@ function AIGuideTab({ trip, events }: { trip: Trip; events: TripEvent[] }) {
       )}
 
       {aiQueries.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>AI Conversations</Text>
+        <View style={summaryStyles.section}>
+          <Text style={summaryStyles.sectionTitle}>AI Conversations</Text>
           {aiQueries.map((event) => {
             const data = event.data as AIQueryData;
             return (
-              <View key={event.id} style={styles.aiQAItem}>
-                <View style={styles.aiQuestion}>
-                  <MaterialIcons name="person" size={14} color={Colors.primary} />
-                  <Text style={styles.aiQuestionText}>{data.question}</Text>
+              <View key={event.id} style={summaryStyles.aiQAItem}>
+                <View style={summaryStyles.aiQuestion}>
+                  <MaterialIcons name="person" size={14} color={palette.primary} />
+                  <Text style={summaryStyles.aiQuestionText}>{data.question}</Text>
                 </View>
                 {data.response && (
-                  <View style={styles.aiAnswer}>
-                    <MaterialIcons name="smart-toy" size={14} color={Colors.accent} />
-                    <Text style={styles.aiAnswerText}>{data.response}</Text>
+                  <View style={summaryStyles.aiAnswer}>
+                    <MaterialIcons name="smart-toy" size={14} color={palette.accent} />
+                    <Text style={summaryStyles.aiAnswerText}>{data.response}</Text>
                   </View>
                 )}
                 {data.webSources && data.webSources.length > 0 ? (
-                  <View style={styles.aiSourcesWrap}>
-                    <Text style={styles.aiSourcesLabel}>Web sources</Text>
+                  <View style={summaryStyles.aiSourcesWrap}>
+                    <Text style={summaryStyles.aiSourcesLabel}>Web sources</Text>
                     {data.webSources.slice(0, 10).map((s, i) => (
                       <Pressable key={`${s.url}-${i}`} onPress={() => void Linking.openURL(s.url)}>
-                        <Text style={styles.aiSourceLink} numberOfLines={2}>
+                        <Text style={summaryStyles.aiSourceLink} numberOfLines={2}>
                           {s.title || s.url}
                         </Text>
                       </Pressable>
                     ))}
                   </View>
                 ) : null}
-                <Text style={styles.aiQATime}>{formatEventTime(event.timestamp)}</Text>
+                <Text style={summaryStyles.aiQATime}>{formatEventTime(event.timestamp)}</Text>
               </View>
             );
           })}
@@ -858,30 +884,34 @@ function SummaryPhotosTab({
   tripPhotos,
   loading,
   onPhotoPress,
+  summaryStyles,
+  palette,
 }: {
   tripPhotos: Photo[];
   loading: boolean;
   onPhotoPress?: (photo: Photo) => void;
+  summaryStyles: ReturnType<typeof createTripSummaryStyles>;
+  palette: ThemeColors;
 }) {
   return (
-    <ScrollView style={styles.summaryPhotosScroll} contentContainerStyle={styles.summaryPhotosContent}>
-      <View style={styles.summaryPhotosHeader}>
-        <Text style={styles.summaryPhotosTitle}>Trip photos</Text>
+    <ScrollView style={summaryStyles.summaryPhotosScroll} contentContainerStyle={summaryStyles.summaryPhotosContent}>
+      <View style={summaryStyles.summaryPhotosHeader}>
+        <Text style={summaryStyles.summaryPhotosTitle}>Trip photos</Text>
       </View>
       {loading ? (
-        <View style={styles.summaryPhotosPlaceholder}>
-          <ActivityIndicator color={Colors.primary} />
+        <View style={summaryStyles.summaryPhotosPlaceholder}>
+          <ActivityIndicator color={palette.primary} />
         </View>
       ) : tripPhotos.length === 0 ? (
-        <View style={styles.summaryPhotosEmpty}>
-          <MaterialIcons name="photo-library" size={40} color={Colors.textTertiary} />
-          <Text style={styles.summaryPhotosEmptyText}>No photos for this trip</Text>
+        <View style={summaryStyles.summaryPhotosEmpty}>
+          <MaterialIcons name="photo-library" size={40} color={palette.textTertiary} />
+          <Text style={summaryStyles.summaryPhotosEmptyText}>No photos for this trip</Text>
         </View>
       ) : (
-        <View style={styles.summaryPhotosGrid}>
+        <View style={summaryStyles.summaryPhotosGrid}>
           {tripPhotos.map((photo) => (
             <Pressable key={photo.id} onPress={() => onPhotoPress?.(photo)}>
-              <OfflineTripPhotoImage remoteUri={photo.url} style={styles.summaryPhotoThumb} contentFit="cover" />
+              <OfflineTripPhotoImage remoteUri={photo.url} style={summaryStyles.summaryPhotoThumb} contentFit="cover" />
             </Pressable>
           ))}
         </View>
@@ -906,6 +936,8 @@ function SummaryMapTab({
   onSavePlacement,
   placementSaving,
   onCatchWaypointPress,
+  summaryStyles,
+  palette,
 }: {
   trip: Trip;
   events: TripEvent[];
@@ -917,6 +949,8 @@ function SummaryMapTab({
   onSavePlacement: () => void;
   placementSaving: boolean;
   onCatchWaypointPress: (catchEventId: string) => void;
+  summaryStyles: ReturnType<typeof createTripSummaryStyles>;
+  palette: ThemeColors;
 }) {
   const insets = useSafeAreaInsets();
   const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
@@ -928,11 +962,11 @@ function SummaryMapTab({
 
   if (!showMap) {
     return (
-      <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
-        <View style={styles.summaryMapEmpty}>
-          <MaterialIcons name="map" size={40} color={Colors.textTertiary} />
-          <Text style={styles.summaryMapEmptyText}>No map data saved for this trip</Text>
-          <Text style={styles.emptyHint}>
+      <ScrollView style={summaryStyles.tabContent} contentContainerStyle={summaryStyles.tabContentInner}>
+        <View style={summaryStyles.summaryMapEmpty}>
+          <MaterialIcons name="map" size={40} color={palette.textTertiary} />
+          <Text style={summaryStyles.summaryMapEmptyText}>No map data saved for this trip</Text>
+          <Text style={summaryStyles.emptyHint}>
             Start and end GPS and catch locations appear here when recorded during the trip.
           </Text>
         </View>
@@ -943,12 +977,12 @@ function SummaryMapTab({
   const placing = tripPinPlacement != null;
 
   return (
-    <View style={styles.summaryMapTabRoot}>
-      <View style={styles.summaryMapMapWrap}>
+    <View style={summaryStyles.summaryMapTabRoot}>
+      <View style={summaryStyles.summaryMapMapWrap}>
         <JournalTripRouteMapView
           trip={trip}
           events={events}
-          containerStyle={styles.summaryMapNative}
+          containerStyle={summaryStyles.summaryMapNative}
           onCatchWaypointPress={onCatchWaypointPress}
           placementKind={placing ? tripPinPlacement.kind : null}
           placementLatitude={placing ? tripPinPlacement.lat : undefined}
@@ -959,46 +993,46 @@ function SummaryMapTab({
         {placing ? (
           <View
             style={[
-              styles.summaryMapPlacementBar,
+              summaryStyles.summaryMapPlacementBar,
               { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
             ]}
           >
             <Pressable
               accessibilityRole="button"
-              style={styles.summaryMapPlacementBtnGhost}
+              style={summaryStyles.summaryMapPlacementBtnGhost}
               onPress={onCancelPlacement}
               disabled={placementSaving}
             >
-              <Text style={styles.summaryMapPlacementBtnGhostText}>Cancel</Text>
+              <Text style={summaryStyles.summaryMapPlacementBtnGhostText}>Cancel</Text>
             </Pressable>
-            <Text style={styles.summaryMapPlacementTitle} numberOfLines={1}>
+            <Text style={summaryStyles.summaryMapPlacementTitle} numberOfLines={1}>
               {tripPinPlacement.kind === 'start' ? 'Place start' : 'Place end'}
             </Text>
             <Pressable
               accessibilityRole="button"
               style={[
-                styles.summaryMapPlacementBtnPrimary,
-                placementSaving && styles.summaryMapPlacementBtnDisabled,
+                summaryStyles.summaryMapPlacementBtnPrimary,
+                placementSaving && summaryStyles.summaryMapPlacementBtnDisabled,
               ]}
               onPress={onSavePlacement}
               disabled={placementSaving}
             >
               {placementSaving ? (
-                <ActivityIndicator color={Colors.textInverse} size="small" />
+                <ActivityIndicator color={palette.textInverse} size="small" />
               ) : (
-                <Text style={styles.summaryMapPlacementBtnPrimaryText}>Save</Text>
+                <Text style={summaryStyles.summaryMapPlacementBtnPrimaryText}>Save</Text>
               )}
             </Pressable>
           </View>
         ) : null}
       </View>
       <ScrollView
-        style={styles.summaryMapLegendScroll}
-        contentContainerStyle={styles.summaryMapLegendContent}
+        style={summaryStyles.summaryMapLegendScroll}
+        contentContainerStyle={summaryStyles.summaryMapLegendContent}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.summaryMapLegendTitleRow}>
-          <Text style={styles.summaryMapLegendTitle} numberOfLines={1}>
+        <View style={summaryStyles.summaryMapLegendTitleRow}>
+          <Text style={summaryStyles.summaryMapLegendTitle} numberOfLines={1}>
             Trip Route
           </Text>
           <Pressable
@@ -1007,38 +1041,38 @@ function SummaryMapTab({
             accessibilityRole="button"
             accessibilityLabel="How the trip route line is drawn"
           >
-            <MaterialIcons name="info-outline" size={22} color={Colors.textTertiary} />
+            <MaterialIcons name="info-outline" size={22} color={palette.textTertiary} />
           </Pressable>
         </View>
         {editMode ? (
-          <View style={styles.summaryMapEditPins}>
-            <Text style={styles.summaryMapEditPinsHint}>Adjust start and end pins for this trip.</Text>
-            <View style={styles.summaryMapEditPinsRow}>
-              <Pressable style={styles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('start')}>
-                <MaterialIcons name="place" size={18} color={Colors.primary} />
-                <Text style={styles.summaryMapEditPinBtnText}>Start pin</Text>
+          <View style={summaryStyles.summaryMapEditPins}>
+            <Text style={summaryStyles.summaryMapEditPinsHint}>Adjust start and end pins for this trip.</Text>
+            <View style={summaryStyles.summaryMapEditPinsRow}>
+              <Pressable style={summaryStyles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('start')}>
+                <MaterialIcons name="place" size={18} color={palette.primary} />
+                <Text style={summaryStyles.summaryMapEditPinBtnText}>Start pin</Text>
               </Pressable>
-              <Pressable style={styles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('end')}>
-                <MaterialIcons name="flag" size={18} color={Colors.secondary} />
-                <Text style={styles.summaryMapEditPinBtnText}>End pin</Text>
+              <Pressable style={summaryStyles.summaryMapEditPinBtn} onPress={() => onRequestEditTripPin('end')}>
+                <MaterialIcons name="flag" size={18} color={palette.secondary} />
+                <Text style={summaryStyles.summaryMapEditPinBtnText}>End pin</Text>
               </Pressable>
             </View>
           </View>
         ) : null}
         {coordSummary.startLat != null && coordSummary.startLon != null && (
-          <View style={styles.summaryMapRow}>
-            <MaterialIcons name="place" size={18} color={Colors.primary} />
-            <Text style={styles.summaryMapLabel}>Start</Text>
-            <Text style={styles.summaryMapCoords}>
+          <View style={summaryStyles.summaryMapRow}>
+            <MaterialIcons name="place" size={18} color={palette.primary} />
+            <Text style={summaryStyles.summaryMapLabel}>Start</Text>
+            <Text style={summaryStyles.summaryMapCoords}>
               {coordSummary.startLat.toFixed(5)}, {coordSummary.startLon.toFixed(5)}
             </Text>
           </View>
         )}
         {coordSummary.endLat != null && coordSummary.endLon != null && (
-          <View style={styles.summaryMapRow}>
-            <MaterialIcons name="flag" size={18} color={Colors.secondary} />
-            <Text style={styles.summaryMapLabel}>End</Text>
-            <Text style={styles.summaryMapCoords}>
+          <View style={summaryStyles.summaryMapRow}>
+            <MaterialIcons name="flag" size={18} color={palette.secondary} />
+            <Text style={summaryStyles.summaryMapLabel}>End</Text>
+            <Text style={summaryStyles.summaryMapCoords}>
               {coordSummary.endLat.toFixed(5)}, {coordSummary.endLon.toFixed(5)}
             </Text>
           </View>
@@ -1048,48 +1082,17 @@ function SummaryMapTab({
   );
 }
 
-/* ─── Helpers ─── */
-
-function getEventDescription(event: TripEvent): string {
-  switch (event.event_type) {
-    case 'catch': {
-      const data = event.data as CatchData;
-      const parts: string[] = [];
-      if (data.species) parts.push(data.species);
-      if (data.size_inches != null) parts.push(`${data.size_inches}"`);
-      const qty = data.quantity != null && data.quantity > 1 ? data.quantity : 1;
-      return parts.length ? `Caught ${parts.join(' · ')}${qty > 1 ? ` (×${qty})` : ''}` : (qty > 1 ? `${qty} fish caught!` : 'Fish caught!');
-    }
-    case 'fly_change': {
-      const data = event.data as FlyChangeData;
-      const primary = `${data.pattern}${data.size ? ` #${data.size}` : ''}`;
-      return data.pattern2
-        ? `Changed to ${primary} / ${data.pattern2}${data.size2 ? ` #${data.size2}` : ''}`
-        : `Changed to ${primary}`;
-    }
-    case 'note': {
-      const data = event.data as NoteData;
-      return data.text;
-    }
-    case 'ai_query': {
-      const data = event.data as AIQueryData;
-      return `Asked: ${data.question}`;
-    }
-    default:
-      return 'Event';
-  }
-}
-
 /* ─── Styles ─── */
 
-const styles = StyleSheet.create({
+function createTripSummaryStyles(c: ThemeColors) {
+  return StyleSheet.create({
   summaryAiFab: {
     position: 'absolute',
     right: Spacing.md,
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: Colors.accent,
+    backgroundColor: c.accent,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 6,
@@ -1106,22 +1109,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderBottomColor: c.border,
+    backgroundColor: c.surface,
   },
   summaryAiModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   summaryAiModalDone: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.primary,
+    color: c.primary,
   },
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: c.background,
   },
   centered: {
     flex: 1,
@@ -1131,16 +1134,16 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: FontSize.lg,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   backButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: c.primary,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.md,
   },
   backButtonText: {
-    color: Colors.textInverse,
+    color: c.textInverse,
     fontWeight: '600',
   },
 
@@ -1150,7 +1153,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: c.primary,
   },
   headerCenter: {
     flex: 1,
@@ -1164,7 +1167,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: c.textInverse,
   },
 
   dateLocationRow: {
@@ -1179,23 +1182,23 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
     marginRight: Spacing.sm,
   },
   dateLocationDate: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
 
   statsCard: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.md,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     padding: Spacing.lg,
     gap: Spacing.lg,
-    shadowColor: Colors.shadow,
+    shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 4,
@@ -1208,11 +1211,11 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.primary,
+    color: c.primary,
   },
   statLabel: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: 2,
   },
 
@@ -1227,10 +1230,10 @@ const styles = StyleSheet.create({
     paddingLeft: Spacing.xs,
     paddingRight: Spacing.sm,
     gap: Spacing.sm,
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    borderColor: c.border,
   },
   offlineLeft: {
     flexDirection: 'row',
@@ -1244,7 +1247,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   keepOfflineSwitch: {
     transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
@@ -1252,9 +1255,9 @@ const styles = StyleSheet.create({
 
   tabBar: {
     flexDirection: 'row',
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: c.border,
   },
   tab: {
     flex: 1,
@@ -1267,15 +1270,15 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomColor: Colors.primary,
+    borderBottomColor: c.primary,
   },
   tabLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: c.textTertiary,
   },
   tabLabelActive: {
-    color: Colors.primary,
+    color: c.primary,
   },
 
   tabContent: {
@@ -1317,7 +1320,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textInverse,
+    color: c.textInverse,
     textAlign: 'center',
   },
   summaryMapPlacementBtnGhost: {
@@ -1335,7 +1338,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primaryLight,
+    backgroundColor: c.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1345,13 +1348,13 @@ const styles = StyleSheet.create({
   summaryMapPlacementBtnPrimaryText: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.textInverse,
+    color: c.textInverse,
   },
   summaryMapLegendScroll: {
     maxHeight: 200,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.background,
+    borderTopColor: c.border,
+    backgroundColor: c.background,
   },
   summaryMapLegendContent: {
     padding: Spacing.lg,
@@ -1367,7 +1370,7 @@ const styles = StyleSheet.create({
   summaryMapLegendTitle: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
 
   // Summary Photos tab
@@ -1383,7 +1386,7 @@ const styles = StyleSheet.create({
   summaryPhotosTitle: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   summaryPhotosPlaceholder: {
     padding: Spacing.xl,
@@ -1396,7 +1399,7 @@ const styles = StyleSheet.create({
   },
   summaryPhotosEmptyText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   summaryPhotosGrid: {
     flexDirection: 'row',
@@ -1407,7 +1410,7 @@ const styles = StyleSheet.create({
     width: SUMMARY_PHOTO_SIZE,
     height: SUMMARY_PHOTO_SIZE,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.borderLight,
+    backgroundColor: c.borderLight,
   },
 
   // Summary Map tab
@@ -1419,10 +1422,10 @@ const styles = StyleSheet.create({
   summaryMapEmptyText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   summaryMapCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.lg,
     gap: Spacing.md,
@@ -1435,12 +1438,12 @@ const styles = StyleSheet.create({
   summaryMapLabel: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.text,
+    color: c.text,
     minWidth: 40,
   },
   summaryMapCoords: {
     fontSize: FontSize.xs,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   summaryMapEditPins: {
     gap: Spacing.sm,
@@ -1448,7 +1451,7 @@ const styles = StyleSheet.create({
   },
   summaryMapEditPinsHint: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   summaryMapEditPinsRow: {
     flexDirection: 'row',
@@ -1463,23 +1466,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    borderColor: c.border,
+    backgroundColor: c.surface,
   },
   summaryMapEditPinBtnText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-    color: Colors.text,
+    color: c.text,
   },
 
   // Conditions summary
   summaryCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-    shadowColor: Colors.shadow,
+    borderLeftColor: c.accent,
+    shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -1494,18 +1497,18 @@ const styles = StyleSheet.create({
   summaryCardTitle: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   summaryCardText: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: c.text,
     lineHeight: 24,
   },
   conditionsNote: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     fontStyle: 'italic',
     marginTop: Spacing.sm,
   },
@@ -1516,7 +1519,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
@@ -1548,12 +1551,12 @@ const styles = StyleSheet.create({
   },
   fullScreenPhotoInfoRow: {
     fontSize: FontSize.md,
-    color: Colors.textInverse,
+    color: c.textInverse,
     marginBottom: Spacing.xs,
   },
   fullScreenPhotoCaption: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     marginTop: Spacing.xs,
   },
 
@@ -1566,7 +1569,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   mapCatchModalSheet: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderTopLeftRadius: BorderRadius.lg,
     borderTopRightRadius: BorderRadius.lg,
     paddingHorizontal: Spacing.lg,
@@ -1581,30 +1584,30 @@ const styles = StyleSheet.create({
   mapCatchModalTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   mapCatchModalSubtitle: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: 4,
   },
   mapCatchModalRow: {
     fontSize: FontSize.md,
-    color: Colors.text,
+    color: c.text,
     marginBottom: Spacing.sm,
   },
   mapCatchModalNote: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: Spacing.xs,
     lineHeight: 22,
   },
 
   conditionCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
-    shadowColor: Colors.shadow,
+    shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -1619,7 +1622,7 @@ const styles = StyleSheet.create({
   conditionCardTitle: {
     fontSize: FontSize.lg,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   conditionMainStat: {
     alignItems: 'center',
@@ -1628,11 +1631,11 @@ const styles = StyleSheet.create({
   conditionMainValue: {
     fontSize: FontSize.xxxl,
     fontWeight: '700',
-    color: Colors.primary,
+    color: c.primary,
   },
   conditionMainLabel: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: 2,
     textTransform: 'capitalize',
   },
@@ -1643,21 +1646,21 @@ const styles = StyleSheet.create({
   },
   conditionGridItem: {
     width: '47%',
-    backgroundColor: Colors.background,
+    backgroundColor: c.background,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
   },
   conditionGridLabel: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   conditionGridValue: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: c.text,
     marginTop: 4,
   },
   moonPhaseRow: {
@@ -1676,43 +1679,43 @@ const styles = StyleSheet.create({
   statusBadgeLabel: {
     fontSize: FontSize.md,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   statusBadgeDesc: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: 4,
     lineHeight: 20,
   },
 
   emptyCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.xl,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: c.border,
     borderStyle: 'dashed',
     gap: Spacing.sm,
   },
   emptyCardText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
   emptyHint: {
     fontSize: FontSize.sm,
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     textAlign: 'center',
   },
 
   aiRecCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-    shadowColor: Colors.shadow,
+    borderLeftColor: c.accent,
+    shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -1727,29 +1730,29 @@ const styles = StyleSheet.create({
   aiRecCardLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   aiRecFly: {
     fontSize: FontSize.xl,
     fontWeight: '700',
-    color: Colors.text,
+    color: c.text,
   },
   aiRecColor: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: 2,
   },
   aiRecReason: {
     fontSize: FontSize.md,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     marginTop: Spacing.sm,
     lineHeight: 22,
   },
   confidenceBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: Colors.background,
+    backgroundColor: c.background,
     borderRadius: BorderRadius.full,
     paddingHorizontal: Spacing.sm + 2,
     paddingVertical: Spacing.xs,
@@ -1758,11 +1761,11 @@ const styles = StyleSheet.create({
   confidenceText: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.textSecondary,
+    color: c.textSecondary,
   },
 
   aiQAItem: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     gap: Spacing.sm,
@@ -1775,7 +1778,7 @@ const styles = StyleSheet.create({
   aiQuestionText: {
     fontSize: FontSize.md,
     fontWeight: '600',
-    color: Colors.text,
+    color: c.text,
     flex: 1,
   },
   aiAnswer: {
@@ -1785,7 +1788,7 @@ const styles = StyleSheet.create({
   },
   aiAnswerText: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     flex: 1,
     lineHeight: 20,
   },
@@ -1793,33 +1796,33 @@ const styles = StyleSheet.create({
     marginTop: Spacing.xs,
     paddingTop: Spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: c.border,
     gap: Spacing.xs,
   },
   aiSourcesLabel: {
     fontSize: FontSize.xs,
     fontWeight: '700',
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   aiSourceLink: {
     fontSize: FontSize.sm,
-    color: Colors.primary,
+    color: c.primary,
     textDecorationLine: 'underline',
   },
   aiQATime: {
     fontSize: FontSize.xs,
-    color: Colors.textTertiary,
+    color: c.textTertiary,
     textAlign: 'right',
   },
 
   snapshotCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: c.surface,
     borderRadius: BorderRadius.md,
     padding: Spacing.md,
     borderLeftWidth: 3,
-    borderLeftColor: Colors.water,
+    borderLeftColor: c.water,
     gap: Spacing.sm,
   },
   snapshotHeader: {
@@ -1830,11 +1833,11 @@ const styles = StyleSheet.create({
   snapshotTime: {
     fontSize: FontSize.sm,
     fontWeight: '700',
-    color: Colors.primary,
+    color: c.primary,
   },
   snapshotEventType: {
     fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: c.textSecondary,
     flex: 1,
   },
   snapshotGrid: {
@@ -1846,7 +1849,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: Colors.background,
+    backgroundColor: c.background,
     borderRadius: BorderRadius.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 4,
@@ -1854,6 +1857,7 @@ const styles = StyleSheet.create({
   snapshotGridValue: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-    color: Colors.text,
+    color: c.text,
   },
-});
+  });
+}

@@ -8,7 +8,7 @@ import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDis
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
-import { useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createProfileStyles, QuickTile } from '../index';
@@ -34,13 +34,24 @@ export default function FriendProfileScreen() {
   const [friendProfile, setFriendProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /** Avoid full-screen loading flicker on refocus — reduces native header churn (stale back button on iOS). */
+  const lastFriendLoadKeyRef = useRef<string | null>(null);
+  const headerTitleAppliedRef = useRef<string | undefined>(undefined);
+
   const loadFriend = useCallback(async () => {
     if (!friendId || !userId) {
       setFriendProfile(null);
       setLoading(false);
+      lastFriendLoadKeyRef.current = null;
       return;
     }
-    setLoading(true);
+    const loadKey = `${friendId}:${userId}`;
+    const showFullScreenLoading = lastFriendLoadKeyRef.current !== loadKey;
+    if (showFullScreenLoading) {
+      setLoading(true);
+      setFriendProfile(null);
+      headerTitleAppliedRef.current = undefined;
+    }
     try {
       const list = await fetchMyFriendships();
       const accepted = list.some(
@@ -50,13 +61,17 @@ export default function FriendProfileScreen() {
       );
       if (!accepted) {
         setFriendProfile(null);
+        lastFriendLoadKeyRef.current = null;
         Alert.alert('Unavailable', 'You can only view accepted friends’ profiles.');
         router.back();
         return;
       }
       const p = await fetchProfile(friendId);
       setFriendProfile(p);
-      if (!p) {
+      if (p) {
+        lastFriendLoadKeyRef.current = loadKey;
+      } else {
+        lastFriendLoadKeyRef.current = null;
         Alert.alert('Unavailable', 'Could not load this profile.');
         router.back();
       }
@@ -74,11 +89,12 @@ export default function FriendProfileScreen() {
   const displayName = profileDisplayName(friendProfile);
 
   useLayoutEffect(() => {
-    navigation.setOptions({
-      title: friendProfile ? displayName : 'Angler',
-      headerBackTitle: 'Friends',
-    });
-  }, [navigation, friendProfile, displayName]);
+    const nextTitle = displayName;
+    if (headerTitleAppliedRef.current === nextTitle) return;
+    headerTitleAppliedRef.current = nextTitle;
+    /** Only update title here; `headerBackTitle` stays on Stack.Screen to avoid repeated native bar rebuilds. */
+    navigation.setOptions({ title: nextTitle });
+  }, [navigation, displayName]);
 
   const uname = friendProfile?.username?.trim();
 
