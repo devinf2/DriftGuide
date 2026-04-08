@@ -33,3 +33,7 @@ export async function removePendingTrip(tripId: string): Promise<void> {
   delete data[tripId];
   await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(data));
 }
+
+export async function clearAllPendingSyncTrips(): Promise<void> {
+  await AsyncStorage.removeItem(PENDING_SYNC_KEY);
+}

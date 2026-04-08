@@ -8,9 +8,9 @@
     "scheme": "driftguide",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/images/logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0F172A"
+      "image": "./assets/images/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#0B1220"
     },
     "ios": {
       "bundleIdentifier": "com.driftguide.app",

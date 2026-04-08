@@ -2,3 +2,6 @@
 
 [functions.guide-intel]
 verify_jwt = true
+
+[functions.delete-closed-auth-user]
+verify_jwt = true

@@ -1,19 +1,23 @@
 import 'react-native-get-random-values';
-import { useEffect, type ComponentType } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useRef, type ComponentType } from 'react';
+import { Alert, StyleSheet, View } from 'react-native';
 import { useFonts } from 'expo-font';
+import * as Linking from 'expo-linking';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import * as WebBrowser from 'expo-web-browser';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
+import { applyOAuthReturnUrl } from '@/src/auth/googleOAuth';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
 import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
+import { needsProfileOnboarding } from '@/src/utils/profileOnboarding';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -22,6 +26,8 @@ export const unstable_settings = {
 };
 
 SplashScreen.preventAutoHideAsync();
+
+WebBrowser.maybeCompleteAuthSession();
 
 /** Production builds: `__DEV__` is false → no `require` → dev overlay never loads or ships. */
 const OfflineSimOverlay: ComponentType | undefined = __DEV__
@@ -40,9 +46,16 @@ const styles = StyleSheet.create({
 });
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { session, isLoading, setSession, fetchProfile } = useAuthStore();
+  const session = useAuthStore((s) => s.session);
+  const profile = useAuthStore((s) => s.profile);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const isProfileLoading = useAuthStore((s) => s.isProfileLoading);
+  const setSession = useAuthStore((s) => s.setSession);
+  const fetchProfile = useAuthStore((s) => s.fetchProfile);
+  const signOut = useAuthStore((s) => s.signOut);
   const segments = useSegments();
   const router = useRouter();
+  const closedAccountHandledRef = useRef(false);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -59,16 +72,63 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (isLoading) return;
+    const consumeOAuthUrl = (url: string | null) => {
+      if (!url) return;
+      void (async () => {
+        try {
+          await applyOAuthReturnUrl(url);
+        } catch {
+          /* unrelated or malformed deep link */
+        }
+      })();
+    };
 
-    const inAuthGroup = segments[0] === 'auth';
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      consumeOAuthUrl(url);
+    });
+    void Linking.getInitialURL().then(consumeOAuthUrl);
+    return () => sub.remove();
+  }, []);
 
-    if (!session && !inAuthGroup) {
-      router.replace('/auth');
-    } else if (session && inAuthGroup) {
+  useEffect(() => {
+    if (session && profile?.account_deleted_at) {
+      if (closedAccountHandledRef.current) return;
+      closedAccountHandledRef.current = true;
+      void (async () => {
+        await signOut();
+        Alert.alert(
+          'Account closed',
+          'This account was deleted. Sign in with a different account to use DriftGuide.',
+        );
+      })();
+      return;
+    }
+    if (!session) closedAccountHandledRef.current = false;
+
+    if (isLoading || (session && isProfileLoading)) return;
+
+    const inAuth = segments[0] === 'auth';
+    const inOnboarding = segments[0] === 'onboarding';
+
+    if (!session) {
+      if (!inAuth) router.replace('/auth');
+      return;
+    }
+
+    if (inAuth) {
+      router.replace('/');
+      return;
+    }
+
+    const needOnboarding = needsProfileOnboarding(profile);
+    if (needOnboarding && !inOnboarding) {
+      router.replace('/onboarding');
+      return;
+    }
+    if (!needOnboarding && inOnboarding) {
       router.replace('/');
     }
-  }, [session, segments, isLoading]);
+  }, [session, profile, segments, isLoading, isProfileLoading, router, signOut]);
 
   return (
     <View style={styles.authGateRoot}>
@@ -99,6 +159,7 @@ function ThemedNavigation() {
         >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="auth" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
           <Stack.Screen
             name="trip/new"
             options={{

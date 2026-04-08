@@ -20,7 +20,12 @@ import {
 import { getMoonPhase } from '@/src/utils/moonPhase';
 import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/utils/tripGps';
 import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
-import { savePendingTrip, getPendingTrips, removePendingTrip } from '@/src/services/pendingSyncStorage';
+import {
+  savePendingTrip,
+  getPendingTrips,
+  removePendingTrip,
+  clearAllPendingSyncTrips,
+} from '@/src/services/pendingSyncStorage';
 import { withTimeout } from '@/src/utils/promiseTimeout';
 import {
   enrichTryNextWithSuggestedDropper,
@@ -115,6 +120,8 @@ interface TripState {
   refreshSmartRecommendation: () => Promise<void>;
   clearActiveTrip: () => void;
   replaceActiveTripEvents: (events: TripEvent[]) => void;
+  /** Wipe persisted trip / pending-sync state (e.g. after account deletion). */
+  clearAllLocalTripData: () => Promise<void>;
 }
 
 function buildConditionsSnapshot(
@@ -1178,6 +1185,18 @@ export const useTripStore = create<TripState>()(
           conditionsLoading: false,
           recommendationLoading: false,
         });
+      },
+
+      clearAllLocalTripData: async () => {
+        get().clearActiveTrip();
+        set({
+          pendingSyncTrips: [],
+          plannedTrips: [],
+          plannedTripsLoading: false,
+          isSyncingPending: false,
+        });
+        await clearAllPendingSyncTrips();
+        await AsyncStorage.removeItem('trip-storage');
       },
     };
     },

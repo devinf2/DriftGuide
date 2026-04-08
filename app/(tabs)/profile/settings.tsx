@@ -1,9 +1,12 @@
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';
+import { matchStoredProfileHomeState, type UsStateOption } from '@/src/constants/usStates';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -45,6 +48,22 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 1,
       marginBottom: Spacing.sm,
     },
+    sectionTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      flexWrap: 'wrap',
+      marginBottom: Spacing.sm,
+      gap: Spacing.xs,
+    },
+    sectionTitleInRow: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    sectionInfoHit: { padding: Spacing.xs },
     bodyText: { fontSize: FontSize.sm, color: colors.textSecondary, lineHeight: 20 },
     version: {
       fontSize: FontSize.sm,
@@ -64,16 +83,23 @@ function createStyles(colors: ThemeColors) {
     primaryBtnText: { fontSize: FontSize.md, fontWeight: '600', color: colors.textInverse },
     signOutRow: { paddingVertical: Spacing.lg, alignItems: 'center' },
     signOutText: { fontSize: FontSize.md, color: colors.error, fontWeight: '600' },
-    textInput: {
-      marginTop: Spacing.sm,
+    deleteAccountRow: { paddingTop: Spacing.md, alignItems: 'center' },
+    pickerButton: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: BorderRadius.sm,
       paddingHorizontal: Spacing.md,
-      paddingVertical: Spacing.sm,
-      fontSize: FontSize.md,
-      color: colors.text,
+      paddingVertical: Spacing.md,
     },
+    pickerButtonText: { fontSize: FontSize.md, color: colors.text },
+    pickerPlaceholder: { fontSize: FontSize.md, color: colors.textTertiary },
+    clearHomeState: {
+      alignSelf: 'flex-start',
+      marginTop: Spacing.sm,
+      paddingVertical: Spacing.xs,
+    },
+    clearHomeStateText: { fontSize: FontSize.sm, color: colors.primary, fontWeight: '600' },
     appearanceRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -82,11 +108,26 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: Spacing.xs,
     },
     appearanceLabelWrap: { flex: 1 },
-    appearanceHint: {
-      fontSize: FontSize.sm,
-      color: colors.textTertiary,
-      marginTop: Spacing.xs,
-      lineHeight: 18,
+    nameFieldLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: Spacing.xs,
+      marginTop: Spacing.sm,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    nameFieldLabelFirst: { marginTop: 0 },
+    nameInput: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      fontSize: FontSize.md,
+      color: colors.text,
+      marginBottom: Spacing.xs,
     },
   });
 }
@@ -95,22 +136,70 @@ export default function ProfileSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { colors, darkModeEnabled, setDarkModeEnabled } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { signOut, profile, updateHomeState, fetchProfile } = useAuthStore();
+  const { signOut, softDeleteAccount, profile, updateHomeState, updateProfileNames, fetchProfile } =
+    useAuthStore();
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
   const { pendingSyncTrips, retryPendingSyncs, isSyncingPending } = useTripStore();
-  const [homeStateDraft, setHomeStateDraft] = useState('');
+  const [homeStateSelected, setHomeStateSelected] = useState<UsStateOption | null>(null);
+  const [stateModalOpen, setStateModalOpen] = useState(false);
   const [savingHomeState, setSavingHomeState] = useState(false);
   const [clearingTripPhotos, setClearingTripPhotos] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [firstNameDraft, setFirstNameDraft] = useState('');
+  const [lastNameDraft, setLastNameDraft] = useState('');
+  const [savingName, setSavingName] = useState(false);
 
   useEffect(() => {
-    setHomeStateDraft(profile?.home_state?.trim() ?? '');
+    setHomeStateSelected(matchStoredProfileHomeState(profile?.home_state));
   }, [profile?.home_state]);
+
+  useEffect(() => {
+    setFirstNameDraft(profile?.first_name?.trim() ?? '');
+    setLastNameDraft(profile?.last_name?.trim() ?? '');
+  }, [profile?.first_name, profile?.last_name]);
 
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: signOut },
     ]);
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This will permanently remove access to your data in DriftGuide. All trips, photos, catches, saved flies, and locations you created will be deleted from your account (we keep anonymized technical records where required).\n\nThis cannot be undone. Are you sure you want to continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Delete account — final confirmation',
+              'Your account will be closed and you will be signed out. Type of data removed includes journal entries, album photos, and fly box. Proceed?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete my account',
+                  style: 'destructive',
+                  onPress: () => {
+                    void (async () => {
+                      setDeletingAccount(true);
+                      const { error } = await softDeleteAccount();
+                      setDeletingAccount(false);
+                      if (error) {
+                        Alert.alert('Could not delete account', error);
+                      }
+                    })();
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
   };
 
   const handleRetrySync = useCallback(async () => {
@@ -154,9 +243,34 @@ export default function ProfileSettingsScreen() {
     );
   }, []);
 
+  const handleSaveName = useCallback(async () => {
+    setSavingName(true);
+    const { error } = await updateProfileNames(firstNameDraft, lastNameDraft);
+    setSavingName(false);
+    if (error) {
+      Alert.alert('Could not save', error);
+      return;
+    }
+    await fetchProfile();
+  }, [firstNameDraft, lastNameDraft, updateProfileNames, fetchProfile]);
+
+  const showOfflineMapsInfo = useCallback(() => {
+    Alert.alert(
+      'Offline maps',
+      'Choose your US home state to cache catalog waters for the offline map and Fish now when you do not have a signal. Clear your home state to stop state snapshots.',
+    );
+  }, []);
+
+  const showTripPhotosOfflineInfo = useCallback(() => {
+    Alert.alert(
+      'Trip photos offline',
+      'We keep photos for your last four completed trips on this device for quick loading. You can pin specific trips from a trip summary so those photos are always kept here.',
+    );
+  }, []);
+
   const handleSaveHomeState = useCallback(async () => {
     setSavingHomeState(true);
-    const { error } = await updateHomeState(homeStateDraft.trim() || null);
+    const { error } = await updateHomeState(homeStateSelected?.name ?? null);
     setSavingHomeState(false);
     if (error) {
       Alert.alert('Could not save', error);
@@ -164,7 +278,7 @@ export default function ProfileSettingsScreen() {
     }
     await fetchProfile();
     void fetchLocations();
-  }, [homeStateDraft, updateHomeState, fetchProfile, fetchLocations]);
+  }, [homeStateSelected, updateHomeState, fetchProfile, fetchLocations]);
 
   return (
     <ScrollView
@@ -175,39 +289,76 @@ export default function ProfileSettingsScreen() {
       ]}
     >
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Appearance</Text>
-        <View style={styles.appearanceRow}>
-          <View style={styles.appearanceLabelWrap}>
-            <Text style={styles.bodyText}>Dark mode</Text>
-            <Text style={styles.appearanceHint}>
-              On: dark theme. Off: light theme.
-            </Text>
-          </View>
-          <Switch
-            value={darkModeEnabled}
-            onValueChange={setDarkModeEnabled}
-            trackColor={{ false: colors.border, true: colors.primaryLight }}
-            thumbColor={colors.surfaceElevated}
-          />
-        </View>
-      </View>
-
-      <View style={[styles.card, styles.sectionSpacing]}>
-        <Text style={styles.sectionTitle}>Offline maps</Text>
-        <Text style={styles.bodyText}>
-          US home state (e.g. UT or Utah). Used to cache catalog waters for offline map and Fish now when you
-          do not have a signal. Clear the field to stop state snapshots.
-        </Text>
+        <Text style={[styles.nameFieldLabel, styles.nameFieldLabelFirst]}>First name</Text>
         <TextInput
-          style={styles.textInput}
-          value={homeStateDraft}
-          onChangeText={setHomeStateDraft}
-          placeholder="e.g. Utah or UT"
+          style={styles.nameInput}
+          value={firstNameDraft}
+          onChangeText={setFirstNameDraft}
+          placeholder="First name"
           placeholderTextColor={colors.textTertiary}
           autoCapitalize="words"
           autoCorrect={false}
-          editable={!savingHomeState}
+          editable={!savingName}
         />
+        <Text style={styles.nameFieldLabel}>Last name</Text>
+        <TextInput
+          style={styles.nameInput}
+          value={lastNameDraft}
+          onChangeText={setLastNameDraft}
+          placeholder="Last name"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="words"
+          autoCorrect={false}
+          editable={!savingName}
+        />
+        <Pressable
+          style={[styles.primaryBtn, savingName && styles.primaryBtnDisabled]}
+          onPress={handleSaveName}
+          disabled={savingName}
+        >
+          {savingName ? (
+            <ActivityIndicator size="small" color={colors.textInverse} />
+          ) : (
+            <Text style={styles.primaryBtnText}>Save name</Text>
+          )}
+        </Pressable>
+      </View>
+
+      <View style={[styles.card, styles.sectionSpacing]}>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.sectionTitleInRow}>Offline maps</Text>
+          <Pressable
+            style={styles.sectionInfoHit}
+            onPress={showOfflineMapsInfo}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="About offline maps"
+          >
+            <MaterialIcons name="info-outline" size={22} color={colors.textSecondary} />
+          </Pressable>
+        </View>
+        <Pressable
+          style={[styles.pickerButton, savingHomeState && styles.primaryBtnDisabled]}
+          onPress={() => setStateModalOpen(true)}
+          disabled={savingHomeState}
+        >
+          {homeStateSelected ? (
+            <Text style={styles.pickerButtonText}>
+              {homeStateSelected.name} ({homeStateSelected.code})
+            </Text>
+          ) : (
+            <Text style={styles.pickerPlaceholder}>Tap to choose your state</Text>
+          )}
+        </Pressable>
+        {homeStateSelected ? (
+          <Pressable
+            style={styles.clearHomeState}
+            onPress={() => setHomeStateSelected(null)}
+            disabled={savingHomeState}
+          >
+            <Text style={styles.clearHomeStateText}>Clear home state</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           style={[styles.primaryBtn, savingHomeState && styles.primaryBtnDisabled]}
           onPress={handleSaveHomeState}
@@ -221,12 +372,25 @@ export default function ProfileSettingsScreen() {
         </Pressable>
       </View>
 
+      <UsStatePickerModal
+        visible={stateModalOpen}
+        onClose={() => setStateModalOpen(false)}
+        onSelect={setHomeStateSelected}
+      />
+
       <View style={[styles.card, styles.sectionSpacing]}>
-        <Text style={styles.sectionTitle}>Trip photos offline</Text>
-        <Text style={styles.bodyText}>
-          We keep photos for your last four completed trips on this device for quick loading. You can pin specific
-          trips from a trip summary so those photos are always kept here.
-        </Text>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.sectionTitleInRow}>Trip photos offline</Text>
+          <Pressable
+            style={styles.sectionInfoHit}
+            onPress={showTripPhotosOfflineInfo}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="About trip photos offline"
+          >
+            <MaterialIcons name="info-outline" size={22} color={colors.textSecondary} />
+          </Pressable>
+        </View>
         <Pressable
           style={[styles.primaryBtn, clearingTripPhotos && styles.primaryBtnDisabled]}
           onPress={handleClearTripPhotoCache}
@@ -262,6 +426,21 @@ export default function ProfileSettingsScreen() {
       ) : null}
 
       <View style={[styles.card, styles.sectionSpacing]}>
+        <Text style={styles.sectionTitle}>Appearance</Text>
+        <View style={styles.appearanceRow}>
+          <View style={styles.appearanceLabelWrap}>
+            <Text style={styles.bodyText}>Dark mode</Text>
+          </View>
+          <Switch
+            value={darkModeEnabled}
+            onValueChange={setDarkModeEnabled}
+            trackColor={{ false: colors.border, true: colors.primaryLight }}
+            thumbColor={colors.surfaceElevated}
+          />
+        </View>
+      </View>
+
+      <View style={[styles.card, styles.sectionSpacing]}>
         <Text style={styles.sectionTitle}>About</Text>
         <Text style={styles.bodyText}>
           DriftGuide helps you plan trips, log catches, and fish smarter with local conditions and your
@@ -272,8 +451,19 @@ export default function ProfileSettingsScreen() {
 
       <View style={[styles.card, styles.sectionSpacing]}>
         <Text style={styles.sectionTitle}>Account</Text>
-        <Pressable style={styles.signOutRow} onPress={handleSignOut}>
+        <Pressable style={styles.signOutRow} onPress={handleSignOut} disabled={deletingAccount}>
           <Text style={styles.signOutText}>Sign out</Text>
+        </Pressable>
+        <Pressable
+          style={styles.deleteAccountRow}
+          onPress={handleDeleteAccount}
+          disabled={deletingAccount}
+        >
+          {deletingAccount ? (
+            <ActivityIndicator size="small" color={colors.error} />
+          ) : (
+            <Text style={styles.signOutText}>Delete account</Text>
+          )}
         </Pressable>
       </View>
     </ScrollView>

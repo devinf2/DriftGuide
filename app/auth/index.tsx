@@ -3,6 +3,7 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -13,6 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
@@ -26,13 +28,14 @@ function createStyles(colors: ThemeColors) {
       padding: Spacing.xl,
     },
     header: {
+      alignSelf: 'stretch',
       alignItems: 'center',
-      marginBottom: Spacing.xxl,
+      marginBottom: Spacing.xl,
     },
     logo: {
-      width: 200,
-      height: 200,
-      marginBottom: Spacing.md,
+      width: 240,
+      height: 240,
+      marginBottom: Spacing.sm,
     },
     subtitle: {
       fontSize: FontSize.md,
@@ -41,6 +44,38 @@ function createStyles(colors: ThemeColors) {
     },
     form: {
       gap: Spacing.md,
+    },
+    dividerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      marginVertical: Spacing.sm,
+    },
+    dividerLine: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    dividerText: {
+      fontSize: FontSize.sm,
+      color: colors.textTertiary,
+    },
+    googleButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: Spacing.sm,
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    googleButtonText: {
+      color: colors.text,
+      fontSize: FontSize.md,
+      fontWeight: '600',
     },
     input: {
       backgroundColor: colors.surface,
@@ -90,7 +125,8 @@ export default function AuthScreen() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { signIn, signUp } = useAuthStore();
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const { signIn, signUp, signInWithGoogle } = useAuthStore();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -113,75 +149,108 @@ export default function AuthScreen() {
     }
   };
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Image
-            source={require('@/assets/images/logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <Text style={styles.subtitle}>Your AI fishing companion</Text>
-        </View>
+  const handleGoogle = async () => {
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result.error) setError(result.error);
+    } catch {
+      setError('Google sign-in failed. Please try again.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
-        <View style={styles.form}>
-          {isSignUp && (
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <View style={styles.header}>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.subtitle}>Your AI fishing companion</Text>
+          </View>
+
+          <View style={styles.form}>
+            <Pressable
+              style={[styles.googleButton, (loading || googleLoading) && styles.buttonDisabled]}
+              onPress={handleGoogle}
+              disabled={loading || googleLoading}
+            >
+              {googleLoading ? (
+                <ActivityIndicator color={colors.text} />
+              ) : (
+                <Text style={styles.googleButtonText}>Continue with Google</Text>
+              )}
+            </Pressable>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {isSignUp && (
+              <TextInput
+                style={styles.input}
+                placeholder="Display Name"
+                placeholderTextColor={colors.textTertiary}
+                value={displayName}
+                onChangeText={setDisplayName}
+                autoCapitalize="words"
+              />
+            )}
             <TextInput
               style={styles.input}
-              placeholder="Display Name"
+              placeholder="Email"
               placeholderTextColor={colors.textTertiary}
-              value={displayName}
-              onChangeText={setDisplayName}
-              autoCapitalize="words"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
             />
-          )}
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            placeholderTextColor={colors.textTertiary}
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            placeholderTextColor={colors.textTertiary}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor={colors.textTertiary}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <Pressable
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleSubmit}
-            disabled={loading}
-          >
-            <Text style={styles.buttonText}>
-              {loading ? 'Please wait...' : isSignUp ? 'Create Account' : 'Sign In'}
-            </Text>
-          </Pressable>
+            <Pressable
+              style={[styles.button, loading && styles.buttonDisabled]}
+              onPress={handleSubmit}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? 'Please wait...' : isSignUp ? 'Create Account' : 'Sign In'}
+              </Text>
+            </Pressable>
 
-          <Pressable
-            style={styles.switchButton}
-            onPress={() => {
-              setIsSignUp(!isSignUp);
-              setError(null);
-            }}
-          >
-            <Text style={styles.switchText}>
-              {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-            </Text>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+            <Pressable
+              style={styles.switchButton}
+              onPress={() => {
+                setIsSignUp(!isSignUp);
+                setError(null);
+              }}
+            >
+              <Text style={styles.switchText}>
+                {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+              </Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }

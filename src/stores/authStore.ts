@@ -2,14 +2,20 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
+import { signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
 import { Profile } from '@/src/types';
 import { supabase } from '@/src/services/supabase';
+import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
+import { useThemeStore } from '@/src/stores/themeStore';
+import { useTripStore } from '@/src/stores/tripStore';
 
 interface AuthState {
   session: Session | null;
   user: User | null;
   profile: Profile | null;
   isLoading: boolean;
+  /** True while fetching profile for the current session (avoid onboarding flash). */
+  isProfileLoading: boolean;
   setSession: (session: Session | null) => void;
   setProfile: (profile: Profile | null) => void;
   fetchProfile: () => Promise<void>;
@@ -17,7 +23,16 @@ interface AuthState {
   updateHomeState: (homeState: string | null) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signInWithGoogle: () => Promise<{ error: string | null }>;
+  completeProfileOnboarding: (input: {
+    firstName: string;
+    lastName: string;
+    homeState: string;
+    darkModeEnabled: boolean;
+  }) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
+  /** Soft-delete cloud data for the current user, clear local trip state, then sign out. */
+  softDeleteAccount: () => Promise<{ error: string | null }>;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -27,17 +42,28 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       profile: null,
       isLoading: true,
+      isProfileLoading: false,
 
       setSession: (session) => {
-        set({ session, user: session?.user ?? null, isLoading: false });
+        set({
+          session,
+          user: session?.user ?? null,
+          isLoading: false,
+          isProfileLoading: Boolean(session),
+          ...(session ? {} : { profile: null }),
+        });
       },
 
       setProfile: (profile) => set({ profile }),
 
       fetchProfile: async () => {
         const user = get().user;
-        if (!user) return;
+        if (!user) {
+          set({ isProfileLoading: false });
+          return;
+        }
 
+        set({ isProfileLoading: true });
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
@@ -47,6 +73,7 @@ export const useAuthStore = create<AuthState>()(
         if (!error && data) {
           set({ profile: data as Profile });
         }
+        set({ isProfileLoading: false });
       },
 
       updateProfileNames: async (firstName, lastName) => {
@@ -111,9 +138,93 @@ export const useAuthStore = create<AuthState>()(
         return { error: null };
       },
 
+      signInWithGoogle: async () => {
+        const result = await signInWithGoogleOAuth();
+        if (result.cancelled) return { error: null };
+        if (result.error) return { error: result.error };
+
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          set({ session, user: session.user, isLoading: false });
+        }
+        await get().fetchProfile();
+
+        return { error: null };
+      },
+
+      completeProfileOnboarding: async ({ firstName, lastName, homeState, darkModeEnabled }) => {
+        const user = get().user;
+        if (!user) return { error: 'Not signed in' };
+
+        const fn = firstName.trim();
+        const ln = lastName.trim();
+        const hs = homeState.trim();
+        if (!fn || !ln) return { error: 'Please enter your first and last name.' };
+        if (!hs) return { error: 'Please choose your home state.' };
+
+        const combined = [fn, ln].filter(Boolean).join(' ');
+        const display_name = combined || get().profile?.display_name?.trim() || 'Angler';
+
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            first_name: fn,
+            last_name: ln,
+            home_state: hs,
+            display_name,
+            onboarding_completed_at: new Date().toISOString(),
+          })
+          .eq('id', user.id);
+
+        if (error) return { error: error.message };
+
+        useThemeStore.getState().setDarkModeEnabled(darkModeEnabled);
+        await get().fetchProfile();
+
+        return { error: null };
+      },
+
       signOut: async () => {
         await supabase.auth.signOut();
-        set({ session: null, user: null, profile: null });
+        set({ session: null, user: null, profile: null, isProfileLoading: false });
+      },
+
+      softDeleteAccount: async () => {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) return { error: 'Not signed in' };
+
+        const { error: rpcError } = await supabase.rpc('soft_delete_my_account');
+        if (rpcError) return { error: rpcError.message };
+
+        const { data: fnData, error: fnError } = await supabase.functions.invoke(
+          'delete-closed-auth-user',
+          { headers: { Authorization: `Bearer ${session.access_token}` } },
+        );
+
+        if (fnError) {
+          return {
+            error: `Your data was removed, but releasing your email for a new account failed (${fnError.message}). Try again or contact support.`,
+          };
+        }
+        if (fnData && typeof fnData === 'object' && 'error' in fnData && fnData.error) {
+          return { error: String(fnData.error) };
+        }
+
+        try {
+          await clearTripPhotoOfflineCache();
+        } catch {
+          /* offline cache is best-effort */
+        }
+
+        await useTripStore.getState().clearAllLocalTripData();
+
+        await supabase.auth.signOut();
+        set({ session: null, user: null, profile: null, isProfileLoading: false });
+        await AsyncStorage.removeItem('auth-storage');
+
+        return { error: null };
       },
     }),
     {

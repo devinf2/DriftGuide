@@ -39,6 +39,10 @@ export interface Profile {
   avatar_url?: string | null;
   /** US home state (full name or 2-letter code) for offline catalog snapshot. */
   home_state?: string | null;
+  /** Set when the user finishes first-run profile onboarding in the app. */
+  onboarding_completed_at?: string | null;
+  /** Set when the user closed their account (soft delete); app signs out and blocks use. */
+  account_deleted_at?: string | null;
 }
 
 export type AccessPointStatus = 'pending' | 'approved';
@@ -240,6 +244,7 @@ export interface CatchRow {
   fly_size: number | null;
   fly_color: string | null;
   created_at?: string;
+  deleted_at?: string | null;
 }
 
 /** Anonymized catch for community/offline AI: no user_id, trip_id, event_id, photo_url. */
@@ -426,4 +431,5 @@ export interface Photo {
   fly_id: string | null;
   captured_at: string | null;
   created_at: string;
+  deleted_at?: string | null;
 }

@@ -129,6 +129,9 @@ export function PlanTripFab() {
   const hideOnTripSummary =
     /^\/journal\/[^/]+$/.test(pathname) || /\/trip\/[^/]+\/summary$/.test(pathname);
 
+  /** Profile settings — avoid overlapping the scroll / actions with the fish FAB. */
+  const hideOnProfileSettings = pathname.includes('/profile/settings');
+
   const homeWithChatComposer = pathname === '/home' || pathname === '/guide';
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -160,6 +163,10 @@ export function PlanTripFab() {
   }
 
   if (hideOnTripSummary) {
+    return null;
+  }
+
+  if (hideOnProfileSettings) {
     return null;
   }
 

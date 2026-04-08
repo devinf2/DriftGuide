@@ -23,7 +23,6 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     View,
 } from 'react-native';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
@@ -67,13 +66,9 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const router = useRouter();
-  const { user, profile, fetchProfile, updateProfileNames } = useAuthStore();
+  const { user, profile, fetchProfile } = useAuthStore();
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
-  const [nameModalOpen, setNameModalOpen] = useState(false);
-  const [firstNameDraft, setFirstNameDraft] = useState('');
-  const [lastNameDraft, setLastNameDraft] = useState('');
-  const [savingName, setSavingName] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [photoLibraryRefreshSignal, setPhotoLibraryRefreshSignal] = useState(0);
 
@@ -86,13 +81,6 @@ export default function ProfileScreen() {
       setRefreshing(false);
     }
   }, [fetchProfile]);
-
-  useEffect(() => {
-    if (nameModalOpen && profile) {
-      setFirstNameDraft(profile.first_name?.trim() ?? '');
-      setLastNameDraft(profile.last_name?.trim() ?? '');
-    }
-  }, [nameModalOpen, profile]);
 
   const pickAvatarForPreview = useCallback(async (source: 'library' | 'camera') => {
     if (!user) return;
@@ -161,17 +149,6 @@ export default function ProfileScreen() {
     ]);
   };
 
-  const saveName = async () => {
-    setSavingName(true);
-    const { error } = await updateProfileNames(firstNameDraft, lastNameDraft);
-    setSavingName(false);
-    if (error) {
-      Alert.alert('Could not save', error);
-      return;
-    }
-    setNameModalOpen(false);
-  };
-
   const displayName = profileDisplayName(profile);
 
   return (
@@ -208,15 +185,6 @@ export default function ProfileScreen() {
       >
         <View style={styles.headerCard}>
           <View style={styles.headerActions}>
-            <Pressable
-              onPress={() => setNameModalOpen(true)}
-              style={styles.headerActionBtn}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Edit name"
-            >
-              <MaterialCommunityIcons name="pencil-outline" size={20} color={colors.primary} />
-            </Pressable>
             <Pressable
               onPress={() => router.push('/profile/settings')}
               style={styles.headerActionBtn}
@@ -280,55 +248,6 @@ export default function ProfileScreen() {
 
         <ProfilePhotoLibrarySection refreshSignal={photoLibraryRefreshSignal} />
       </ScrollView>
-
-      <Modal visible={nameModalOpen} transparent animationType="fade" onRequestClose={() => setNameModalOpen(false)}>
-        <Pressable style={styles.nameModalBackdrop} onPress={() => setNameModalOpen(false)}>
-          <Pressable style={styles.nameModalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.nameModalTitle}>Your name</Text>
-            <Text style={styles.nameModalHint}>Shown in your profile header and greetings.</Text>
-            <Text style={styles.inputLabel}>First name</Text>
-            <TextInput
-              style={styles.input}
-              value={firstNameDraft}
-              onChangeText={setFirstNameDraft}
-              placeholder="First name"
-              placeholderTextColor={colors.textTertiary}
-              autoCapitalize="words"
-              editable={!savingName}
-            />
-            <Text style={styles.inputLabel}>Last name</Text>
-            <TextInput
-              style={styles.input}
-              value={lastNameDraft}
-              onChangeText={setLastNameDraft}
-              placeholder="Last name"
-              placeholderTextColor={colors.textTertiary}
-              autoCapitalize="words"
-              editable={!savingName}
-            />
-            <View style={styles.nameModalActions}>
-              <Pressable
-                style={styles.nameModalSecondary}
-                onPress={() => setNameModalOpen(false)}
-                disabled={savingName}
-              >
-                <Text style={styles.nameModalSecondaryText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.nameModalPrimary, savingName && styles.nameModalPrimaryDisabled]}
-                onPress={saveName}
-                disabled={savingName}
-              >
-                {savingName ? (
-                  <ActivityIndicator color={colors.textInverse} />
-                ) : (
-                  <Text style={styles.nameModalPrimaryText}>Save</Text>
-                )}
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
 
       <Modal
         visible={avatarPreviewUri != null}
@@ -423,7 +342,7 @@ function createProfileStyles(colors: ThemeColors) {
       }),
     },
     headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-    headerTextCol: { flex: 1, minWidth: 0, paddingRight: 44 },
+    headerTextCol: { flex: 1, minWidth: 0, paddingRight: 40 },
     avatarPressable: { borderRadius: 30 },
     avatarPressablePressed: { opacity: 0.85 },
     avatarWrapper: { width: 56, height: 56, position: 'relative' },
@@ -473,9 +392,6 @@ function createProfileStyles(colors: ThemeColors) {
       top: Spacing.sm,
       right: Spacing.sm,
       zIndex: 1,
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: Spacing.xs,
     },
     headerActionBtn: {
       padding: Spacing.xs,
@@ -513,62 +429,6 @@ function createProfileStyles(colors: ThemeColors) {
       color: colors.text,
       textAlign: 'center',
     },
-    nameModalBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.45)',
-      justifyContent: 'center',
-      padding: Spacing.md,
-    },
-    nameModalCard: {
-      backgroundColor: colors.surface,
-      borderRadius: BorderRadius.md,
-      padding: Spacing.md,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-    },
-    nameModalTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
-    nameModalHint: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs, marginBottom: Spacing.md },
-    inputLabel: {
-      fontSize: FontSize.xs,
-      fontWeight: '600',
-      color: colors.textSecondary,
-      marginBottom: Spacing.xs,
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-    },
-    input: {
-      backgroundColor: colors.background,
-      borderRadius: BorderRadius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      paddingVertical: Spacing.sm,
-      paddingHorizontal: Spacing.md,
-      fontSize: FontSize.md,
-      color: colors.text,
-      marginBottom: Spacing.md,
-    },
-    nameModalActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
-    nameModalSecondary: {
-      flex: 1,
-      paddingVertical: Spacing.md,
-      alignItems: 'center',
-      borderRadius: BorderRadius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.background,
-    },
-    nameModalSecondaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.text },
-    nameModalPrimary: {
-      flex: 1,
-      paddingVertical: Spacing.md,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderRadius: BorderRadius.sm,
-      backgroundColor: colors.primary,
-      minHeight: 48,
-    },
-    nameModalPrimaryDisabled: { opacity: 0.75 },
-    nameModalPrimaryText: { fontSize: FontSize.md, fontWeight: '600', color: colors.textInverse },
     avatarPreviewBackdrop: {
       flex: 1,
       backgroundColor: 'rgba(0,0,0,0.45)',
