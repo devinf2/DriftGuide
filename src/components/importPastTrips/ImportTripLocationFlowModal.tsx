@@ -223,9 +223,14 @@ export function ImportTripLocationFlowModal({
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || !anchorOk || anchorLat == null || anchorLng == null) return;
-    setPinLat(anchorLat);
-    setPinLng(anchorLng);
+    if (!visible) return;
+    if (anchorOk && anchorLat != null && anchorLng != null) {
+      setPinLat(anchorLat);
+      setPinLng(anchorLng);
+    } else {
+      setPinLat(40.76);
+      setPinLng(-111.891);
+    }
     setMapFocusNonce((n) => n + 1);
   }, [visible, anchorOk, anchorLat, anchorLng]);
 
@@ -254,12 +259,12 @@ export function ImportTripLocationFlowModal({
   }, [flowStep]);
 
   useEffect(() => {
-    if (!visible || loading || !anchorOk) return;
+    if (!visible || loading) return;
     if (nearbyFromServer.length > 0) return;
     if (autoSkippedPickParentRef.current) return;
     autoSkippedPickParentRef.current = true;
     setFlowStep(2);
-  }, [visible, loading, anchorOk, nearbyFromServer.length]);
+  }, [visible, loading, nearbyFromServer.length]);
 
   /** List row / catalog pin: within 1 mi of photo GPS → attach that place; farther → ask. */
   const handlePickCandidate = useCallback(
@@ -370,7 +375,9 @@ export function ImportTripLocationFlowModal({
 
   const step1EmptyHint =
     !loading && nearbyFromServer.length === 0
-      ? 'No nearby locations found. You can still save this trip as its own place using the map pin from your photos (or add places from the Map tab).'
+      ? anchorOk
+        ? 'No nearby locations found. You can still save this trip as its own place using the map pin from your photos (or add places from the Map tab).'
+        : 'No photo location to search from. Use search below or move the map pin, then save this trip as its own place (or pick from the Map tab).'
       : null;
 
   return (
@@ -391,68 +398,61 @@ export function ImportTripLocationFlowModal({
                 <ActivityIndicator color={colors.primary} size="large" />
                 <Text style={styles.loadingText}>Finding nearby waters…</Text>
               </View>
-            ) : anchorOk ? (
-              <>
-                <View style={styles.sheetContent}>
-                  <LocationPinParentTwoStepFlow
-                    latitude={pinLat}
-                    longitude={pinLng}
-                    onCoordinateChange={(lat, lng) => {
+            ) : (
+              <View style={styles.sheetContent}>
+                <LocationPinParentTwoStepFlow
+                  latitude={pinLat}
+                  longitude={pinLng}
+                  onCoordinateChange={(lat, lng) => {
+                    setPinLat(lat);
+                    setPinLng(lng);
+                  }}
+                  mapFocusKey={mapFocusNonce}
+                  mapFallbackCenter={
+                    anchorOk && anchorLat != null && anchorLng != null
+                      ? [anchorLng, anchorLat]
+                      : undefined
+                  }
+                  mapFixedHeight={mapFixedHeight}
+                  bottomPanelFlex={1}
+                  edgeToEdgeMap={false}
+                  containerStyle={{ flex: 1, minHeight: 0 }}
+                  step={flowStep}
+                  candidates={nearbyFromServer}
+                  onPressCandidate={handlePickCandidate}
+                  notPartOfListLabel="No — save as its own place"
+                  onPressNotPartOfList={handleStandalone}
+                  step1EmptyHint={step1EmptyHint}
+                  step1CandidatesDisabled={!candidateRowsEnabled && nearbyFromServer.length > 0}
+                  driftGuideSearchLocations={locations}
+                  searchProximityLngLat={
+                    anchorOk && anchorLng != null && anchorLat != null ? [anchorLng, anchorLat] : null
+                  }
+                  onPickMapGeocodeResult={(f) => {
+                    const [lng, lat] = f.center;
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
                       setPinLat(lat);
                       setPinLng(lng);
-                    }}
-                    mapFocusKey={mapFocusNonce}
-                    mapFallbackCenter={[anchorLng!, anchorLat!]}
-                    mapFixedHeight={mapFixedHeight}
-                    bottomPanelFlex={1}
-                    edgeToEdgeMap={false}
-                    containerStyle={{ flex: 1, minHeight: 0 }}
-                    step={flowStep}
-                    candidates={nearbyFromServer}
-                    onPressCandidate={handlePickCandidate}
-                    notPartOfListLabel="No — save as its own place"
-                    onPressNotPartOfList={handleStandalone}
-                    step1EmptyHint={step1EmptyHint}
-                    step1CandidatesDisabled={!candidateRowsEnabled && nearbyFromServer.length > 0}
-                    driftGuideSearchLocations={locations}
-                    searchProximityLngLat={
-                      anchorOk ? [anchorLng!, anchorLat!] : null
+                      setMapFocusNonce((n) => n + 1);
                     }
-                    onPickMapGeocodeResult={(f) => {
-                      const [lng, lat] = f.center;
-                      if (Number.isFinite(lat) && Number.isFinite(lng)) {
-                        setPinLat(lat);
-                        setPinLng(lng);
-                        setMapFocusNonce((n) => n + 1);
-                      }
-                    }}
-                    showSpotDetailFields={true}
-                    name={name}
-                    onNameChange={setName}
-                    locationType={locationType}
-                    typeLabel={typeLabel}
-                    onPressOpenTypePicker={() => setTypePickerOpen(true)}
-                    isPublic={isPublic}
-                    onIsPublicChange={setIsPublic}
-                    primaryButtonLabel="Save and use for import"
-                    onPressPrimary={() => void handleFormSubmit()}
-                    primaryBusy={saving}
-                    interactionDisabled={saving}
-                    onPressStep2Back={nearbyFromServer.length > 0 ? handleStep2Back : undefined}
-                    bottomInsetPadding={Spacing.sm}
-                    step1ListSurface="canvas"
-                    primaryButtonPlacement="footer"
-                  />
-                </View>
-              </>
-            ) : (
-              <View style={styles.loading}>
-                <Text style={styles.loadingText}>
-                  Location from photos is not available. Add GPS to photos or enable location permission.
-                </Text>
-                <Pressable style={{ marginTop: Spacing.lg, padding: Spacing.md }} onPress={onClose}>
-                  <Text style={[styles.cancelText, { color: colors.primary }]}>Close</Text>
-                </Pressable>
+                  }}
+                  showSpotDetailFields={true}
+                  name={name}
+                  onNameChange={setName}
+                  locationType={locationType}
+                  typeLabel={typeLabel}
+                  onPressOpenTypePicker={() => setTypePickerOpen(true)}
+                  isPublic={isPublic}
+                  onIsPublicChange={setIsPublic}
+                  primaryButtonLabel="Save and use for import"
+                  onPressPrimary={() => void handleFormSubmit()}
+                  primaryBusy={saving}
+                  interactionDisabled={saving}
+                  onPressStep2Back={nearbyFromServer.length > 0 ? handleStep2Back : undefined}
+                  bottomInsetPadding={Spacing.sm}
+                  step1ListSurface="canvas"
+                  primaryButtonPlacement="footer"
+                />
               </View>
             )}
           </Pressable>

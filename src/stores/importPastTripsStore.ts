@@ -89,6 +89,26 @@ function emptyPhotoStates(photoIds: string[]): Record<string, ImportPhotoState> 
 }
 
 function buildGroupsFromPhotos(photos: ImportPhoto[]): ImportTripGroup[] {
+  if (photos.length === 0) {
+    const tripDateKey = format(new Date(), 'yyyy-MM-dd');
+    return [
+      {
+        id: uuidv4(),
+        draftTripId: uuidv4(),
+        photoIds: [],
+        tripDateKey,
+        locationId: null,
+        location: null,
+        weatherCache: null,
+        events: [],
+        currentFlyEventId: null,
+        currentPrimary: null,
+        currentDropper: null,
+        photoStates: {},
+      },
+    ];
+  }
+
   const buckets = new Map<string, string[]>();
   for (const p of photos) {
     const key = p.meta.takenAt ? format(p.meta.takenAt, 'yyyy-MM-dd') : '__unknown__';

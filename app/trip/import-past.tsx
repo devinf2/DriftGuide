@@ -26,7 +26,7 @@ import {
   fetchSessionInviteById,
 } from '@/src/services/sharedSessionService';
 import { buildCompletedTripForImport, batchFinalizeImport } from '@/src/utils/importPastTrips/finalizeImport';
-import { format, parseISO } from 'date-fns';
+import { format, isValid, parseISO } from 'date-fns';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
@@ -117,6 +117,13 @@ function buildStep3Rows(group: ImportTripGroup): Step3Row[] {
       });
       rows.push({ kind: 'catch', catchEventId: st.catchEventId, photoIds });
     }
+  }
+  // Catches added with no linked import photos (e.g. "Add fish" without photos).
+  for (const ev of group.events) {
+    if (ev.event_type !== 'catch') continue;
+    if (seenCatch.has(ev.id)) continue;
+    seenCatch.add(ev.id);
+    rows.push({ kind: 'catch', catchEventId: ev.id, photoIds: [] });
   }
   return rows;
 }
@@ -282,6 +289,22 @@ function createStyles(colors: ThemeColors) {
     },
     muted: { color: colors.textSecondary, fontSize: FontSize.sm, marginTop: Spacing.sm },
     thumb: { width: 64, height: 64, borderRadius: BorderRadius.sm, marginRight: Spacing.sm },
+    thumbFishPlaceholder: {
+      width: 64,
+      height: 64,
+      borderRadius: BorderRadius.sm,
+      marginRight: Spacing.sm,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    step3CatchThumbIconOnly: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     step3CatchThumbStrip: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -412,15 +435,28 @@ function Step3CatchDetailsSummary({
   let species = '—';
   let size = '—';
   let fly = '—';
+  let time = '—';
   if (catchEvent && catchEvent.event_type === 'catch') {
     const d = catchEvent.data as CatchData;
     const s = step3CatchDetailStrings(d, events);
     species = s.species;
     size = s.size;
     fly = s.fly;
+    try {
+      const t = parseISO(catchEvent.timestamp);
+      if (isValid(t)) time = format(t, 'h:mm a, MMM d, yyyy');
+    } catch {
+      /* keep — */
+    }
   }
   return (
     <View style={styles.step3CatchDetailBlock}>
+      <View style={styles.step3CatchDetailRow}>
+        <Text style={styles.step3CatchDetailLabel}>Time</Text>
+        <Text style={styles.step3CatchDetailValue} numberOfLines={2}>
+          {time}
+        </Text>
+      </View>
       <View style={styles.step3CatchDetailRow}>
         <Text style={styles.step3CatchDetailLabel}>Species</Text>
         <Text style={styles.step3CatchDetailValue} numberOfLines={3}>
@@ -564,30 +600,28 @@ export default function ImportPastTripsScreen() {
           /* */
         }
       }
-      if (!anchor) {
-        Alert.alert(
-          'No location',
-          'Add GPS to photos or enable location permission to find nearby waters.',
-        );
-        return;
-      }
       setLocTargetGroupId(groupId);
-      setLocAnchor(anchor);
       setLocModalVisible(true);
-      setLocLoading(true);
       setLocCandidates([]);
-      try {
-        const rows = await searchNearbyRootParentCandidates(
-          anchor.lat,
-          anchor.lng,
-          undefined,
-          undefined,
-          STEP1_NEARBY_CATALOG_LIST_CAP,
-        );
-        setLocCandidates(rows);
-      } catch {
-        setLocCandidates([]);
-      } finally {
+      if (anchor) {
+        setLocAnchor(anchor);
+        setLocLoading(true);
+        try {
+          const rows = await searchNearbyRootParentCandidates(
+            anchor.lat,
+            anchor.lng,
+            undefined,
+            undefined,
+            STEP1_NEARBY_CATALOG_LIST_CAP,
+          );
+          setLocCandidates(rows);
+        } catch {
+          setLocCandidates([]);
+        } finally {
+          setLocLoading(false);
+        }
+      } else {
+        setLocAnchor(null);
         setLocLoading(false);
       }
     },
@@ -734,7 +768,7 @@ export default function ImportPastTripsScreen() {
                 fontSize: FontSize.md,
               }}
             >
-              Upload photos
+              Upload photos (optional)
             </Text>
             <Text
               style={{
@@ -744,7 +778,8 @@ export default function ImportPastTripsScreen() {
                 textAlign: 'center',
               }}
             >
-              From your library · dates from photo metadata when available
+              From your library when you have them · dates from metadata when available · or continue and log fish
+              without photos
             </Text>
           </>
         )}
@@ -791,8 +826,9 @@ export default function ImportPastTripsScreen() {
   const renderStep2 = () => (
     <>
       <Text style={{ color: colors.textSecondary, marginBottom: Spacing.md }}>
-        Photos are grouped by date. Use Split or Combine to fix trips, set each date, and choose where you fished. Trip
-        notes are not imported.
+        {photos.length === 0
+          ? 'One trip is created for today. Set the date and where you fished. On the next step you can log fish without photos.'
+          : 'Photos are grouped by date. Use Split or Combine to fix trips, set each date, and choose where you fished. Trip notes are not imported.'}
       </Text>
       {groups.map((g) => {
         const canSplit = g.photoIds.length > 1;
@@ -891,10 +927,14 @@ export default function ImportPastTripsScreen() {
       return !st || st.kind === 'untagged' || st.kind === 'catch';
     });
 
-  const renderStep3 = () => (
+  const renderStep3 = () => {
+    const step3Rows = activeGroup ? buildStep3Rows(activeGroup) : [];
+    return (
     <>
       <Text style={{ color: colors.textSecondary, marginBottom: Spacing.md }}>
-        Tag each photo as Fish or Scenery. Tap to select, then Combine Fish to merge.
+        {activeGroup && activeGroup.photoIds.length === 0
+          ? 'No photos for this trip. Add fish below (species, fly, and details). You can also go back to upload photos.'
+          : 'Tag each photo as Fish or Scenery. Tap to select, then Combine Fish to merge. You can add extra fish without photos using Add fish.'}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
         <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
@@ -913,7 +953,25 @@ export default function ImportPastTripsScreen() {
       </ScrollView>
       {!activeGroup ? null : (
         <>
-          {buildStep3Rows(activeGroup).map((row) => {
+          <Pressable
+            style={[styles.secondaryBtn, { marginBottom: Spacing.md }]}
+            onPress={() => {
+              setCatchUi({
+                groupId: activeGroup.id,
+                mode: 'add',
+                photoIds: [],
+                editingEvent: null,
+              });
+            }}
+          >
+            <Text style={{ color: colors.primary, fontWeight: '700', textAlign: 'center' }}>Add fish</Text>
+          </Pressable>
+          {step3Rows.length === 0 ? (
+            <Text style={[styles.muted, { marginBottom: Spacing.sm }]}>
+              Nothing to tag yet. Use Add fish to log catches, or go back to add photos.
+            </Text>
+          ) : null}
+          {step3Rows.map((row) => {
             if (row.kind === 'scenery') {
               const pid = row.photoId;
               const ph = photos.find((p) => p.id === pid);
@@ -1035,7 +1093,17 @@ export default function ImportPastTripsScreen() {
                     </Pressable>
                   </View>
                   <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
-                    {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
+                    {ph ? (
+                      <Image source={{ uri: ph.uri }} style={styles.thumb} />
+                    ) : (
+                      <View
+                        style={styles.thumbFishPlaceholder}
+                        accessibilityLabel="No photo for this catch"
+                        accessibilityRole="image"
+                      >
+                        <Ionicons name="fish-outline" size={28} color={colors.textTertiary} />
+                      </View>
+                    )}
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Step3CatchDetailsSummary catchEvent={undefined} events={activeGroup.events} styles={styles} />
                     </View>
@@ -1112,7 +1180,17 @@ export default function ImportPastTripsScreen() {
                     </Pressable>
                   </View>
                   <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
-                    {ph ? <Image source={{ uri: ph.uri }} style={styles.thumb} /> : null}
+                    {ph ? (
+                      <Image source={{ uri: ph.uri }} style={styles.thumb} />
+                    ) : (
+                      <View
+                        style={styles.thumbFishPlaceholder}
+                        accessibilityLabel="No photo for this catch"
+                        accessibilityRole="image"
+                      >
+                        <Ionicons name="fish-outline" size={28} color={colors.textTertiary} />
+                      </View>
+                    )}
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
                     </View>
@@ -1146,14 +1224,16 @@ export default function ImportPastTripsScreen() {
                 >
                   <Text style={{ color: colors.text, fontWeight: '700' }}>{headerLabel}</Text>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.md }}>
-                    <Pressable
-                      onPress={() => deleteCatchAndResetPhotos(activeGroup.id, catchEventId)}
-                      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                    >
-                      <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: FontSize.sm }}>
-                        Separate
-                      </Text>
-                    </Pressable>
+                    {photoIds.length > 1 ? (
+                      <Pressable
+                        onPress={() => deleteCatchAndResetPhotos(activeGroup.id, catchEventId)}
+                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                      >
+                        <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: FontSize.sm }}>
+                          Separate
+                        </Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable
                       onPress={openEditDetails}
                       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
@@ -1166,31 +1246,45 @@ export default function ImportPastTripsScreen() {
                 </View>
                 <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
                   <View>
-                    <View style={styles.step3CatchThumbStrip}>
-                      {(() => {
-                        const n = photoIds.length;
-                        const showPlus = n >= 5;
-                        const extraCount = n - 3;
-                        const slots = Math.min(4, n);
-                        return Array.from({ length: slots }, (_, i) => {
-                          const pid = photoIds[i];
-                          const ph = photos.find((p) => p.id === pid);
-                          const showOverlay = showPlus && i === 3;
-                          return (
-                            <View key={pid} style={styles.step3CatchThumbCell}>
-                              {ph ? (
-                                <Image source={{ uri: ph.uri }} style={styles.step3CatchThumbImg} />
-                              ) : null}
-                              {showOverlay ? (
-                                <View style={styles.step3CatchThumbOverlay} pointerEvents="none">
-                                  <Text style={styles.step3CatchThumbMoreText}>+{extraCount}</Text>
-                                </View>
-                              ) : null}
-                            </View>
-                          );
-                        });
-                      })()}
-                    </View>
+                    {photoIds.length === 0 ? (
+                      <View
+                        style={styles.thumbFishPlaceholder}
+                        accessibilityLabel="No photo for this catch"
+                        accessibilityRole="image"
+                      >
+                        <Ionicons name="fish-outline" size={28} color={colors.textTertiary} />
+                      </View>
+                    ) : (
+                      <View style={styles.step3CatchThumbStrip}>
+                        {(() => {
+                          const n = photoIds.length;
+                          const showPlus = n >= 5;
+                          const extraCount = n - 3;
+                          const slots = Math.min(4, n);
+                          return Array.from({ length: slots }, (_, i) => {
+                            const pid = photoIds[i];
+                            const ph = photos.find((p) => p.id === pid);
+                            const showOverlay = showPlus && i === 3;
+                            return (
+                              <View key={pid} style={styles.step3CatchThumbCell}>
+                                {ph ? (
+                                  <Image source={{ uri: ph.uri }} style={styles.step3CatchThumbImg} />
+                                ) : (
+                                  <View style={styles.step3CatchThumbIconOnly} pointerEvents="none">
+                                    <Ionicons name="fish-outline" size={18} color={colors.textTertiary} />
+                                  </View>
+                                )}
+                                {showOverlay ? (
+                                  <View style={styles.step3CatchThumbOverlay} pointerEvents="none">
+                                    <Text style={styles.step3CatchThumbMoreText}>+{extraCount}</Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                            );
+                          });
+                        })()}
+                      </View>
+                    )}
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Step3CatchDetailsSummary catchEvent={ev} events={activeGroup.events} styles={styles} />
@@ -1202,7 +1296,8 @@ export default function ImportPastTripsScreen() {
         </>
       )}
     </>
-  );
+    );
+  };
 
   const totalCatches = groups.reduce(
     (n, g) => n + g.events.filter((e) => e.event_type === 'catch').length,
@@ -1238,11 +1333,18 @@ export default function ImportPastTripsScreen() {
           </View>
           <Text style={styles.muted}>{groupDisplayLabel(g.tripDateKey, photos, g.photoIds)}</Text>
           <ScrollView horizontal style={{ marginTop: Spacing.sm }}>
-            <View style={{ flexDirection: 'row' }}>
-              {g.photoIds.map((pid) => {
-                const ph = photos.find((p) => p.id === pid);
-                return ph ? <Image key={pid} source={{ uri: ph.uri }} style={styles.thumb} /> : null;
-              })}
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {g.photoIds.length === 0 &&
+              g.events.some((e) => e.event_type === 'catch') ? (
+                <View style={styles.thumbFishPlaceholder} accessibilityLabel="Catches logged without photos">
+                  <Ionicons name="fish-outline" size={28} color={colors.textTertiary} />
+                </View>
+              ) : (
+                g.photoIds.map((pid) => {
+                  const ph = photos.find((p) => p.id === pid);
+                  return ph ? <Image key={pid} source={{ uri: ph.uri }} style={styles.thumb} /> : null;
+                })
+              )}
             </View>
           </ScrollView>
         </View>
@@ -1254,12 +1356,8 @@ export default function ImportPastTripsScreen() {
     <View style={[styles.wizardFooter, { paddingBottom: Spacing.md + insets.bottom }]}>
       {step === 1 ? (
         <Pressable
-          style={[
-            styles.primaryBtn,
-            { marginTop: 0 },
-            photos.length === 0 && { opacity: 0.5 },
-          ]}
-          disabled={photos.length === 0 || picking}
+          style={[styles.primaryBtn, { marginTop: 0 }]}
+          disabled={picking}
           onPress={() => {
             prepareStep2FromPhotos();
             setStep(2);

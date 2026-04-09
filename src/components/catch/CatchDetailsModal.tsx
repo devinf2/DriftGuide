@@ -5,6 +5,7 @@ import {
   Image,
   Keyboard,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
 import { v4 as uuidv4 } from 'uuid';
@@ -297,6 +300,60 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       color: colors.textSecondary,
       marginBottom: Spacing.xs,
     },
+    importCatchTimeRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      marginBottom: Spacing.sm,
+      marginTop: Spacing.xs,
+    },
+    importCatchTimeCol: { flex: 1 },
+    importCatchTimeLabel: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      fontWeight: '600',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 4,
+    },
+    importCatchTimeBtn: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    importCatchTimeBtnText: {
+      fontSize: FontSize.md,
+      color: colors.text,
+    },
+    importCatchPickerOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'flex-end',
+    },
+    importCatchPickerSheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: BorderRadius.xl,
+      borderTopRightRadius: BorderRadius.xl,
+      paddingBottom: Spacing.xxl,
+      paddingHorizontal: Spacing.lg,
+    },
+    importCatchPickerHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: Spacing.md,
+    },
+    importCatchPickerTitle: {
+      fontSize: FontSize.lg,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    importCatchPickerDone: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.primary,
+    },
     catchFlyDropdownRowWrap: {
       flexDirection: 'row',
       gap: Spacing.xs,
@@ -543,7 +600,8 @@ export function CatchDetailsModal({
   initialAddPhotoUris,
   importPhotoMetaSeed = null,
 }: CatchDetailsModalProps) {
-  const { colors } = useAppTheme();
+  const { colors, resolvedScheme } = useAppTheme();
+  const pickerThemeVariant = resolvedScheme === 'dark' ? 'dark' : 'light';
   const [catchFlyName, setCatchFlyName] = useState('');
   const [catchFlySize, setCatchFlySize] = useState<number | null>(null);
   const [catchFlyColor, setCatchFlyColor] = useState<string | null>(null);
@@ -587,6 +645,14 @@ export function CatchDetailsModal({
   /** Until true, map uses `editTargetCatch` coords so we don't flash the previous catch's pin. */
   const [editPinFormSynced, setEditPinFormSynced] = useState(false);
   const [gpsFillBusy, setGpsFillBusy] = useState(false);
+  /** Log past trips / imported draft: user-set catch instant (date + time). */
+  const [importCatchAt, setImportCatchAt] = useState(() => new Date());
+  const [showImportDatePicker, setShowImportDatePicker] = useState(false);
+  const [showImportTimePicker, setShowImportTimePicker] = useState(false);
+
+  /** Log past trips: all catches on an imported draft (add + edit), not live sessions. */
+  const showImportCatchTime =
+    Boolean(trip.imported) && (mode === 'add' || (mode === 'edit' && deferCloudWrites));
 
   const mapFallbackCenter = useMemo(() => tripMapDefaultCenterCoordinate(trip), [trip]);
   const styles = useMemo(() => createCatchDetailsStyles(colors), [colors]);
@@ -756,8 +822,12 @@ export function CatchDetailsModal({
       setLatText(laOk != null ? String(laOk) : '');
       setLonText(loOk != null ? String(loOk) : '');
       setEditPinFormSynced(true);
+      if (trip.imported) {
+        const ts = Date.parse(ev.timestamp);
+        setImportCatchAt(Number.isNaN(ts) ? new Date() : new Date(ts));
+      }
     },
-    [allEvents, userFlies, resolvedFlyCatalog],
+    [allEvents, userFlies, resolvedFlyCatalog, trip.imported],
   );
 
   /** Edit: load before paint so lat/lon fields and map show the catch immediately (avoids empty fields until interaction). */
@@ -775,6 +845,13 @@ export function CatchDetailsModal({
 
   useEffect(() => {
     if (!visible) setEditPinFormSynced(false);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) {
+      setShowImportDatePicker(false);
+      setShowImportTimePicker(false);
+    }
   }, [visible]);
 
   useEffect(() => {
@@ -801,6 +878,15 @@ export function CatchDetailsModal({
         latitude: seed!.latitude,
         longitude: seed!.longitude,
       });
+    }
+    if (trip.imported) {
+      const baseFromTrip =
+        trip.start_time && !Number.isNaN(Date.parse(trip.start_time))
+          ? new Date(trip.start_time)
+          : new Date();
+      const initialCatchAt =
+        seedTimeOk && seed?.takenAt ? new Date(seed.takenAt) : baseFromTrip;
+      setImportCatchAt(initialCatchAt);
     }
     if (seedGpsOk) {
       setPinLat(seed!.latitude);
@@ -926,6 +1012,28 @@ export function CatchDetailsModal({
       setGpsFillBusy(false);
     }
   }, [mode]);
+
+  const onImportCatchDateChange = useCallback((_e: DateTimePickerEvent, date?: Date) => {
+    if (Platform.OS === 'android') setShowImportDatePicker(false);
+    if (date) {
+      setImportCatchAt((prev) => {
+        const next = new Date(date);
+        next.setHours(prev.getHours(), prev.getMinutes(), prev.getSeconds(), prev.getMilliseconds());
+        return next;
+      });
+    }
+  }, []);
+
+  const onImportCatchTimeChange = useCallback((_e: DateTimePickerEvent, date?: Date) => {
+    if (Platform.OS === 'android') setShowImportTimePicker(false);
+    if (date) {
+      setImportCatchAt((prev) => {
+        const next = new Date(prev);
+        next.setHours(date.getHours(), date.getMinutes(), 0, 0);
+        return next;
+      });
+    }
+  }, []);
 
   const mapDisplayLat =
     mode === 'edit' && editTargetCatch && !editPinFormSynced
@@ -1172,17 +1280,19 @@ export function CatchDetailsModal({
 
         let catchTimestampIso: string | null = null;
         let photoCapturedAtIso: string | null = null;
-        if (photoExifMeta?.takenAt) {
+        if (trip.imported) {
+          catchTimestampIso = importCatchAt.toISOString();
+          photoCapturedAtIso = catchTimestampIso;
+        } else if (photoExifMeta?.takenAt) {
           catchTimestampIso = photoExifMeta.takenAt.toISOString();
           photoCapturedAtIso = catchTimestampIso;
         }
 
         let conditionsSnapshot: EventConditionsSnapshot | null | undefined = undefined;
-        if (photoExifMeta?.takenAt != null && lat != null && lon != null) {
-          const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
-          conditionsSnapshot = hist
-            ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
-            : null;
+        const tForWeather = trip.imported ? importCatchAt : (photoExifMeta?.takenAt ?? null);
+        if (tForWeather != null && lat != null && lon != null) {
+          const hist = await fetchHistoricalWeather(lat, lon, tForWeather);
+          conditionsSnapshot = hist ? buildEventConditionsSnapshot(hist, null, tForWeather) : null;
         }
 
         await onSubmitAdd({
@@ -1299,10 +1409,14 @@ export function CatchDetailsModal({
         let eventOverrides:
           | { timestamp?: string; conditions_snapshot?: EventConditionsSnapshot | null }
           | undefined;
+        if (trip.imported && deferCloudWrites) {
+          eventOverrides = { timestamp: importCatchAt.toISOString() };
+        }
         const addedLocalPhoto = newLocalUris.length > 0;
         if (addedLocalPhoto && photoExifMeta?.takenAt && lat != null && lon != null) {
           const hist = await fetchHistoricalWeather(lat, lon, photoExifMeta.takenAt);
           eventOverrides = {
+            ...eventOverrides,
             conditions_snapshot: hist
               ? buildEventConditionsSnapshot(hist, null, photoExifMeta.takenAt)
               : null,
@@ -1410,6 +1524,60 @@ export function CatchDetailsModal({
               keyboardDismissMode="on-drag"
               nestedScrollEnabled
             >
+              {showImportCatchTime ? (
+                <View style={{ marginBottom: Spacing.lg }}>
+                  <Text style={styles.flyFieldLabel}>When was this catch?</Text>
+                  <Text style={[styles.coordHint, { marginBottom: Spacing.sm }]}>
+                    Defaults to photo time when available, otherwise the trip start from the import flow.
+                  </Text>
+                  <View style={styles.importCatchTimeRow}>
+                    <View style={styles.importCatchTimeCol}>
+                      <Text style={styles.importCatchTimeLabel}>Date</Text>
+                      <Pressable
+                        style={styles.importCatchTimeBtn}
+                        onPress={() => {
+                          setShowImportTimePicker(false);
+                          setShowImportDatePicker((v) => !v);
+                        }}
+                      >
+                        <Text style={styles.importCatchTimeBtnText} numberOfLines={1}>
+                          {format(importCatchAt, 'EEE, MMM d, yyyy')}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.importCatchTimeCol}>
+                      <Text style={styles.importCatchTimeLabel}>Time</Text>
+                      <Pressable
+                        style={styles.importCatchTimeBtn}
+                        onPress={() => {
+                          setShowImportDatePicker(false);
+                          setShowImportTimePicker((v) => !v);
+                        }}
+                      >
+                        <Text style={styles.importCatchTimeBtnText}>{format(importCatchAt, 'h:mm a')}</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                  {Platform.OS === 'ios' && showImportDatePicker ? (
+                    <DateTimePicker
+                      value={importCatchAt}
+                      mode="date"
+                      display="inline"
+                      onChange={onImportCatchDateChange}
+                      themeVariant={pickerThemeVariant}
+                    />
+                  ) : null}
+                  {Platform.OS === 'ios' && showImportTimePicker ? (
+                    <DateTimePicker
+                      value={importCatchAt}
+                      mode="time"
+                      display="spinner"
+                      onChange={onImportCatchTimeChange}
+                      themeVariant={pickerThemeVariant}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
               {catchFlyName2 != null ? (
                 <>
                   <Text style={styles.flyFieldLabel}>Caught on</Text>
@@ -1779,6 +1947,65 @@ export function CatchDetailsModal({
                 </>
               ) : null}
             </ScrollView>
+
+            {showImportCatchTime && Platform.OS === 'android' ? (
+              <>
+                <Modal
+                  visible={showImportDatePicker}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => setShowImportDatePicker(false)}
+                >
+                  <Pressable
+                    style={styles.importCatchPickerOverlay}
+                    onPress={() => setShowImportDatePicker(false)}
+                  >
+                    <View style={styles.importCatchPickerSheet}>
+                      <View style={styles.importCatchPickerHeader}>
+                        <Text style={styles.importCatchPickerTitle}>Select date</Text>
+                        <Pressable onPress={() => setShowImportDatePicker(false)}>
+                          <Text style={styles.importCatchPickerDone}>Done</Text>
+                        </Pressable>
+                      </View>
+                      <DateTimePicker
+                        value={importCatchAt}
+                        mode="date"
+                        display="default"
+                        onChange={onImportCatchDateChange}
+                        themeVariant={pickerThemeVariant}
+                      />
+                    </View>
+                  </Pressable>
+                </Modal>
+                <Modal
+                  visible={showImportTimePicker}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => setShowImportTimePicker(false)}
+                >
+                  <Pressable
+                    style={styles.importCatchPickerOverlay}
+                    onPress={() => setShowImportTimePicker(false)}
+                  >
+                    <View style={styles.importCatchPickerSheet}>
+                      <View style={styles.importCatchPickerHeader}>
+                        <Text style={styles.importCatchPickerTitle}>Select time</Text>
+                        <Pressable onPress={() => setShowImportTimePicker(false)}>
+                          <Text style={styles.importCatchPickerDone}>Done</Text>
+                        </Pressable>
+                      </View>
+                      <DateTimePicker
+                        value={importCatchAt}
+                        mode="time"
+                        display="default"
+                        onChange={onImportCatchTimeChange}
+                        themeVariant={pickerThemeVariant}
+                      />
+                    </View>
+                  </Pressable>
+                </Modal>
+              </>
+            ) : null}
 
             {catchFlyDropdownOpen !== null ? (
               <View style={styles.pickerOverlayHost} pointerEvents="box-none">
