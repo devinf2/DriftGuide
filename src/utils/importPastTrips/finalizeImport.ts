@@ -112,7 +112,9 @@ function eventsWithCatchPhotosNulled(events: TripEvent[]): TripEvent[] {
   });
 }
 
-export type FinalizeImportResult = { ok: true } | { ok: false; message: string };
+export type FinalizeImportResult =
+  | { ok: true; tripIds?: string[] }
+  | { ok: false; message: string };
 
 /**
  * Upload catch photos, scenery photos, then sync trip + events with remote URLs on catches.
@@ -224,7 +226,7 @@ export async function finalizeImportGroup(
     }
   }
 
-  return { ok: true };
+  return { ok: true, tripIds: [trip.id] };
 }
 
 // ---------------------------------------------------------------------------
@@ -549,5 +551,6 @@ export async function batchFinalizeImport(
     return { ok: false, message: `Import failed: ${error.message}` };
   }
 
-  return { ok: true };
+  const tripIds = enrichedGroups.map((e) => e.trip.id);
+  return { ok: true, tripIds };
 }

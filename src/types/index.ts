@@ -98,6 +98,8 @@ export interface SessionInvite {
   inviter_trip_id?: string | null;
   /** Inviter trip start (or equivalent); invitee UI filters linkable trips to ±5 days. */
   merge_window_anchor_at?: string | null;
+  /** Set when the invite is sent; legacy rows infer from inviter trip at link time. */
+  invite_kind?: 'upcoming' | 'past' | null;
 }
 
 /** Trip timeline event with attribution for merged Group view. */

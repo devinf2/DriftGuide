@@ -21,12 +21,13 @@ import { extractPhotoMetadataFromPickerAsset } from '@/src/utils/imageExif';
 import { aggregateImportPhotoMeta } from '@/src/utils/importPastTrips/importPhotoMetaAggregate';
 import { getFlyForCatch } from '@/src/services/sync';
 import {
-  buildCompletedTripForImport,
-  finalizeImportGroup,
-  batchFinalizeImport,
-} from '@/src/utils/importPastTrips/finalizeImport';
+  acceptSessionInvite,
+  attachTripToSession,
+  fetchSessionInviteById,
+} from '@/src/services/sharedSessionService';
+import { buildCompletedTripForImport, batchFinalizeImport } from '@/src/utils/importPastTrips/finalizeImport';
 import { format, parseISO } from 'date-fns';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -444,6 +445,20 @@ function Step3CatchDetailsSummary({
 
 export default function ImportPastTripsScreen() {
   const router = useRouter();
+  const linkParams = useLocalSearchParams<{
+    linkSessionId?: string | string[];
+    linkInviteId?: string | string[];
+  }>();
+  const linkSessionId = useMemo(() => {
+    const v = linkParams.linkSessionId;
+    const raw = Array.isArray(v) ? v[0] : v;
+    return raw?.trim() || null;
+  }, [linkParams.linkSessionId]);
+  const linkInviteId = useMemo(() => {
+    const v = linkParams.linkInviteId;
+    const raw = Array.isArray(v) ? v[0] : v;
+    return raw?.trim() || null;
+  }, [linkParams.linkInviteId]);
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const { width: windowWidth } = useWindowDimensions();
@@ -674,6 +689,17 @@ export default function ImportPastTripsScreen() {
         setImporting(false);
         return;
       }
+      if (linkSessionId && res.tripIds?.length) {
+        for (const tid of res.tripIds) {
+          await attachTripToSession(tid, linkSessionId);
+        }
+        if (linkInviteId && user.id) {
+          const inv = await fetchSessionInviteById(linkInviteId);
+          if (inv?.invitee_id === user.id && inv.shared_session_id === linkSessionId) {
+            await acceptSessionInvite(inv, user.id);
+          }
+        }
+      }
       reset();
       router.replace('/journal');
     } catch (e) {
@@ -685,6 +711,8 @@ export default function ImportPastTripsScreen() {
     user?.id,
     fishingType,
     isConnected,
+    linkSessionId,
+    linkInviteId,
     reset,
     router,
     materializeMinimalCatchesForAllGroups,

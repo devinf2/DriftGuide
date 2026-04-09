@@ -59,7 +59,6 @@ import { useFriendsStore } from '@/src/stores/friendsStore';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
-import { listPendingSessionInvitesForUser } from '@/src/services/sharedSessionService';
 import {
   AIQueryData,
   CatchData,
@@ -90,7 +89,7 @@ import { tripMapDefaultCenterCoordinate, tripMapDefaultZoom } from '@/src/utils/
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { v4 as uuidv4 } from 'uuid';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -163,27 +162,6 @@ export default function TripDashboardScreen() {
   const friendships = useFriendsStore((s) => s.friendships);
   const refreshFriends = useFriendsStore((s) => s.refresh);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
-  const [pendingGroupSessionInvites, setPendingGroupSessionInvites] = useState(false);
-
-  const refreshPendingGroupInvites = useCallback(async () => {
-    const uid = user?.id;
-    if (!uid) {
-      setPendingGroupSessionInvites(false);
-      return;
-    }
-    const list = await listPendingSessionInvitesForUser(uid);
-    setPendingGroupSessionInvites(list.length > 0);
-  }, [user?.id]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void refreshPendingGroupInvites();
-    }, [refreshPendingGroupInvites]),
-  );
-
-  useEffect(() => {
-    if (!peopleSheetVisible) void refreshPendingGroupInvites();
-  }, [peopleSheetVisible, refreshPendingGroupInvites]);
 
   const locations = useLocationStore((s) => s.locations);
   const fetchLocations = useLocationStore((s) => s.fetchLocations);
@@ -651,14 +629,6 @@ export default function TripDashboardScreen() {
 
   const handleEndTrip = () => {
     if (!activeTrip) return;
-    if (pendingGroupSessionInvites) {
-      Alert.alert(
-        'Fishing group invite',
-        'Accept or decline the invite on Home first. After that you can end your trip if you want.',
-        [{ text: 'OK', onPress: () => router.replace('/home') }],
-      );
-      return;
-    }
     const endMsg = activeTrip.shared_session_id
       ? `This ends only your trip. Friends in your fishing group keep their own trips; the group stays active.\n\nEnd with ${formatFishCount(fishCount)}?`
       : `End this trip with ${formatFishCount(fishCount)}?`;
@@ -702,17 +672,6 @@ export default function TripDashboardScreen() {
   };
 
   const handleResumeTrip = async () => {
-    if (pendingGroupSessionInvites) {
-      Alert.alert(
-        'Fishing group invite',
-        'Accept or decline on the Fish tab before resuming this trip.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Go to Fish tab', onPress: () => router.replace('/home') },
-        ],
-      );
-      return;
-    }
     await resumeTrip();
   };
 
@@ -1077,11 +1036,9 @@ export default function TripDashboardScreen() {
               <Text style={styles.pauseResumeButtonText}>Pause</Text>
             </Pressable>
           )}
-          {!pendingGroupSessionInvites ? (
-            <Pressable style={styles.endButton} onPress={handleEndTrip}>
-              <Text style={styles.endButtonText}>End</Text>
-            </Pressable>
-          ) : null}
+          <Pressable style={styles.endButton} onPress={handleEndTrip}>
+            <Text style={styles.endButtonText}>End</Text>
+          </Pressable>
         </View>
       </View>
 

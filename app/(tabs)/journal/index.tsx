@@ -544,13 +544,6 @@ export default function JournalScreen() {
               />
             </Pressable>
           </View>
-          <Pressable
-            style={styles.filterButton}
-            onPress={() => router.push('/journal/create-group')}
-            accessibilityLabel="Create fishing group from trips"
-          >
-            <MaterialIcons name="group-add" size={22} color={headerInactive} />
-          </Pressable>
         </View>
         {viewMode === 'map' && (
           <View style={styles.mapLayerRow}>

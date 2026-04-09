@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -19,20 +19,19 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { fetchProfile, otherUserIdFromFriendship } from '@/src/services/friendsService';
 import { profileInitialLetter } from '@/src/utils/profileDisplay';
 import {
-  acceptSessionInvite,
   attachTripToSession,
   createSharedSession,
   declineSessionInvite,
   detachTripFromSession,
-  findTripForUserInSession,
   inviteToSession,
   leaveSession,
   listPendingSessionInvitesForUser,
   listSessionInvitesSentFromSession,
   listSessionMembers,
-  listSharedSessionIdsForUser,
 } from '@/src/services/sharedSessionService';
+import { fetchTripById } from '@/src/services/sync';
 import type { FriendshipRow, SessionInvite, SessionMember } from '@/src/types';
+import { mergeAnchorIsoFromInviterTrip } from '@/src/utils/sessionInviteMergeTrips';
 import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
 
 const MEMBER_AVATAR = 40;
@@ -72,7 +71,6 @@ export function TripSessionPeopleSheet({
   const [invitesIn, setInvitesIn] = useState<SessionInvite[]>([]);
   const [loading, setLoading] = useState(false);
   const [friendRows, setFriendRows] = useState<FriendRow[]>([]);
-  const [sessionsWithoutLinkedTrip, setSessionsWithoutLinkedTrip] = useState<string[]>([]);
 
   const acceptedFriends = useMemo(
     () => acceptedFriendships.filter((f) => f.status === 'accepted'),
@@ -135,14 +133,6 @@ export function TripSessionPeopleSheet({
         }
       }
       setFriendRows(rows);
-
-      const mySessions = await listSharedSessionIdsForUser(userId);
-      const unlinked: string[] = [];
-      for (const sid of mySessions) {
-        const linked = await findTripForUserInSession(sid, userId);
-        if (!linked) unlinked.push(sid);
-      }
-      setSessionsWithoutLinkedTrip(unlinked);
     } finally {
       setLoading(false);
     }
@@ -180,9 +170,16 @@ export function TripSessionPeopleSheet({
 
   const handleInvite = async (friendId: string) => {
     if (!sharedSessionId) return;
+    const trip = await fetchTripById(tripId);
+    if (!trip || trip.deleted_at) {
+      Alert.alert('Invite failed', 'Could not load this trip.');
+      return;
+    }
+    const inviteKind = trip.status === 'completed' ? ('past' as const) : ('upcoming' as const);
     const ok = await inviteToSession(sharedSessionId, userId, friendId, {
       inviterTripId: tripId,
-      mergeWindowAnchorAt: null,
+      mergeWindowAnchorAt: mergeAnchorIsoFromInviterTrip(trip),
+      inviteKind,
     });
     if (!ok) Alert.alert('Invite failed', 'They may already be invited or in the group.');
     await load();
@@ -204,29 +201,17 @@ export function TripSessionPeopleSheet({
     ]);
   };
 
-  const handleAcceptIncoming = async (inv: SessionInvite) => {
-    const ok = await acceptSessionInvite(inv, userId);
-    if (!ok) {
-      Alert.alert('Could not accept', 'Try again.');
-      return;
-    }
-    await load();
+  const handleAcceptIncoming = (inv: SessionInvite) => {
     onClose();
-    router.push(buildLinkTripAfterAcceptPath(inv));
-  };
-
-  const handleLinkTripToSession = async (sessionId: string) => {
-    const ok = await attachTripToSession(tripId, sessionId);
-    if (!ok) {
-      Alert.alert('Could not link', 'Try again when online.');
-      return;
-    }
-    onSessionChanged(sessionId);
-    await load();
+    router.push(buildLinkTripAfterAcceptPath(inv) as Href);
   };
 
   const handleDeclineIncoming = async (inv: SessionInvite) => {
-    await declineSessionInvite(inv.id);
+    const ok = await declineSessionInvite(inv.id);
+    if (!ok) {
+      Alert.alert('Could not decline', 'Try again in a moment.');
+      return;
+    }
     await load();
   };
 
@@ -249,14 +234,14 @@ export function TripSessionPeopleSheet({
               {invitesIn.map((inv) => (
                 <View key={inv.id} style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
                   <Text style={{ color: colors.textSecondary, fontSize: FontSize.sm }}>
-                    {`Accept to join the group. You'll pick which of your trips to connect (same outing, within 5 days of theirs). Your trips stay separate in your journal.`}
+                    {`Continue to link a trip to this group. You stay pending until a trip is connected (planned, live, or past within about five days of theirs). Your journal stays yours.`}
                   </Text>
                   <View style={styles.rowBtns}>
                     <Pressable
                       style={[styles.btn, { backgroundColor: colors.primary }]}
-                      onPress={() => void handleAcceptIncoming(inv)}
+                      onPress={() => handleAcceptIncoming(inv)}
                     >
-                      <Text style={[styles.btnText, { color: colors.textInverse }]}>Accept</Text>
+                      <Text style={[styles.btnText, { color: colors.textInverse }]}>Continue</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.btn, { backgroundColor: colors.borderLight }]}
@@ -266,26 +251,6 @@ export function TripSessionPeopleSheet({
                     </Pressable>
                   </View>
                 </View>
-              ))}
-            </View>
-          ) : null}
-
-          {!sharedSessionId && sessionsWithoutLinkedTrip.length > 0 ? (
-            <View style={styles.section}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>Link to a group you joined</Text>
-              <Text style={[styles.hint, { color: colors.textSecondary }]}>
-                After accepting an invite, attach this trip to that fishing group.
-              </Text>
-              {sessionsWithoutLinkedTrip.map((sid) => (
-                <Pressable
-                  key={sid}
-                  style={[styles.primaryBtn, { backgroundColor: colors.secondary, marginBottom: Spacing.sm }]}
-                  onPress={() => void handleLinkTripToSession(sid)}
-                >
-                  <Text style={[styles.btnText, { color: colors.textInverse }]}>
-                    Link trip to group ({sid.slice(0, 8)}…)
-                  </Text>
-                </Pressable>
               ))}
             </View>
           ) : null}

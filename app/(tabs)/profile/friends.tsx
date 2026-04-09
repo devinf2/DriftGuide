@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
@@ -20,6 +20,7 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import {
   deleteFriendship,
+  fetchProfile as fetchProfileByUserId,
   isShortFriendCode,
   lookupProfileByFriendCode,
   migrateLegacyFriendCode,
@@ -30,11 +31,12 @@ import {
   type ProfileDiscoveryRow,
 } from '@/src/services/friendsService';
 import {
-  acceptSessionInvite,
   declineSessionInvite,
   listPendingSessionInvitesForUser,
+  resolveInviterTemplateTripForJoin,
 } from '@/src/services/sharedSessionService';
 import type { FriendshipRow, SessionInvite } from '@/src/types';
+import { formatPendingSessionInviteSummary } from '@/src/utils/sessionInviteDisplay';
 import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
@@ -83,7 +85,9 @@ export default function FriendsScreen() {
     avatar_url: string | null;
   } | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
-  const [sessionInvites, setSessionInvites] = useState<SessionInvite[]>([]);
+  const [sessionInviteRows, setSessionInviteRows] = useState<
+    { invite: SessionInvite; summaryLine: string }[]
+  >([]);
   const [settingCode, setSettingCode] = useState(false);
   const [nameQuery, setNameQuery] = useState('');
   const [nameResults, setNameResults] = useState<ProfileDiscoveryRow[]>([]);
@@ -95,11 +99,24 @@ export default function FriendsScreen() {
 
   const loadSessionInvites = useCallback(async () => {
     if (!myId || !isConnected) {
-      setSessionInvites([]);
+      setSessionInviteRows([]);
       return;
     }
     const list = await listPendingSessionInvitesForUser(myId);
-    setSessionInvites(list);
+    const rows = await Promise.all(
+      list.map(async (inv) => {
+        const [p, templateTrip] = await Promise.all([
+          fetchProfileByUserId(inv.inviter_id),
+          resolveInviterTemplateTripForJoin(inv.shared_session_id, inv),
+        ]);
+        const inviterName = p?.display_name?.trim() || 'A friend';
+        return {
+          invite: inv,
+          summaryLine: formatPendingSessionInviteSummary(inviterName, inv, templateTrip),
+        };
+      }),
+    );
+    setSessionInviteRows(rows);
   }, [myId, isConnected]);
 
   useEffect(() => {
@@ -323,13 +340,21 @@ export default function FriendsScreen() {
   const hasFriendCode = Boolean(profile?.friend_code?.trim());
 
   const handleAcceptSessionInvite = async (inv: SessionInvite) => {
-    const ok = await acceptSessionInvite(inv, myId);
+    router.push(buildLinkTripAfterAcceptPath(inv) as Href);
+    void loadSessionInvites();
+  };
+
+  const handleDeclineSessionInvite = async (inv: SessionInvite) => {
+    if (!isConnected) {
+      Alert.alert('Offline', 'Connect to the internet to decline this invite.');
+      return;
+    }
+    const ok = await declineSessionInvite(inv.id);
     if (!ok) {
-      Alert.alert('Error', 'Could not accept invite.');
+      Alert.alert('Could not decline', 'Try again in a moment.');
       return;
     }
     void loadSessionInvites();
-    router.push(buildLinkTripAfterAcceptPath(inv));
   };
 
   return (
@@ -351,24 +376,22 @@ export default function FriendsScreen() {
           </View>
         ) : null}
 
-        {sessionInvites.length > 0 ? (
+        {sessionInviteRows.length > 0 ? (
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Fishing group invites</Text>
-            {sessionInvites.map((inv) => (
-              <View key={inv.id} style={[styles.card, { borderColor: colors.border }]}>
-                <Text style={{ color: colors.text, marginBottom: Spacing.sm }}>
-                  {"You're invited to fish together. Accept to pick which trip to link to the group."}
-                </Text>
+            {sessionInviteRows.map(({ invite, summaryLine }) => (
+              <View key={invite.id} style={[styles.card, { borderColor: colors.border }]}>
+                <Text style={{ color: colors.text, marginBottom: Spacing.sm }}>{summaryLine}</Text>
                 <View style={styles.row}>
                   <Pressable
                     style={[styles.smallBtn, { backgroundColor: colors.primary }]}
-                    onPress={() => void handleAcceptSessionInvite(inv)}
+                    onPress={() => void handleAcceptSessionInvite(invite)}
                   >
-                    <Text style={{ color: colors.textInverse, fontWeight: '600' }}>Accept</Text>
+                    <Text style={{ color: colors.textInverse, fontWeight: '600' }}>Continue</Text>
                   </Pressable>
                   <Pressable
                     style={[styles.smallBtn, { backgroundColor: colors.borderLight }]}
-                    onPress={() => void declineSessionInvite(inv.id).then(() => loadSessionInvites())}
+                    onPress={() => void handleDeclineSessionInvite(invite)}
                   >
                     <Text style={{ color: colors.text, fontWeight: '600' }}>Decline</Text>
                   </Pressable>

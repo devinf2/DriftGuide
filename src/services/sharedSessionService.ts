@@ -120,6 +120,8 @@ export type InviteToSessionOptions = {
   inviterTripId?: string | null;
   /** Copied from that trip's `start_time` so the invitee can pick a trip within ±5 days without reading your row. */
   mergeWindowAnchorAt?: string | null;
+  /** upcoming = active/planned inviter outing; past = completed inviter outing. */
+  inviteKind?: 'upcoming' | 'past' | null;
 };
 
 export async function inviteToSession(
@@ -136,6 +138,7 @@ export async function inviteToSession(
     status: 'pending',
     inviter_trip_id: options?.inviterTripId ?? null,
     merge_window_anchor_at: options?.mergeWindowAnchorAt ?? null,
+    invite_kind: options?.inviteKind ?? null,
   });
   if (error) {
     console.warn('[inviteToSession]', error);
@@ -175,14 +178,37 @@ export async function listSessionInvitesSentFromSession(sessionId: string): Prom
 }
 
 export async function acceptSessionInvite(invite: SessionInvite, userId: string): Promise<boolean> {
-  if (invite.invitee_id !== userId || invite.status !== 'pending' || invite.inviter_id === invite.invitee_id) {
+  if (invite.invitee_id !== userId || invite.inviter_id === invite.invitee_id) return false;
+
+  const fresh = await fetchSessionInviteById(invite.id);
+  if (!fresh || fresh.invitee_id !== userId) return false;
+
+  if (fresh.status === 'accepted') {
+    const { data: row } = await supabase
+      .from('session_members')
+      .select('user_id')
+      .eq('shared_session_id', fresh.shared_session_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (row) return true;
+    const { error: repairErr } = await supabase.from('session_members').insert({
+      shared_session_id: fresh.shared_session_id,
+      user_id: userId,
+      role: 'member',
+    });
+    if (!repairErr) return true;
+    if ((repairErr as { code?: string }).code === '23505') return true;
+    console.warn('[acceptSessionInvite] member repair', repairErr);
     return false;
   }
+
+  if (fresh.status !== 'pending') return false;
 
   const { error: uErr } = await supabase
     .from('session_invites')
     .update({ status: 'accepted' })
-    .eq('id', invite.id);
+    .eq('id', invite.id)
+    .eq('status', 'pending');
 
   if (uErr) {
     console.warn('[acceptSessionInvite] update', uErr);
@@ -190,12 +216,13 @@ export async function acceptSessionInvite(invite: SessionInvite, userId: string)
   }
 
   const { error: mErr } = await supabase.from('session_members').insert({
-    shared_session_id: invite.shared_session_id,
+    shared_session_id: fresh.shared_session_id,
     user_id: userId,
     role: 'member',
   });
 
   if (mErr) {
+    if ((mErr as { code?: string }).code === '23505') return true;
     console.warn('[acceptSessionInvite] member', mErr);
     return false;
   }
@@ -231,9 +258,18 @@ export async function resolveInviterTemplateTripForJoin(
 }
 
 export async function declineSessionInvite(inviteId: string): Promise<boolean> {
-  const { error } = await supabase.from('session_invites').delete().eq('id', inviteId);
-  if (error) {
-    console.warn('[declineSessionInvite]', error);
+  const { error: delErr } = await supabase.from('session_invites').delete().eq('id', inviteId);
+  if (!delErr) return true;
+
+  console.warn('[declineSessionInvite] delete', delErr);
+  // Older DBs had no DELETE RLS on session_invites; treat as declined so the row disappears from pending lists.
+  const { error: updErr } = await supabase
+    .from('session_invites')
+    .update({ status: 'declined' })
+    .eq('id', inviteId)
+    .eq('status', 'pending');
+  if (updErr) {
+    console.warn('[declineSessionInvite] update', updErr);
     return false;
   }
   return true;

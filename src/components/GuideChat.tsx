@@ -57,6 +57,8 @@ export interface GuideChatProps {
   listHeaderComponent?: ReactNode;
   /** Pull-to-refresh on the message scroll area (e.g. home). */
   refreshControl?: ReactElement<RefreshControlProps>;
+  /** Full layout only: e.g. notifications bell, top-right above the message list. */
+  topBarAccessory?: ReactNode;
 }
 
 const DEFAULT_TITLE = 'AI Fishing Guide';
@@ -196,6 +198,7 @@ export default function GuideChat({
   contentTopPadding = 0,
   listHeaderComponent,
   refreshControl,
+  topBarAccessory,
 }: GuideChatProps) {
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -295,11 +298,27 @@ export default function GuideChat({
         </View>
       )}
 
+      {variant === 'full' && Boolean(topBarAccessory) ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            paddingLeft: Spacing.md + insets.left,
+            paddingRight: Spacing.md + insets.right,
+            paddingBottom: 0,
+          }}
+        >
+          {topBarAccessory}
+        </View>
+      ) : null}
+
       <ScrollView
         ref={scrollRef}
         style={styles.messages}
         contentContainerStyle={[
           styles.messagesContent,
+          variant === 'full' && Boolean(topBarAccessory) ? { paddingTop: Spacing.sm } : null,
           variant === 'full' && styles.messagesContentFabClearance,
         ]}
         keyboardShouldPersistTaps="handled"
