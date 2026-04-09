@@ -68,11 +68,11 @@ export function ConditionsTab({
       return;
     }
     setHourlyLoading(true);
-    getHourlyForecast(lat, lng)
+    getHourlyForecast(lat, lng, { locationId: location?.id })
       .then(setHourlyForecast)
       .catch(() => setHourlyForecast([]))
       .finally(() => setHourlyLoading(false));
-  }, [location?.latitude, location?.longitude]);
+  }, [location?.id, location?.latitude, location?.longitude]);
 
   return (
     <ScrollView style={styles.conditionsContainer} contentContainerStyle={styles.conditionsContent}>

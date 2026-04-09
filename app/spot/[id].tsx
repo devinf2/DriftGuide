@@ -304,6 +304,8 @@ export default function SpotFishingTripScreen() {
     let cancelled = false;
     setLoading(true);
     setConditions(null);
+    setWeatherData(null);
+    setWaterFlowData(null);
     setSummarySources([]);
     setSummarySignal(null);
     setSummaryFetchedAt(null);
@@ -313,6 +315,8 @@ export default function SpotFishingTripScreen() {
       const cond = await fetchLocationConditions(location, locations);
       if (cancelled) return;
       setConditions(cond);
+      setWeatherData(cond.rawWeather ?? null);
+      setWaterFlowData(cond.rawWaterFlow ?? null);
       setLoading(false);
 
       const parentLoc = location.parent_location_id
@@ -481,31 +485,19 @@ export default function SpotFishingTripScreen() {
     favoriteLocationIds,
   ]);
 
-  useEffect(() => {
-    if (activeTab !== 'conditions' || !location) return;
-    setConditionsTabLoading(true);
-    Promise.all([
-      lat != null && lng != null ? getWeather(lat, lng) : Promise.resolve(null),
-      stationId ? getStreamFlow(stationId) : Promise.resolve(null),
-    ]).then(([w, wf]) => {
-      setWeatherData(w ?? null);
-      setWaterFlowData(wf ?? null);
-      setConditionsTabLoading(false);
-    }).catch(() => setConditionsTabLoading(false));
-  }, [activeTab, location?.id, lat, lng, stationId]);
-
   const refreshConditions = useCallback(() => {
     if (!location || activeTab !== 'conditions') return;
+    const spotId = typeof id === 'string' ? id : null;
     setConditionsTabLoading(true);
     Promise.all([
-      lat != null && lng != null ? getWeather(lat, lng) : Promise.resolve(null),
+      lat != null && lng != null ? getWeather(lat, lng, { locationId: spotId }) : Promise.resolve(null),
       stationId ? getStreamFlow(stationId) : Promise.resolve(null),
     ]).then(([w, wf]) => {
       setWeatherData(w ?? null);
       setWaterFlowData(wf ?? null);
       setConditionsTabLoading(false);
     }).catch(() => setConditionsTabLoading(false));
-  }, [location?.id, lat, lng, stationId, activeTab]);
+  }, [location?.id, lat, lng, stationId, activeTab, id]);
 
   const fetchHowToFish = useCallback(() => {
     if (!location || !conditions) return;

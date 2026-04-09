@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import { resolveAuthedUserId } from "../_shared/resolveUserId.ts";
 
 const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -278,16 +279,22 @@ Deno.serve(async (req: Request) => {
     if (!authHeader?.startsWith("Bearer ")) {
       return jsonResponse({ error: "Missing authorization", code: "unauthorized" }, 401);
     }
+    const accessToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) {
+      return jsonResponse({ error: "Missing authorization", code: "unauthorized" }, 401);
+    }
 
-    const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: { user }, error: userErr } = await supabaseUser.auth.getUser();
-    if (userErr || !user) {
+    const userId = await resolveAuthedUserId(
+      SUPABASE_URL,
+      SUPABASE_ANON_KEY,
+      authHeader,
+      accessToken,
+    );
+    if (!userId) {
       return jsonResponse({ error: "Invalid session", code: "unauthorized" }, 401);
     }
 
-    const rate = await incrementUsage(user.id);
+    const rate = await incrementUsage(userId);
     if (!rate.ok) {
       return jsonResponse({ error: "Daily guide limit reached", code: "rate_limit" }, 429);
     }

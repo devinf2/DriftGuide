@@ -71,7 +71,9 @@ export async function fetchLocationConditions(
   const lng = location.longitude ?? parent?.longitude ?? null;
 
   const [weather, waterFlow] = await Promise.all([
-    lat != null && lng != null ? getWeather(lat, lng) : Promise.resolve(null),
+    lat != null && lng != null
+      ? getWeather(lat, lng, { locationId: location.id })
+      : Promise.resolve(null),
     stationId ? getStreamFlow(stationId) : Promise.resolve(null),
   ]);
 
@@ -89,6 +91,8 @@ export async function fetchLocationConditions(
     temperature: { temp_f: tempF, rating: rateTemperature(tempF) },
     water: { clarity, flow_cfs: flowCfs, rating: rateWater(clarity) },
     fetchedAt: new Date().toISOString(),
+    rawWeather: weather,
+    rawWaterFlow: waterFlow,
   };
 }
 
@@ -229,6 +233,8 @@ async function buildLocationConditionsWithWeather(
     },
     water: { clarity, flow_cfs: flowCfs, rating: rateWater(clarity) },
     fetchedAt: new Date().toISOString(),
+    rawWeather: plannedTimeWeatherUnavailable ? null : weather,
+    rawWaterFlow: waterFlow,
     ...(weatherIsForecastForPlannedTime ? { weatherIsForecastForPlannedTime: true } : {}),
     ...(plannedTimeWeatherUnavailable ? { plannedTimeWeatherUnavailable: true } : {}),
   };
@@ -242,22 +248,25 @@ export async function fetchAllLocationConditionsForPlannedTime(
   plannedAt: Date,
 ): Promise<Map<string, LocationConditions>> {
   const results = new Map<string, LocationConditions>();
-  const groupCoords = new Map<string, { lat: number; lng: number }>();
+  const groupCoords = new Map<string, { lat: number; lng: number; repLocationId: string }>();
   const locationCoords = new Map<string, { lat: number; lng: number } | null>();
 
   for (const loc of locations) {
     const coords = resolveLocationCoords(loc, locations);
     locationCoords.set(loc.id, coords);
     if (coords) {
-      groupCoords.set(coordKey(coords.lat, coords.lng), coords);
+      const key = coordKey(coords.lat, coords.lng);
+      if (!groupCoords.has(key)) {
+        groupCoords.set(key, { ...coords, repLocationId: loc.id });
+      }
     }
   }
 
   const weatherByKey = new Map<string, Awaited<ReturnType<typeof getWeatherForPlannedTime>>>();
   await Promise.all(
-    Array.from(groupCoords.values()).map(async ({ lat, lng }) => {
+    Array.from(groupCoords.values()).map(async ({ lat, lng, repLocationId }) => {
       const key = coordKey(lat, lng);
-      const r = await getWeatherForPlannedTime(lat, lng, plannedAt);
+      const r = await getWeatherForPlannedTime(lat, lng, plannedAt, { locationId: repLocationId });
       weatherByKey.set(key, r);
     }),
   );
@@ -317,5 +326,7 @@ export function buildConditionsFromWeatherAndFlow(
     temperature: { temp_f: tempF, rating: rateTemperature(tempF) },
     water: { clarity, flow_cfs: flowCfs, rating: rateWater(clarity) },
     fetchedAt: new Date().toISOString(),
+    rawWeather: weather,
+    rawWaterFlow: waterFlow,
   };
 }

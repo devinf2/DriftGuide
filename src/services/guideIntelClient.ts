@@ -1,4 +1,4 @@
-import { supabase } from '@/src/services/supabase';
+import { edgeFunctionInvokeHeaders, supabase } from '@/src/services/supabase';
 import type {
   GuideIntelChatResultBody,
   GuideIntelRequestBody,
@@ -35,15 +35,20 @@ export async function invokeGuideIntel(body: GuideIntelRequestBody): Promise<unk
   if (!(await isOnlineForGuideIntel())) return null;
 
   const { data: sessionData } = await supabase.auth.getSession();
-  if (!sessionData?.session?.access_token) return null;
+  const accessToken = sessionData?.session?.access_token;
+  if (!accessToken) return null;
 
   try {
-    // Let the Supabase client attach Authorization (fetchWithAuth). A manual Bearer header
-    // can get out of sync with refresh and is unnecessary here.
-    const { data, error } = await supabase.functions.invoke('guide-intel', { body });
+    // React Native + supabase-js often does not forward the session JWT to Edge Functions unless
+    // Authorization is set explicitly (see authStore softDeleteAccount → delete-closed-auth-user).
+    const { data, error } = await supabase.functions.invoke('guide-intel', {
+      body,
+      headers: edgeFunctionInvokeHeaders(accessToken),
+    });
     if (error) {
       let detail = error.message;
       if (error instanceof FunctionsHttpError && error.context) {
+        const status = error.context.status;
         try {
           const j = (await error.context.clone().json()) as { error?: string; code?: string };
           if (typeof j?.error === 'string') detail = `${detail}: ${j.error}`;
@@ -51,6 +56,7 @@ export async function invokeGuideIntel(body: GuideIntelRequestBody): Promise<unk
         } catch {
           /* ignore */
         }
+        if (status) detail = `${detail} [HTTP ${status}]`;
       }
       console.warn('[guide-intel]', detail);
       return null;

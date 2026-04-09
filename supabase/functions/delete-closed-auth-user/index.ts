@@ -1,6 +1,7 @@
 /// <reference path="../global.d.ts" />
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import { resolveAuthedUserId } from "../_shared/resolveUserId.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -36,8 +37,8 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const authHeader = req.headers.get("Authorization");
-  const jwt = authHeader?.replace(/^Bearer\s+/i, "");
+  const rawAuth = req.headers.get("Authorization");
+  const jwt = rawAuth?.replace(/^Bearer\s+/i, "");
   if (!jwt) {
     return new Response(JSON.stringify({ error: "Missing authorization" }), {
       status: 401,
@@ -45,15 +46,14 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${jwt}` } },
-  });
-
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabaseUser.auth.getUser();
-  if (userErr || !user) {
+  const bearerHeader = `Bearer ${jwt}`;
+  const userId = await resolveAuthedUserId(
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
+    bearerHeader,
+    jwt,
+  );
+  if (!userId) {
     return new Response(JSON.stringify({ error: "Invalid session" }), {
       status: 401,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -67,7 +67,7 @@ Deno.serve(async (req: Request) => {
   const { data: profile, error: profErr } = await admin
     .from("profiles")
     .select("account_deleted_at")
-    .eq("id", user.id)
+    .eq("id", userId)
     .maybeSingle();
 
   if (profErr) {
@@ -87,11 +87,11 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  await admin.from("locations").update({ created_by: null }).eq("created_by", user.id);
-  await admin.from("locations").update({ deleted_by: null }).eq("deleted_by", user.id);
-  await admin.from("access_points").update({ created_by: null }).eq("created_by", user.id);
+  await admin.from("locations").update({ created_by: null }).eq("created_by", userId);
+  await admin.from("locations").update({ deleted_by: null }).eq("deleted_by", userId);
+  await admin.from("access_points").update({ created_by: null }).eq("created_by", userId);
 
-  const { error: delErr } = await admin.auth.admin.deleteUser(user.id);
+  const { error: delErr } = await admin.auth.admin.deleteUser(userId);
   if (delErr) {
     console.error(delErr);
     return new Response(JSON.stringify({ error: delErr.message }), {

@@ -1,7 +1,11 @@
-# Minimal Supabase CLI config. Deploy functions with: supabase functions deploy guide-intel --no-verify-jwt (or verify JWT in code)
+# JWT is validated inside each function (getClaims / getUser). Kong-level verify_jwt breaks
+# many clients using publishable keys + ES256 access tokens (401 before the worker runs).
 
 [functions.guide-intel]
-verify_jwt = true
+verify_jwt = false
 
 [functions.delete-closed-auth-user]
-verify_jwt = true
+verify_jwt = false
+
+[functions.weather-proxy]
+verify_jwt = false

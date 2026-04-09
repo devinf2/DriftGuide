@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
 import { signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
 import { Profile, type TripPhotoVisibility } from '@/src/types';
-import { supabase } from '@/src/services/supabase';
+import { edgeFunctionInvokeHeaders, supabase } from '@/src/services/supabase';
 import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useThemeStore } from '@/src/stores/themeStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -234,7 +234,7 @@ export const useAuthStore = create<AuthState>()(
 
         const { data: fnData, error: fnError } = await supabase.functions.invoke(
           'delete-closed-auth-user',
-          { headers: { Authorization: `Bearer ${session.access_token}` } },
+          { headers: edgeFunctionInvokeHeaders(session.access_token) },
         );
 
         if (fnError) {

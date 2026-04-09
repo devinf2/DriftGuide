@@ -121,7 +121,7 @@ async function fetchConditionsForLocation(loc: Location): Promise<WaterwayCondit
   const stationId = (loc.metadata as Record<string, string> | null)?.usgs_station_id ?? null;
 
   const [weather, waterFlow] = await Promise.all([
-    lat != null && lng != null ? getWeather(lat, lng) : Promise.resolve(null),
+    lat != null && lng != null ? getWeather(lat, lng, { locationId: loc.id }) : Promise.resolve(null),
     stationId ? getStreamFlow(stationId) : Promise.resolve(null),
   ]);
 

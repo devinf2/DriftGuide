@@ -15,11 +15,21 @@ const HOME_HOTSPOT_DISTANCE_TIE_EPS_KM = 0.5;
 export const MAX_HOME_HOTSPOT_POOL = 8;
 /** Prefer at least this many candidates before tightening radius (else expand tiers). */
 export const MIN_HOME_HOTSPOT_POOL = 3;
+
+/** Hard cap: only consider waters within this distance of the user (when GPS is available). */
+export const HOME_HOTSPOT_MAX_RADIUS_MI = 50;
+const HOME_HOTSPOT_MAX_RADIUS_KM = HOME_HOTSPOT_MAX_RADIUS_MI * 1.609344;
+
 /**
- * Start with the tightest radius and only widen if there are not enough waters.
- * Values in km (~28 / 50 / 75 / 110 mi).
+ * Start with a tight radius and widen until MIN_HOME_HOTSPOT_POOL or the outer cap (50 mi).
+ * Values in km (~15 / 28 / 40 / 50 mi).
  */
-export const HOME_HOTSPOT_RADIUS_TIERS_KM = [45, 80, 120, 180] as const;
+export const HOME_HOTSPOT_RADIUS_TIERS_KM = [
+  24,
+  45,
+  64,
+  HOME_HOTSPOT_MAX_RADIUS_KM,
+] as const;
 
 export type HomeHotSpotData = {
   suggestion: SpotSuggestion;
@@ -57,8 +67,9 @@ export function formatDistanceLabel(km: number | null): string | null {
 }
 
 /**
- * Prefer locations near the user: strict distance tiers, then nearest-N cap for the model.
- * Falls back to all top-level waters when we have no GPS fix or no coordinates on file.
+ * Prefer locations near the user: distance tiers up to {@link HOME_HOTSPOT_MAX_RADIUS_MI},
+ * then nearest-N cap for the model.
+ * Falls back to all top-level waters when we have no GPS fix or no geotagged waters on file.
  */
 export function selectLocationsForHomeHotSpots(
   topLevel: Location[],
@@ -81,6 +92,13 @@ export function selectLocationsForHomeHotSpots(
       return inBand.slice(0, MAX_HOME_HOTSPOT_POOL);
     }
   }
+
+  const withinMaxMi = sorted.filter((l) => distKm(l) <= HOME_HOTSPOT_MAX_RADIUS_KM);
+  if (withinMaxMi.length > 0) {
+    return withinMaxMi.slice(0, MAX_HOME_HOTSPOT_POOL);
+  }
+
+  // No catalog waters within 50 mi — still show closest options so home is not empty.
   return sorted.slice(0, MAX_HOME_HOTSPOT_POOL);
 }
 

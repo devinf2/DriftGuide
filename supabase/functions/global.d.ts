@@ -10,7 +10,7 @@ declare const Deno: {
 };
 
 /** Map Deno URL + JSR specifiers to npm types so Edge Functions typecheck under the Expo tsconfig. */
-declare module "https://esm.sh/@supabase/supabase-js@2.49.1" {
+declare module "https://esm.sh/@supabase/supabase-js@2.98.0" {
   export * from "@supabase/supabase-js";
 }
 

@@ -470,6 +470,10 @@ export interface LocationConditions {
   temperature: { temp_f: number; rating: ConditionRating };
   water: { clarity: WaterClarity; flow_cfs: number | null; rating: ConditionRating };
   fetchedAt: string;
+  /** Full weather snapshot when coordinates existed (for UI tabs without a second fetch). */
+  rawWeather?: WeatherData | null;
+  /** USGS (or mock) flow row when a station id was present. */
+  rawWaterFlow?: WaterFlowData | null;
   /** Set on plan-a-trip when sky/wind/temp come from OpenWeather forecast for the selected time. */
   weatherIsForecastForPlannedTime?: boolean;
   /** Forecast API does not cover the selected date (~5 day horizon). Water/flow are still current. */

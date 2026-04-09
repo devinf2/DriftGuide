@@ -1129,8 +1129,9 @@ export const useTripStore = create<TripState>()(
           const lng = location?.longitude;
           const stationId = (location?.metadata as Record<string, string> | null)?.usgs_station_id;
 
+          const locId = location?.id;
           const promises: [Promise<WeatherData | null>, Promise<WaterFlowData | null>] = [
-            lat && lng ? getWeather(lat, lng) : Promise.resolve(null),
+            lat && lng ? getWeather(lat, lng, { locationId: locId }) : Promise.resolve(null),
             stationId ? getStreamFlow(stationId) : Promise.resolve(null),
           ];
 
