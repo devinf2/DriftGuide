@@ -12,6 +12,7 @@ import {
   Dimensions,
   Linking,
   Switch,
+  TextInput,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -36,6 +37,7 @@ import {
   NextFlyRecommendation,
   EventConditionsSnapshot,
   Photo,
+  WaterClarity,
 } from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
@@ -44,7 +46,7 @@ import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTimin
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useTripStore } from '@/src/stores/tripStore';
-import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS } from '@/src/services/waterFlow';
+import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS, CLARITY_LABELS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
@@ -57,6 +59,7 @@ import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
+import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
 
@@ -86,6 +89,7 @@ export default function TripSummaryScreen() {
   const { isConnected } = useNetworkStatus();
   const { colors: themeColors } = useAppTheme();
   const styles = useMemo(() => createTripSummaryStyles(themeColors), [themeColors]);
+  const surveyStyles = useMemo(() => createTripSurveyStyles(themeColors), [themeColors]);
   const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -110,6 +114,11 @@ export default function TripSummaryScreen() {
   const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
   const [photoVisSaving, setPhotoVisSaving] = useState(false);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [reviewRating, setReviewRating] = useState<number | null>(null);
+  const [reviewClarity, setReviewClarity] = useState<WaterClarity | null>(null);
+  const [reviewNotes, setReviewNotes] = useState('');
+  const [ratingNoteSaving, setRatingNoteSaving] = useState(false);
   const friendships = useFriendsStore((s) => s.friendships);
   const refreshFriends = useFriendsStore((s) => s.refresh);
 
@@ -326,6 +335,71 @@ export default function TripSummaryScreen() {
       activeFishingMs: ms ?? undefined,
     });
   }, [trip, events]);
+
+  const persistTripReview = useCallback(
+    async (payload: {
+      rating: number | null;
+      user_reported_clarity: WaterClarity | null;
+      notes: string | null;
+    }): Promise<boolean> => {
+      if (!trip || !user || !id) return false;
+      if (!isConnected) {
+        Alert.alert('Offline', 'Connect to the internet to save changes.');
+        return false;
+      }
+      setRatingNoteSaving(true);
+      const updated: Trip = {
+        ...trip,
+        rating: payload.rating,
+        user_reported_clarity: payload.user_reported_clarity as Trip['user_reported_clarity'],
+        notes: payload.notes,
+      };
+      setTrip(updated);
+      const ok = await syncTripToCloud(updated, events);
+      setRatingNoteSaving(false);
+      if (!ok) {
+        Alert.alert('Could not save', 'Try again when you have a stable connection.');
+        const trips = await fetchTripsFromCloud(user.id);
+        const found = trips.find((t) => t.id === id);
+        if (found) setTrip(found);
+        return false;
+      }
+      return true;
+    },
+    [trip, user, id, isConnected, events],
+  );
+
+  const normalizeTripNote = (raw: string | null | undefined) => {
+    const t = raw?.trim() ?? '';
+    return t === '' ? null : t;
+  };
+
+  const openReviewModal = useCallback(() => {
+    if (!trip) return;
+    if (!isConnected) {
+      Alert.alert('Offline', 'Connect to the internet to save changes.');
+      return;
+    }
+    setReviewRating(trip.rating ?? null);
+    const c = trip.user_reported_clarity;
+    setReviewClarity(c && c !== 'unknown' ? c : null);
+    setReviewNotes(trip.notes ?? '');
+    setReviewModalVisible(true);
+  }, [trip, isConnected]);
+
+  const closeReviewModal = useCallback(() => {
+    setReviewModalVisible(false);
+  }, []);
+
+  const handleReviewDone = useCallback(async () => {
+    if (reviewRating == null) return;
+    const ok = await persistTripReview({
+      rating: reviewRating,
+      user_reported_clarity: reviewClarity,
+      notes: normalizeTripNote(reviewNotes),
+    });
+    if (ok) setReviewModalVisible(false);
+  }, [reviewRating, reviewClarity, reviewNotes, persistTripReview]);
 
   if (loading) {
     return (
@@ -603,19 +677,177 @@ export default function TripSummaryScreen() {
         <Text style={styles.dateLocationDate}>{formatTripDate(trip.start_time)}</Text>
       </View>
 
-      {/* Stats Card */}
+      {/* Stats Card — three columns: Fish | Duration | Rating (shared value row height for alignment) */}
       <View style={styles.statsCard}>
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>{trip.total_fish}</Text>
+          <View style={styles.statValueSlot}>
+            <Text style={styles.statValue}>{trip.total_fish}</Text>
+          </View>
           <Text style={styles.statLabel}>Fish</Text>
         </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>
-            {tripDurationLabel}
-          </Text>
+        <View style={[styles.statItem, styles.statItemMiddle]}>
+          <View style={styles.statValueSlot}>
+            <Text
+              style={[styles.statValue, styles.statValueDuration]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.55}
+            >
+              {tripDurationLabel}
+            </Text>
+          </View>
           <Text style={styles.statLabel}>Duration</Text>
         </View>
+        <View style={styles.statItem}>
+          <View style={[styles.statValueSlot, styles.statValueSlotRating]}>
+            <Pressable
+              onPress={() => openReviewModal()}
+              hitSlop={12}
+              style={({ pressed }) => [styles.statRatingPencil, { opacity: pressed ? 0.6 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Edit trip review"
+            >
+              <MaterialIcons
+                name="edit"
+                size={15}
+                color={
+                  trip.rating != null ||
+                  (trip.user_reported_clarity != null && trip.user_reported_clarity !== 'unknown') ||
+                  normalizeTripNote(trip.notes) != null
+                    ? themeColors.primary
+                    : themeColors.textSecondary
+                }
+              />
+            </Pressable>
+            <Pressable
+              onPress={() => openReviewModal()}
+              style={styles.statRatingTap}
+              disabled={ratingNoteSaving}
+              accessibilityRole="button"
+              accessibilityLabel={
+                trip.rating != null ? `Trip rating ${trip.rating} out of 5` : 'Set trip rating'
+              }
+            >
+              {ratingNoteSaving ? (
+                <ActivityIndicator size="small" color={themeColors.primary} />
+              ) : (
+                <>
+                  <Text style={styles.statValue}>
+                    {trip.rating != null ? String(trip.rating) : '—'}
+                  </Text>
+                  <MaterialIcons
+                    name={trip.rating != null ? 'star' : 'star-border'}
+                    size={26}
+                    color={trip.rating != null ? themeColors.warning : themeColors.border}
+                  />
+                </>
+              )}
+            </Pressable>
+          </View>
+          <Text style={styles.statLabel}>Rating</Text>
+        </View>
       </View>
+
+      <Modal
+        visible={reviewModalVisible}
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
+        onRequestClose={closeReviewModal}
+      >
+        <SafeAreaView style={surveyStyles.container} edges={['top', 'bottom']}>
+          <View style={surveyStyles.modalTopBar}>
+            <Pressable onPress={closeReviewModal} hitSlop={12} accessibilityRole="button">
+              <Text style={surveyStyles.modalCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={surveyStyles.scroll}
+            contentContainerStyle={[
+              surveyStyles.content,
+              { paddingBottom: Math.max(insets.bottom, 32) + Spacing.xxl },
+            ]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+          >
+            <Text style={surveyStyles.title}>How was your trip?</Text>
+            <Text style={surveyStyles.subtitle}>Quick survey — helps us improve recommendations</Text>
+
+            <Text style={surveyStyles.label}>Rate your trip (1–5 stars)</Text>
+            <View style={surveyStyles.starRow}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Pressable
+                  key={star}
+                  style={surveyStyles.starButton}
+                  onPress={() => setReviewRating(star)}
+                  disabled={ratingNoteSaving}
+                >
+                  <MaterialIcons
+                    name={reviewRating !== null && star <= reviewRating ? 'star' : 'star-border'}
+                    size={40}
+                    color={
+                      reviewRating !== null && star <= reviewRating
+                        ? themeColors.warning
+                        : themeColors.border
+                    }
+                  />
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={surveyStyles.label}>How was the water? (optional)</Text>
+            <View style={surveyStyles.clarityRow}>
+              {TRIP_SURVEY_CLARITY_OPTIONS.map((key) => (
+                <Pressable
+                  key={key}
+                  style={[
+                    surveyStyles.clarityPill,
+                    reviewClarity === key && surveyStyles.clarityPillSelected,
+                  ]}
+                  onPress={() => setReviewClarity(reviewClarity === key ? null : key)}
+                  disabled={ratingNoteSaving}
+                >
+                  <Text
+                    style={[
+                      surveyStyles.clarityPillText,
+                      reviewClarity === key && surveyStyles.clarityPillTextSelected,
+                    ]}
+                  >
+                    {CLARITY_LABELS[key]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={surveyStyles.label}>Notes (optional)</Text>
+            <TextInput
+              style={surveyStyles.notesInput}
+              placeholder="Anything else about conditions or the day?"
+              placeholderTextColor={themeColors.textTertiary}
+              value={reviewNotes}
+              onChangeText={setReviewNotes}
+              multiline
+              editable={!ratingNoteSaving}
+              textAlignVertical="top"
+            />
+
+            <Pressable
+              style={[
+                surveyStyles.primaryButton,
+                surveyStyles.submitButton,
+                (reviewRating === null || ratingNoteSaving) && surveyStyles.primaryButtonDisabled,
+              ]}
+              onPress={() => void handleReviewDone()}
+              disabled={reviewRating === null || ratingNoteSaving}
+            >
+              {ratingNoteSaving ? (
+                <ActivityIndicator color={themeColors.textInverse} />
+              ) : (
+                <Text style={surveyStyles.primaryButtonText}>Done</Text>
+              )}
+            </Pressable>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Tab Bar — aligned with active trip: Fishing, Photos, Conditions, Map (trip guide is a modal) */}
       <View style={styles.tabBar}>
@@ -1196,8 +1428,9 @@ function createTripSummaryStyles(c: ThemeColors) {
     borderRadius: BorderRadius.md,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
-    padding: Spacing.lg,
-    gap: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    gap: Spacing.sm,
     shadowColor: c.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
@@ -1207,6 +1440,38 @@ function createTripSummaryStyles(c: ThemeColors) {
   statItem: {
     flex: 1,
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    minWidth: 0,
+  },
+  statItemMiddle: {
+    paddingHorizontal: Spacing.xs,
+  },
+  /** Same fixed height for all three stat columns so values + labels line up */
+  statValueSlot: {
+    height: 44,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statValueDuration: {
+    width: '100%',
+    textAlign: 'center',
+  },
+  statValueSlotRating: {
+    position: 'relative',
+  },
+  statRatingPencil: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    zIndex: 1,
+    padding: 2,
+  },
+  statRatingTap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
   statValue: {
     fontSize: FontSize.xl,
@@ -1216,7 +1481,8 @@ function createTripSummaryStyles(c: ThemeColors) {
   statLabel: {
     fontSize: FontSize.xs,
     color: c.textSecondary,
-    marginTop: 2,
+    marginTop: 4,
+    textAlign: 'center',
   },
 
   topBarRow: {

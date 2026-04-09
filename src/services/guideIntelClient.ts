@@ -11,6 +11,7 @@ import {
   parseGuideLocationRecommendationUnknown,
   stripDriftguideLocationFence,
 } from '@/src/utils/guideLocationRecommendationJson';
+import { ensureBestTimeIsClockRange } from '@/src/utils/offlineGuideBasics';
 import { FunctionsHttpError } from '@supabase/functions-js';
 import NetInfo from '@react-native-community/netinfo';
 import { effectiveIsAppOnline } from '@/src/utils/netReachability';
@@ -137,7 +138,10 @@ export function parseGuideIntelChatResponse(data: unknown): GuideIntelChatResult
   };
 }
 
-export function parseSpotSummaryEdgeResponse(data: unknown): GuideIntelSpotSummaryResult | null {
+export function parseSpotSummaryEdgeResponse(
+  data: unknown,
+  timeOfDayForFallback: string = 'early morning',
+): GuideIntelSpotSummaryResult | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
   const raw = typeof d.raw === 'string' ? d.raw : null;
@@ -176,7 +180,7 @@ export function parseSpotSummaryEdgeResponse(data: unknown): GuideIntelSpotSumma
     return {
       report,
       topFlies,
-      bestTime: bestTime || 'Morning or evening',
+      bestTime: ensureBestTimeIsClockRange(bestTime, timeOfDayForFallback),
       sources,
       fishingQualitySignal,
       fetchedAt,

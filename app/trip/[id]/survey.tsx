@@ -10,7 +10,7 @@ import { CLARITY_LABELS } from '@/src/services/waterFlow';
 import { WaterClarity } from '@/src/types';
 import { MaterialIcons } from '@expo/vector-icons';
 
-const CLARITY_OPTIONS: Exclude<WaterClarity, 'unknown'>[] = [
+export const TRIP_SURVEY_CLARITY_OPTIONS: Exclude<WaterClarity, 'unknown'>[] = [
   'clear',
   'slightly_stained',
   'stained',
@@ -20,7 +20,7 @@ const CLARITY_OPTIONS: Exclude<WaterClarity, 'unknown'>[] = [
 
 export default function TripSurveyScreen() {
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createSurveyStyles(colors), [colors]);
+  const styles = useMemo(() => createTripSurveyStyles(colors), [colors]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -126,7 +126,7 @@ export default function TripSurveyScreen() {
 
         <Text style={styles.label}>How was the water? (optional)</Text>
         <View style={styles.clarityRow}>
-          {CLARITY_OPTIONS.map((key) => (
+          {TRIP_SURVEY_CLARITY_OPTIONS.map((key) => (
             <Pressable
               key={key}
               style={[
@@ -192,11 +192,22 @@ export default function TripSurveyScreen() {
   );
 }
 
-function createSurveyStyles(colors: ThemeColors) {
+export function createTripSurveyStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    modalTopBar: {
+      paddingHorizontal: Spacing.xl,
+      paddingTop: Spacing.sm,
+      paddingBottom: Spacing.xs,
+    },
+    modalCancel: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.primary,
+      alignSelf: 'flex-start',
     },
     scroll: {
       flex: 1,

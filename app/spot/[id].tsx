@@ -58,11 +58,16 @@ import {
   type LocationCreatorManageState,
 } from '@/src/services/locationService';
 import { effectiveIsAppOnline } from '@/src/utils/netReachability';
+import {
+  fetchLocationCommunityRatings,
+  type LocationPublicTripRatingRow,
+} from '@/src/services/locationCommunityRatings';
+import { LocationCommunityRatingsTab } from '@/src/components/spot/LocationCommunityRatingsTab';
 
 const USED_SPOT_MESSAGE =
   'Another angler has this spot on a trip. You can’t change the pin, visibility, or delete it until their trips no longer use it.';
 
-type SpotTabKey = 'overview' | 'conditions' | 'ai' | 'map';
+type SpotTabKey = 'overview' | 'conditions' | 'community' | 'ai' | 'map';
 
 /** In-screen header avoids iOS 26+ UIBarButtonItem “glass” behind native `headerRight`. */
 function SpotModalHeader({
@@ -213,6 +218,9 @@ export default function SpotFishingTripScreen() {
   const [howToFishLoading, setHowToFishLoading] = useState(false);
   const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
   const [communityFishN, setCommunityFishN] = useState(0);
+  const [communityRatingsLoading, setCommunityRatingsLoading] = useState(false);
+  const [showCommunityTab, setShowCommunityTab] = useState(false);
+  const [communityRatingRows, setCommunityRatingRows] = useState<LocationPublicTripRatingRow[]>([]);
   const [summarySources, setSummarySources] = useState<GuideIntelSource[]>([]);
   const [summarySignal, setSummarySignal] = useState<number | null>(null);
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
@@ -297,6 +305,32 @@ export default function SpotFishingTripScreen() {
     const ids = [...spotMapRelatedLocationIds(location, locations)];
     void fetchApprovedAccessPointsForLocations(ids).then(setApprovedAccessPoints);
   }, [location, locations]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!id || !user?.id || simulateOffline) {
+        setShowCommunityTab(false);
+        setCommunityRatingRows([]);
+        setCommunityRatingsLoading(false);
+        return;
+      }
+      let cancelled = false;
+      setCommunityRatingsLoading(true);
+      void fetchLocationCommunityRatings(id).then((res) => {
+        if (cancelled) return;
+        setShowCommunityTab(res.showCommunityTab);
+        setCommunityRatingRows(res.rows);
+        setCommunityRatingsLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [id, user?.id, simulateOffline]),
+  );
+
+  useEffect(() => {
+    if (activeTab === 'community' && !showCommunityTab) setActiveTab('overview');
+  }, [activeTab, showCommunityTab]);
 
   useEffect(() => {
     if (!location || !id) return;
@@ -405,6 +439,16 @@ export default function SpotFishingTripScreen() {
   }, [conditions, communityFishN, summarySignal, summaryFetchedAt]);
 
   const displayStars = composite?.stars ?? 0;
+  const spotTabs = useMemo((): { key: SpotTabKey; label: string }[] => {
+    const tabs: { key: SpotTabKey; label: string }[] = [
+      { key: 'overview', label: 'Overview' },
+      { key: 'conditions', label: 'Conditions' },
+      { key: 'ai', label: 'AI Guide' },
+    ];
+    if (showCommunityTab) tabs.push({ key: 'community', label: 'Community' });
+    tabs.push({ key: 'map', label: 'Map' });
+    return tabs;
+  }, [showCommunityTab]);
   const showSpotOfflineGuide = !spotNetOn && !summaryFetchedAt;
 
   const externalStale = useMemo(() => {
@@ -732,18 +776,24 @@ export default function SpotFishingTripScreen() {
         onToggleFavorite={handleToggleFavorite}
       />
       <View style={styles.tabBar}>
-        {([
-          { key: 'overview' as SpotTabKey, label: 'Overview' },
-          { key: 'conditions' as SpotTabKey, label: 'Conditions' },
-          { key: 'ai' as SpotTabKey, label: 'AI Guide' },
-          { key: 'map' as SpotTabKey, label: 'Map' },
-        ]).map((tab) => (
+        {spotTabs.map((tab) => (
           <Pressable
             key={tab.key}
             style={[styles.tab, activeTab === tab.key && styles.tabActive]}
             onPress={() => setActiveTab(tab.key)}
           >
-            <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]}>{tab.label}</Text>
+            <Text
+              style={[
+                styles.tabLabel,
+                showCommunityTab && styles.tabLabelCompact,
+                activeTab === tab.key && styles.tabLabelActive,
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.85}
+            >
+              {tab.label}
+            </Text>
           </Pressable>
         ))}
       </View>
@@ -957,6 +1007,10 @@ export default function SpotFishingTripScreen() {
           showHourly={true}
         />
       )}
+
+      {activeTab === 'community' && showCommunityTab ? (
+        <LocationCommunityRatingsTab colors={colors} loading={communityRatingsLoading} rows={communityRatingRows} />
+      ) : null}
 
       {activeTab === 'ai' && (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={120}>
@@ -1544,6 +1598,7 @@ function createSpotStyles(colors: ThemeColors) {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: Spacing.sm + 2,
+    paddingHorizontal: 2,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
@@ -1554,6 +1609,10 @@ function createSpotStyles(colors: ThemeColors) {
     fontSize: FontSize.sm,
     fontWeight: '600',
     color: colors.textTertiary,
+    textAlign: 'center',
+  },
+  tabLabelCompact: {
+    fontSize: FontSize.xs,
   },
   tabLabelActive: {
     color: colors.primary,

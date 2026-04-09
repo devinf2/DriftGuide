@@ -480,7 +480,8 @@ Deno.serve(async (req: Request) => {
         external ? `\nReliable gauge data:\n${external}\n` : "",
         "",
         "Respond with ONLY valid JSON:",
-        '{"report":"2-4 sentences","topFlies":["6 flies"],"bestTime":"short window","fishingQualitySignal":0.65,"sources":[{"url":"...","title":"...","fetchedAt":"ISO","excerpt":"..."}]}',
+        '{"report":"2-4 sentences","topFlies":["6 flies"],"bestTime":"6–9 AM & 5–8 PM","fishingQualitySignal":0.65,"sources":[{"url":"...","title":"...","fetchedAt":"ISO","excerpt":"..."}]}',
+        'bestTime MUST be a concrete local clock window for TODAY with hours (e.g. "6–9 AM", "4:30–7 PM", or "6–9 AM & 5–8 PM"). Do not use vague phrases like "short window", "early", or "morning" without clock times.',
         "fishingQualitySignal: null if you cannot ground in gauge/conditions; else 0-1.",
         usgsSiteId
           ? `Include USGS flow in sources when you use it; use url starting with https://waterdata.usgs.gov/ or the monitoring URL.`
@@ -488,7 +489,7 @@ Deno.serve(async (req: Request) => {
       ].join("\n");
       const raw = await openaiChat(
         guideSystem(
-          "Respond with ONLY valid JSON. Ground fishingQualitySignal in cited data only.",
+          "Respond with ONLY valid JSON. Ground fishingQualitySignal in cited data only. Field bestTime must always include numeric clock times (hours), never qualitative-only labels.",
         ),
         userMsg,
         400,

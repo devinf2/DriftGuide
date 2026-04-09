@@ -1,7 +1,7 @@
 import type { Location, LocationConditions } from '@/src/types';
 import type { SpotFishingSummary } from '@/src/services/ai';
 import { getSeason, getTimeOfDay } from '@/src/services/ai';
-import { bestTimeForClock, fliesForSeason, waterBodyHint } from '@/src/utils/offlineGuideBasics';
+import { bestTimeForClock, clockRangeForTimeOfDay, fliesForSeason, waterBodyHint } from '@/src/utils/offlineGuideBasics';
 
 /**
  * Deterministic spot briefing when offline / no cached AI — season, time of day, water type.
@@ -32,7 +32,7 @@ export function buildOfflineSpotGuide(
   return {
     report,
     topFlies: flies.slice(0, 6),
-    bestTime: bestTimeForClock(tod).replace(/\.$/, ''),
+    bestTime: clockRangeForTimeOfDay(tod),
     sources: [],
     fishingQualitySignal: null,
     fetchedAt: now.toISOString(),

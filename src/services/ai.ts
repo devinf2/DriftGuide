@@ -18,7 +18,13 @@ import {
   parseGuideIntelChatResponse,
   parseSpotSummaryEdgeResponse,
 } from '@/src/services/guideIntelClient';
-import { bestTimeForClock, fliesForSeason, waterBodyHint } from '@/src/utils/offlineGuideBasics';
+import {
+  bestTimeForClock,
+  clockRangeForTimeOfDay,
+  ensureBestTimeIsClockRange,
+  fliesForSeason,
+  waterBodyHint,
+} from '@/src/utils/offlineGuideBasics';
 import type {
   GuideIntelChatDataTier,
   GuideIntelSource,
@@ -1291,8 +1297,8 @@ function buildSpotSummaryPrompt(
     `Current conditions: ${conditionsSummary}`,
     '',
     'Respond with ONLY valid JSON in this exact format, no other text:',
-    '{"report": "2-4 sentence fishing report for today.", "topFlies": ["Fly 1", "Fly 2", "Fly 3", "Fly 4", "Fly 5", "Fly 6"], "bestTime": "e.g. Early morning or 4–7 PM or Midday"}',
-    'Return exactly 6 top flies. bestTime must be a short, data-driven recommendation for TODAY based on conditions (sun, temp, wind, hatches). Use a concise time window like "Early morning", "Late afternoon", "4–7 PM", "Midday–2 PM".',
+    '{"report": "2-4 sentence fishing report for today.", "topFlies": ["Fly 1", "Fly 2", "Fly 3", "Fly 4", "Fly 5", "Fly 6"], "bestTime": "6–9 AM & 5–8 PM"}',
+    'Return exactly 6 top flies. bestTime MUST include numeric clock times for TODAY (e.g. "6–9 AM", "4:30–7 PM", "11 AM–2 PM", or two windows "6–9 AM & 5–8 PM"). Never use vague-only phrases like "short window", "early morning", or "midday" without hours.',
   ].join('\n');
 }
 
@@ -1302,10 +1308,15 @@ export async function getSpotFishingSummary(
   conditions: import('@/src/types').LocationConditions,
   options?: SpotFishingSummaryOptions,
 ): Promise<SpotFishingSummary> {
+  const now = new Date();
+  const tod = getTimeOfDay(now);
   const fallback: SpotFishingSummary = {
     report: `${locationName}: conditions are ${conditions.sky.label}, ${conditions.temperature.temp_f}°F, wind ${conditions.wind.speed_mph}mph. ${conditions.water.flow_cfs != null ? `Flow ${conditions.water.flow_cfs} CFS.` : ''} Check local regulations before you go.`,
     topFlies: ['Pheasant Tail #18', 'Parachute Adams #16', 'RS2 #20', 'BWO #18', 'Midge #20', 'Copper John #16'],
-    bestTime: conditions.temperature.temp_f >= 45 && conditions.temperature.temp_f <= 75 ? 'Morning or evening' : 'Midday',
+    bestTime:
+      conditions.temperature.temp_f >= 45 && conditions.temperature.temp_f <= 75
+        ? '6–9 AM & 5–8 PM'
+        : clockRangeForTimeOfDay(tod),
   };
 
   const parts: string[] = [
@@ -1316,7 +1327,6 @@ export async function getSpotFishingSummary(
   parts.push(`Water ${conditions.water.clarity}`);
   const conditionsSummary = parts.join('; ');
 
-  const now = new Date();
   const regionLabel = await resolveRegionLabelAsync(options?.latitude ?? null, options?.longitude ?? null);
 
   const edgeOut = await invokeGuideIntel({
@@ -1325,13 +1335,13 @@ export async function getSpotFishingSummary(
     locationName,
     conditionsSummary,
     season: getSeason(now),
-    timeOfDay: getTimeOfDay(now),
+    timeOfDay: tod,
     latitude: options?.latitude ?? null,
     longitude: options?.longitude ?? null,
     usgsSiteId: options?.usgsSiteId ?? null,
     communityFishN: options?.communityFishN,
   });
-  const parsedEdge = parseSpotSummaryEdgeResponse(edgeOut);
+  const parsedEdge = parseSpotSummaryEdgeResponse(edgeOut, tod);
   if (parsedEdge) {
     return {
       report: parsedEdge.report,
@@ -1355,14 +1365,17 @@ export async function getSpotFishingSummary(
       body: JSON.stringify({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: `You are an expert fly fishing guide for ${regionLabel}. Respond with ONLY valid JSON.` },
+          {
+            role: 'system',
+            content: `You are an expert fly fishing guide for ${regionLabel}. Respond with ONLY valid JSON. Field bestTime must always include numeric clock times (hours), never qualitative-only labels.`,
+          },
           {
             role: 'user',
             content: buildSpotSummaryPrompt(
               locationName,
               conditionsSummary,
               getSeason(now),
-              getTimeOfDay(now),
+              tod,
               regionLabel,
             ),
           },
@@ -1383,9 +1396,11 @@ export async function getSpotFishingSummary(
     const report = typeof parsed.report === 'string' ? parsed.report : fallback.report;
     const rawFlies = Array.isArray(parsed.topFlies) ? parsed.topFlies : fallback.topFlies;
     const topFlies = rawFlies.slice(0, 6).map((f: unknown) => String(f ?? '')).filter(Boolean);
-    const bestTime = typeof parsed.bestTime === 'string' && parsed.bestTime.trim()
-      ? String(parsed.bestTime).trim()
-      : fallback.bestTime;
+    const rawBest =
+      typeof parsed.bestTime === 'string' && parsed.bestTime.trim()
+        ? String(parsed.bestTime).trim()
+        : fallback.bestTime;
+    const bestTime = ensureBestTimeIsClockRange(rawBest, tod);
     return { report, topFlies: topFlies.length ? topFlies : fallback.topFlies, bestTime };
   } catch {
     return fallback;
