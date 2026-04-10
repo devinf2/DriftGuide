@@ -14,7 +14,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.driftguide.app",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "config": {
