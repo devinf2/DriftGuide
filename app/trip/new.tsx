@@ -31,7 +31,8 @@ import type { AIContext } from '@/src/services/ai';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
-import { isPlaceCoveredByOfflineDownloads } from '@/src/utils/offlineDownloadCoverage';
+// Re-enable with plan-trip offline prompt below.
+// import { isPlaceCoveredByOfflineDownloads } from '@/src/utils/offlineDownloadCoverage';
 import { useOfflineDownloadResumeStore } from '@/src/stores/offlineDownloadResumeStore';
 
 /** Max drive distance (km) for suggested spots — ~2 hours at 60 mph ≈ 120 mi ≈ 193 km. */
@@ -517,61 +518,53 @@ export default function NewTripScreen() {
       Alert.alert('Select how you\'ll fish', 'Please choose Wade, Float, or Shore so we can save your trip.');
       return;
     }
-    const lat = selectedLocation.latitude;
-    const lng = selectedLocation.longitude;
-    const coordsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
-
-    if (isConnected && coordsOk && !(await isPlaceCoveredByOfflineDownloads(lat, lng, selectedLocation.id))) {
-      Alert.alert(
-        'Download map for offline?',
-        'This place is not inside a saved offline map region. Download the map now so you can use it without a signal?',
-        [
-          {
-            text: 'Not now',
-            style: 'cancel',
-            onPress: () => {
-              void completePlanTripSave();
-            },
-          },
-          {
-            text: 'Download',
-            onPress: () => {
-              const payload = {
-                userId: user.id,
-                locationId: selectedLocation.id,
-                fishingType: 'fly' as const,
-                location: selectedLocation,
-                plannedDateIso: plannedDate.toISOString(),
-                sessionType,
-                accessPointId: null as string | null,
-              };
-              router.push({
-                pathname: '/trip/offline-region-picker',
-                params: {
-                  centerLat: String(lat),
-                  centerLng: String(lng),
-                  locationId: selectedLocation.id,
-                  resumeFlow: 'plan-trip',
-                  planTripPayload: JSON.stringify(payload),
-                },
-              });
-            },
-          },
-        ],
-      );
-      return;
-    }
+    // Optional: prompt to download offline map before saving planned trip (see offline-region-picker + planTripResume).
+    // const lat = selectedLocation.latitude;
+    // const lng = selectedLocation.longitude;
+    // const coordsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+    // if (isConnected && coordsOk && !(await isPlaceCoveredByOfflineDownloads(lat, lng, selectedLocation.id))) {
+    //   Alert.alert(
+    //     'Download map for offline?',
+    //     'This place is not inside a saved offline map region. Download the map now so you can use it without a signal?',
+    //     [
+    //       {
+    //         text: 'Not now',
+    //         style: 'cancel',
+    //         onPress: () => {
+    //           void completePlanTripSave();
+    //         },
+    //       },
+    //       {
+    //         text: 'Download',
+    //         onPress: () => {
+    //           const payload = {
+    //             userId: user.id,
+    //             locationId: selectedLocation.id,
+    //             fishingType: 'fly' as const,
+    //             location: selectedLocation,
+    //             plannedDateIso: plannedDate.toISOString(),
+    //             sessionType,
+    //             accessPointId: null as string | null,
+    //           };
+    //           router.push({
+    //             pathname: '/trip/offline-region-picker',
+    //             params: {
+    //               centerLat: String(lat),
+    //               centerLng: String(lng),
+    //               locationId: selectedLocation.id,
+    //               resumeFlow: 'plan-trip',
+    //               planTripPayload: JSON.stringify(payload),
+    //             },
+    //           });
+    //         },
+    //       },
+    //     ],
+    //   );
+    //   return;
+    // }
 
     await completePlanTripSave();
-  }, [
-    user,
-    selectedLocation,
-    sessionType,
-    isConnected,
-    completePlanTripSave,
-    router,
-    plannedDate,
-  ]);
+  }, [user, selectedLocation, sessionType, completePlanTripSave]);
 
   useFocusEffect(
     useCallback(() => {
