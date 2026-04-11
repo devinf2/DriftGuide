@@ -40,7 +40,7 @@ import {
 } from '@/src/types';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
-import { getTripEventDescription } from '@/src/utils/journalTimeline';
+import { formatCatchWeightLabel, getTripEventDescription } from '@/src/utils/journalTimeline';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
 import {
   getSessionTripPhotos,
@@ -689,6 +689,12 @@ export default function TripSummaryScreen() {
                     ) : d.quantity != null && d.quantity > 1 ? (
                       <Text style={styles.mapCatchModalRow}>
                         <MaterialCommunityIcons name="fish" size={16} color={themeColors.textSecondary} /> ×{d.quantity}
+                      </Text>
+                    ) : null}
+                    {formatCatchWeightLabel(d.weight_lb, d.weight_oz) ? (
+                      <Text style={styles.mapCatchModalRow}>
+                        <MaterialCommunityIcons name="scale-balance" size={16} color={themeColors.textSecondary} />{' '}
+                        {formatCatchWeightLabel(d.weight_lb, d.weight_oz)}
                       </Text>
                     ) : null}
                     {d.released ? (

@@ -69,7 +69,7 @@ export default function PickLocationMapScreen() {
 
   const chooseLocation = useCallback((loc: Location) => {
     Keyboard.dismiss();
-    router.push(`/spot/${loc.id}?planTripPicker=1`);
+    router.push(`/spot/${loc.id}?planTripPicker=1&fromMap=1`);
   }, [router]);
 
   useFocusEffect(

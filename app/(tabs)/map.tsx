@@ -414,7 +414,7 @@ export default function MapTabScreen() {
         mapDisplayLocations,
         (loc) => {
           if (addingLocation) endAddLocation();
-          router.push(`/spot/${loc.id}`);
+          router.push(`/spot/${loc.id}?fromMap=1`);
         },
         {
           primary: colors.primary,
@@ -494,7 +494,7 @@ export default function MapTabScreen() {
               onSheetHeightChange={setAddSheetHeight}
               onMapInteractionBlockedChange={setMapInteractionBlocked}
               onSaved={(id) => {
-                router.push(`/spot/${id}`);
+                router.push(`/spot/${id}?fromMap=1`);
                 endAddLocation();
               }}
             />
@@ -554,7 +554,7 @@ export default function MapTabScreen() {
                   <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
                   {savedLocationMatches.slice(0, 8).map((loc: Location) =>
                     renderSuggestionRow(`loc-${loc.id}`, loc.name, () => {
-                      router.push(`/spot/${loc.id}`);
+                      router.push(`/spot/${loc.id}?fromMap=1`);
                       if (addingLocation) endAddLocation();
                       setSearchInputFocused(false);
                       Keyboard.dismiss();

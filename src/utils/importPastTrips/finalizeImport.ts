@@ -472,6 +472,8 @@ export async function batchFinalizeImport(
           timestamp: e.timestamp,
           species: catchData.species ?? null,
           size_inches: catchData.size_inches ?? null,
+          weight_lb: catchData.weight_lb ?? null,
+          weight_oz: catchData.weight_oz ?? null,
           quantity: Math.max(1, catchData.quantity ?? 1),
           released: catchData.released ?? null,
           depth_ft: catchData.depth_ft ?? null,

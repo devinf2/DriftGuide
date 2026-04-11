@@ -1,6 +1,7 @@
 import type { CatchRow, CommunityCatchRow, ConditionsSnapshotRow } from '@/src/types';
 import type { OfflineTripSummary } from '@/src/services/sync';
 import type { DownloadedWaterway } from '@/src/services/waterwayCache';
+import { formatCatchWeightLabel } from '@/src/utils/journalTimeline';
 
 export function offlineWaterwayLabel(w: DownloadedWaterway): string {
   if (w.locationId.startsWith('offline-custom-')) return 'Custom map region';
@@ -113,6 +114,10 @@ function formatCatchDetailsCommunity(
   lines.push(`  • Catch ${formatLocaleDateTime(c.timestamp)}`);
   lines.push(`      Species: ${c.species?.trim() || 'Unknown'} · ×${Math.max(1, c.quantity)}`);
   if (c.size_inches != null) lines.push(`      Fish size: ${c.size_inches}"`);
+  {
+    const w = formatCatchWeightLabel(c.weight_lb, c.weight_oz);
+    if (w) lines.push(`      Weight: ${w}`);
+  }
   if (c.depth_ft != null) lines.push(`      Depth: ${c.depth_ft} ft`);
   if (c.structure) lines.push(`      Structure: ${c.structure}`);
   if (c.presentation_method) lines.push(`      Presentation: ${c.presentation_method}`);
@@ -142,6 +147,10 @@ function formatCatchDetailsPersonal(
   lines.push(`  • Catch ${formatLocaleDateTime(c.timestamp)}`);
   lines.push(`      Species: ${c.species?.trim() || 'Unknown'} · ×${Math.max(1, c.quantity)}`);
   if (c.size_inches != null) lines.push(`      Fish size: ${c.size_inches}"`);
+  {
+    const w = formatCatchWeightLabel(c.weight_lb, c.weight_oz);
+    if (w) lines.push(`      Weight: ${w}`);
+  }
   if (c.depth_ft != null) lines.push(`      Depth: ${c.depth_ft} ft`);
   if (c.structure) lines.push(`      Structure: ${c.structure}`);
   if (c.presentation_method) lines.push(`      Presentation: ${c.presentation_method}`);

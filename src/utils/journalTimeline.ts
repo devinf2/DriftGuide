@@ -39,6 +39,22 @@ export function normalizeTripEventForClient(e: TripEvent): TripEvent {
   };
 }
 
+/** Human-readable weight from lb + oz (0–15); null if unset or zero. */
+export function formatCatchWeightLabel(
+  lb: number | null | undefined,
+  oz: number | null | undefined,
+): string | null {
+  const li = lb != null && Number.isFinite(Number(lb)) ? Math.max(0, Math.floor(Number(lb))) : null;
+  const oi = oz != null && Number.isFinite(Number(oz)) ? Math.max(0, Math.min(15, Math.floor(Number(oz)))) : null;
+  if (li == null && oi == null) return null;
+  const l = li ?? 0;
+  const o = oi ?? 0;
+  if (l === 0 && o === 0) return null;
+  if (l > 0 && o > 0) return `${l} lb ${o} oz`;
+  if (l > 0) return `${l} lb`;
+  return `${o} oz`;
+}
+
 /** Single place for journal / summary timeline row titles (handles stringified `data`). */
 export function getTripEventDescription(event: TripEvent): string {
   const d = coerceTripEventDataObject(event);
@@ -46,9 +62,13 @@ export function getTripEventDescription(event: TripEvent): string {
     case 'catch': {
       const species = typeof d.species === 'string' && d.species.trim() ? d.species.trim() : null;
       const sizeInches = typeof d.size_inches === 'number' ? d.size_inches : null;
+      const wlb = typeof d.weight_lb === 'number' ? d.weight_lb : null;
+      const woz = typeof d.weight_oz === 'number' ? d.weight_oz : null;
+      const wLabel = formatCatchWeightLabel(wlb, woz);
       const parts: string[] = [];
       if (species) parts.push(species);
       if (sizeInches != null) parts.push(`${sizeInches}"`);
+      if (wLabel) parts.push(wLabel);
       const qtyRaw = d.quantity;
       const qty = typeof qtyRaw === 'number' && qtyRaw > 1 ? qtyRaw : 1;
       return parts.length

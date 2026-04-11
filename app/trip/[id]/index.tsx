@@ -79,7 +79,7 @@ import {
 } from '@/src/types';
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
-import { getTripEventDescription } from '@/src/utils/journalTimeline';
+import { formatCatchWeightLabel, getTripEventDescription } from '@/src/utils/journalTimeline';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import {
   getSessionTripPhotos,
@@ -697,6 +697,11 @@ export default function TripDashboardScreen() {
     setCatchUIMode('add');
   }, [isTripPaused]);
 
+  const handleCatchSkipAdd = useCallback(() => {
+    if (!activeTrip || isTripPaused) return;
+    addCatch({ quantity: 1, released: null }, null, null);
+  }, [activeTrip, isTripPaused, addCatch]);
+
   const handleEditCatch = useCallback((ev: TripEvent) => {
     if (isTripPaused) return;
     const fresh = useTripStore
@@ -1267,6 +1272,7 @@ export default function TripDashboardScreen() {
             getPresentationForFly={getPresentationForFly}
             onSubmitAdd={handleCatchSubmitAdd}
             onSubmitEdit={handleCatchSubmitEdit}
+            onSkipAdd={handleCatchSkipAdd}
           />
         </>
       )}
@@ -1479,10 +1485,12 @@ function FishingTab({
         data: {
           species: null,
           size_inches: null,
+          weight_lb: null,
+          weight_oz: null,
           note: null,
           photo_url: null,
           active_fly_event_id: activeFly,
-          caught_on_fly: 'primary',
+          caught_on_fly: null,
           quantity: 1,
           depth_ft: null,
           presentation_method: null,
@@ -1709,10 +1717,17 @@ function FishingTab({
       ) : (
         <>
           <ScrollView style={[styles.timeline, { zIndex: 0 }]} keyboardShouldPersistTaps="handled">
-            <Text style={styles.timelineTitle}>Timeline</Text>
-            <Text style={styles.timelineEditHint}>
-              Tap ⋮ on a row to edit, add notes, fish, or fly changes above/below, or delete.
-            </Text>
+            <View style={styles.timelineTitleRow}>
+              <Text style={styles.timelineTitle}>Timeline</Text>
+              <Pressable
+                onPress={() => Alert.alert('Timeline', TIMELINE_ROW_HELP)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="How to edit the timeline"
+              >
+                <MaterialIcons name="info-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
+            </View>
             {[...sortedEvents].reverse().map((event: TripEvent, revIdx: number) => {
               const index = sortedEvents.length - 1 - revIdx;
               const lifecycleIcon =
@@ -2310,6 +2325,8 @@ function formatLabel(value: string): string {
 function CatchDetailsBlock({ data, styles }: { data: CatchData; styles: any }) {
   const lines: string[] = [];
   if (data.note?.trim()) lines.push(data.note.trim());
+  const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
+  if (w) lines.push(`Weight: ${w}`);
   if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
   if (data.structure) lines.push(`Structure: ${formatLabel(data.structure)}`);
   if (data.presentation_method) lines.push(`Presentation: ${formatLabel(data.presentation_method)}`);
@@ -2323,6 +2340,9 @@ function CatchDetailsBlock({ data, styles }: { data: CatchData; styles: any }) {
     </View>
   );
 }
+
+const TIMELINE_ROW_HELP =
+  'Tap ⋮ on a row to edit, add notes, fish, or fly changes above/below, or delete.';
 
 type TripTimelineRowAction = { label: string; destructive?: boolean; onPress: () => void };
 
@@ -3238,19 +3258,19 @@ function createTripDashboardStyles(colors: ThemeColors) {
     flex: 1,
     paddingHorizontal: Spacing.lg,
   },
+  timelineTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.md,
+  },
   timelineTitle: {
     fontSize: FontSize.xs,
     fontWeight: '600',
     color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: Spacing.xs,
-    marginTop: Spacing.md,
-  },
-  timelineEditHint: {
-    fontSize: FontSize.sm,
-    color: colors.textTertiary,
-    marginBottom: Spacing.md,
   },
   timelineRowMenuBtn: {
     padding: Spacing.xs,

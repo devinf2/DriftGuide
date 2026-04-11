@@ -15,6 +15,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
+import { useTripStore } from '@/src/stores/tripStore';
 import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
 import {
@@ -172,17 +173,26 @@ export default function SpotFishingTripScreen() {
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createSpotStyles(colors), [colors]);
 
-  const { id, planTripPicker, fromPlanTrip } = useLocalSearchParams<{
+  const { id, planTripPicker, fromPlanTrip, fromMap } = useLocalSearchParams<{
     id: string;
     planTripPicker?: string;
     /** Set when opening spot from Plan a Trip (suggestions or search) so Select returns to that screen with the water chosen. */
     fromPlanTrip?: string;
+    /** Set when opening from Map tab or pick-location map — Plan a Trip + Fish Now footer. */
+    fromMap?: string;
   }>();
+  const paramTruthy = (v: string | string[] | undefined) => {
+    const s = Array.isArray(v) ? v[0] : v;
+    return s === '1' || s === 'true';
+  };
+  const openedFromMap = paramTruthy(fromMap);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
-  const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId } = useLocationStore();
+  const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId, addRecentLocation } =
+    useLocationStore();
+  const startTrip = useTripStore((s) => s.startTrip);
   const [creatorMenu, setCreatorMenu] = useState<LocationCreatorManageState | null>(null);
   const [manageMenuOpen, setManageMenuOpen] = useState(false);
   const userProxRef = useRef<[number, number] | null>(null);
@@ -226,6 +236,7 @@ export default function SpotFishingTripScreen() {
   const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [spotRawNetOn, setSpotRawNetOn] = useState(true);
+  const [fishNowStarting, setFishNowStarting] = useState(false);
   const simulateOffline = useSimulateOfflineStore((s) => s.simulateOffline);
   const spotNetOn = useMemo(
     () => effectiveIsAppOnline(spotRawNetOn),
@@ -623,6 +634,32 @@ export default function SpotFishingTripScreen() {
       params: { locationId: id },
     });
   };
+
+  const handleFishNowHere = useCallback(async () => {
+    if (!user) {
+      Alert.alert('Sign in required', 'Sign in to start a trip.');
+      return;
+    }
+    if (!location || !id) return;
+    const { activeTrip: existing, isTripPaused } = useTripStore.getState();
+    if (existing?.status === 'active') {
+      Alert.alert(
+        'Trip in progress',
+        isTripPaused
+          ? 'Resume or end your paused trip before starting a new one.'
+          : 'End or pause your current trip before starting a new one.',
+      );
+      return;
+    }
+    setFishNowStarting(true);
+    try {
+      addRecentLocation(id);
+      const tripId = await startTrip(user.id, id, 'fly', location, 'wade');
+      router.replace(`/trip/${tripId}`);
+    } finally {
+      setFishNowStarting(false);
+    }
+  }, [user, location, id, addRecentLocation, startTrip, router]);
 
   const handleMoreInfo = () => {
     if (!location || !conditions) return;
@@ -1155,9 +1192,32 @@ export default function SpotFishingTripScreen() {
       )}
 
       <View style={styles.pinnedFooter}>
-        <Pressable style={styles.selectButton} onPress={handlePlanTripHere}>
-          <Text style={styles.selectButtonText}>Select for trip</Text>
-        </Pressable>
+        {openedFromMap ? (
+          <View style={styles.footerActionsRow}>
+            <Pressable style={({ pressed }) => [styles.planTripFooterButton, pressed && styles.footerButtonPressed]} onPress={handlePlanTripHere}>
+              <Text style={styles.selectButtonText}>Plan a Trip</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.fishNowFooterButton,
+                (fishNowStarting || !location) && styles.footerButtonDisabled,
+                pressed && !fishNowStarting && styles.footerButtonPressed,
+              ]}
+              onPress={handleFishNowHere}
+              disabled={fishNowStarting || !location}
+            >
+              {fishNowStarting ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.fishNowFooterButtonText}>Fish Now</Text>
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable style={styles.selectButton} onPress={handlePlanTripHere}>
+            <Text style={styles.selectButtonText}>Select for trip</Text>
+          </Pressable>
+        )}
       </View>
 
       <Modal
@@ -1242,6 +1302,41 @@ function createSpotStyles(colors: ThemeColors) {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
+  },
+  footerActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: Spacing.sm,
+  },
+  planTripFooterButton: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fishNowFooterButton: {
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 112,
+  },
+  fishNowFooterButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  footerButtonPressed: {
+    opacity: 0.88,
+  },
+  footerButtonDisabled: {
+    opacity: 0.5,
   },
   selectButton: {
     backgroundColor: colors.primary,

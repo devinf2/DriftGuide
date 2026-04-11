@@ -26,6 +26,7 @@ import {
   fetchSessionInviteById,
 } from '@/src/services/sharedSessionService';
 import { buildCompletedTripForImport, batchFinalizeImport } from '@/src/utils/importPastTrips/finalizeImport';
+import { formatCatchWeightLabel } from '@/src/utils/journalTimeline';
 import { format, isValid, parseISO } from 'date-fns';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -145,6 +146,7 @@ function step3FishOrdinalForRow(group: ImportTripGroup, row: Step3Row): number |
 function step3CatchDetailStrings(data: CatchData, events: TripEvent[]): {
   species: string;
   size: string;
+  weight: string;
   fly: string;
 } {
   const { fly_pattern, fly_size, fly_color } = getFlyForCatch(data, events);
@@ -159,7 +161,9 @@ function step3CatchDetailStrings(data: CatchData, events: TripEvent[]): {
     data.size_inches != null && Number.isFinite(Number(data.size_inches))
       ? `${data.size_inches}"`
       : '—';
-  return { species, size, fly };
+  const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
+  const weight = w ?? '—';
+  return { species, size, weight, fly };
 }
 
 function createStyles(colors: ThemeColors) {
@@ -434,6 +438,7 @@ function Step3CatchDetailsSummary({
 }) {
   let species = '—';
   let size = '—';
+  let weight = '—';
   let fly = '—';
   let time = '—';
   if (catchEvent && catchEvent.event_type === 'catch') {
@@ -441,6 +446,7 @@ function Step3CatchDetailsSummary({
     const s = step3CatchDetailStrings(d, events);
     species = s.species;
     size = s.size;
+    weight = s.weight;
     fly = s.fly;
     try {
       const t = parseISO(catchEvent.timestamp);
@@ -467,6 +473,12 @@ function Step3CatchDetailsSummary({
         <Text style={styles.step3CatchDetailLabel}>Size</Text>
         <Text style={styles.step3CatchDetailValue} numberOfLines={2}>
           {size}
+        </Text>
+      </View>
+      <View style={styles.step3CatchDetailRow}>
+        <Text style={styles.step3CatchDetailLabel}>Weight</Text>
+        <Text style={styles.step3CatchDetailValue} numberOfLines={2}>
+          {weight}
         </Text>
       </View>
       <View style={styles.step3CatchDetailRow}>

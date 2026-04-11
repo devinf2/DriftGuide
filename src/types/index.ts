@@ -225,14 +225,17 @@ export interface FlyChangeData {
 export interface CatchData {
   species: string | null;
   size_inches: number | null;
+  /** Whole pounds; use with weight_oz 0–15. */
+  weight_lb?: number | null;
+  weight_oz?: number | null;
   note: string | null;
   /** Hero / map pin; kept in sync as first entry of photo_urls when set. */
   photo_url: string | null;
   /** Ordered gallery (remote https or local file URIs before upload). */
   photo_urls?: string[] | null;
   active_fly_event_id: string | null;
-  /** Which fly on the rig caught the fish when using two flies */
-  caught_on_fly?: 'primary' | 'dropper';
+  /** Which fly on the rig caught the fish when using two flies; null if not chosen yet */
+  caught_on_fly?: 'primary' | 'dropper' | null;
   quantity?: number | null;
   depth_ft?: number | null;
   presentation_method?: PresentationMethod | null;
@@ -301,6 +304,8 @@ export interface CatchRow {
   timestamp: string;
   species: string | null;
   size_inches: number | null;
+  weight_lb?: number | null;
+  weight_oz?: number | null;
   quantity: number;
   released: boolean | null;
   depth_ft: number | null;
@@ -329,6 +334,8 @@ export interface CommunityCatchRow {
   timestamp: string;
   species: string | null;
   size_inches: number | null;
+  weight_lb?: number | null;
+  weight_oz?: number | null;
   quantity: number;
   released: boolean | null;
   depth_ft: number | null;

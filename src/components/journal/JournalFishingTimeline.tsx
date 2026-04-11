@@ -37,6 +37,7 @@ import {
 import {
   coerceTripEventDataObject,
   findActiveFlyEventIdBefore,
+  formatCatchWeightLabel,
   getTripEventDescription,
   sortEventsByTime,
   timestampBetween,
@@ -68,6 +69,8 @@ function CatchDetailsBlock({
 }) {
   const lines: string[] = [];
   if (data.note?.trim()) lines.push(data.note.trim());
+  const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
+  if (w) lines.push(`Weight: ${w}`);
   if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
   if (data.structure) lines.push(`Structure: ${formatCatchLabel(data.structure)}`);
   if (data.presentation_method) lines.push(`Presentation: ${formatCatchLabel(data.presentation_method)}`);
@@ -343,10 +346,12 @@ export function JournalFishingTimeline({
         data: {
           species: null,
           size_inches: null,
+          weight_lb: null,
+          weight_oz: null,
           note: null,
           photo_url: null,
           active_fly_event_id: activeFly,
-          caught_on_fly: 'primary',
+          caught_on_fly: null,
           quantity: 1,
           depth_ft: null,
           presentation_method: null,

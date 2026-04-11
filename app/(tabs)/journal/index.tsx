@@ -16,6 +16,7 @@ import {
 import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
 import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
+import { formatCatchWeightLabel } from '@/src/utils/journalTimeline';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format, isAfter, startOfMonth, startOfWeek, startOfYear } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
@@ -827,7 +828,8 @@ export default function JournalScreen() {
                             {[selectedFishCatch.fly_pattern, selectedFishCatch.fly_size ? `#${selectedFishCatch.fly_size}` : null, selectedFishCatch.fly_color].filter(Boolean).join(' ')}
                           </Text>
                         ) : null}
-                        {(selectedFishCatch.size_inches != null || (selectedFishCatch.quantity != null && selectedFishCatch.quantity > 1)) ? (
+                        {(selectedFishCatch.size_inches != null ||
+                          (selectedFishCatch.quantity != null && selectedFishCatch.quantity > 1)) ? (
                           <Text style={styles.fishCatchHeroRow}>
                             <MaterialCommunityIcons name="ruler" size={14} color="rgba(255,255,255,0.92)" />{' '}
                             {[
@@ -836,6 +838,12 @@ export default function JournalScreen() {
                                 ? `×${selectedFishCatch.quantity}`
                                 : null,
                             ].filter(Boolean).join(' · ')}
+                          </Text>
+                        ) : null}
+                        {formatCatchWeightLabel(selectedFishCatch.weight_lb, selectedFishCatch.weight_oz) ? (
+                          <Text style={styles.fishCatchHeroRow}>
+                            <MaterialCommunityIcons name="scale-balance" size={14} color="rgba(255,255,255,0.92)" />{' '}
+                            {formatCatchWeightLabel(selectedFishCatch.weight_lb, selectedFishCatch.weight_oz)}
                           </Text>
                         ) : null}
                         {selectedFishCatch.note ? (

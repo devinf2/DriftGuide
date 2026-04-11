@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -49,6 +50,33 @@ const MAX_CATCH_PHOTOS = 8;
 
 /** Sentinel for size/color fly dropdowns: set field to null */
 const CLEAR_FLY_FIELD = '__clear__';
+
+const PRESENTATION_OPTIONS: { value: PresentationMethod; label: string }[] = [
+  { value: 'dry', label: 'Dry' },
+  { value: 'nymph', label: 'Nymph' },
+  { value: 'streamer', label: 'Streamer' },
+  { value: 'wet', label: 'Wet' },
+  { value: 'other', label: 'Other' },
+];
+
+function presentationMethodLabel(m: PresentationMethod | null | undefined): string {
+  if (!m) return '';
+  return PRESENTATION_OPTIONS.find((o) => o.value === m)?.label ?? m;
+}
+
+const STRUCTURE_OPTIONS: { value: Structure; label: string }[] = [
+  { value: 'pool', label: 'Pool' },
+  { value: 'riffle', label: 'Riffle' },
+  { value: 'run', label: 'Run' },
+  { value: 'undercut_bank', label: 'Undercut' },
+  { value: 'eddy', label: 'Eddy' },
+  { value: 'other', label: 'Other' },
+];
+
+function structureMethodLabel(s: Structure | null | undefined): string {
+  if (!s) return '';
+  return STRUCTURE_OPTIONS.find((o) => o.value === s)?.label ?? s;
+}
 
 function isRemoteStorageUrl(uri: string): boolean {
   const t = uri.trim();
@@ -107,6 +135,23 @@ function resolveCatchFormCoords(
     return { lat: la, lon: lo };
   }
   return { lat: pinLat, lon: pinLon };
+}
+
+/** Parse lb/oz inputs; normalizes oz ≥ 16 into lb; returns null when both empty or zero after normalize. */
+function parseWeightLbOz(lbText: string, ozText: string): { weight_lb: number; weight_oz: number } | null {
+  const lt = lbText.trim();
+  const ot = ozText.trim();
+  if (lt === '' && ot === '') return null;
+  const parseNonNeg = (s: string) => {
+    const n = Number.parseInt(s, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  let lb = lt === '' ? 0 : parseNonNeg(lt);
+  let oz = ot === '' ? 0 : parseNonNeg(ot);
+  lb += Math.floor(oz / 16);
+  oz = oz % 16;
+  if (lb === 0 && oz === 0) return null;
+  return { weight_lb: lb, weight_oz: oz };
 }
 
 function flyDataMatches(a: FlyChangeData, b: FlyChangeData): boolean {
@@ -204,6 +249,11 @@ export type CatchDetailsModalProps = {
   getPresentationForFly?: (name: string, size: number | null, color: string | null) => PresentationMethod | null;
   onSubmitAdd?: (payload: CatchDetailsSubmitAdd) => Promise<void>;
   onSubmitEdit?: (nextEvents: TripEvent[]) => Promise<void>;
+  /**
+   * Add mode only: quick log from Skip — no form defaults (e.g. released stays unset).
+   * Omit to make Skip behave like dismiss (close only).
+   */
+  onSkipAdd?: () => void;
   onPickPhoto?: (source: 'camera' | 'library') => void;
   /** When true, edit submit skips Supabase photo/sync calls (e.g. import-past wizard). */
   deferCloudWrites?: boolean;
@@ -260,7 +310,8 @@ function createCatchDetailsStyles(colors: ThemeColors) {
     catchModalScroll: { flex: 1 },
     catchModalScrollContent: {
       padding: Spacing.lg,
-      paddingBottom: Spacing.xl,
+      /** Matches inter-section gap so content doesn’t float far above the action bar */
+      paddingBottom: Spacing.md,
     },
     catchModalTitle: {
       flex: 1,
@@ -300,13 +351,56 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       fontWeight: '600',
       color: colors.primary,
     },
-    coordRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
+    coordRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm },
     coordInput: { flex: 1 },
+    sizeWeightRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      alignItems: 'flex-start',
+      marginBottom: Spacing.sm,
+    },
+    /** Presentation + water structure dropdowns on one row */
+    presentationStructureRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      alignItems: 'flex-start',
+      marginBottom: Spacing.sm,
+    },
+    presentationStructureCol: { flex: 1, minWidth: 0 },
+    catchFlyDropdownInPair: { marginBottom: 0 },
+    /** Weight column is content-sized so lb/oz never wrap; size uses remaining width. */
+    sizeWeightSizeCol: { flex: 1, minWidth: 0 },
+    sizeWeightWeightCol: { flexShrink: 0 },
+    weightInlineRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      flexWrap: 'nowrap' as const,
+    },
+    weightNumInput: {
+      width: 40,
+      textAlign: 'center' as const,
+      paddingHorizontal: 4,
+      marginBottom: 0,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      paddingVertical: Spacing.sm,
+      fontSize: FontSize.md,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    weightSuffix: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    catchModalInputNoBottomMargin: { marginBottom: 0 },
     exifHint: {
       fontSize: FontSize.xs,
       color: colors.textTertiary,
-      marginTop: Spacing.sm,
-      marginBottom: Spacing.xs,
+      marginTop: 0,
+      marginBottom: Spacing.sm,
       lineHeight: 18,
     },
     flyFieldLabel: {
@@ -372,7 +466,7 @@ function createCatchDetailsStyles(colors: ThemeColors) {
     catchFlyDropdownRowWrap: {
       flexDirection: 'row',
       gap: Spacing.xs,
-      marginBottom: Spacing.xs,
+      marginBottom: Spacing.sm,
     },
     catchFlyDropdownCell: {
       flex: 1,
@@ -404,6 +498,16 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       flex: 1,
     },
     catchFlyDropdownPlaceholder: { color: colors.textTertiary },
+    searchInput: {
+      margin: Spacing.sm,
+      padding: Spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.md,
+      fontSize: FontSize.md,
+      color: colors.text,
+      backgroundColor: colors.background,
+    },
     /** In-modal overlay (nested <Modal> breaks fly/species lists on iOS) */
     pickerOverlayHost: {
       position: 'absolute',
@@ -416,6 +520,57 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       justifyContent: 'center',
       paddingHorizontal: Spacing.sm,
     },
+    /** Species / presentation / structure: full-area dim; sheet is positioned under the field */
+    pickerOverlayHostAnchored: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      zIndex: 50,
+      elevation: 50,
+    },
+    anchoredPickerSheet: {
+      position: 'absolute',
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: 'hidden',
+      ...(Platform.OS === 'ios'
+        ? {
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.18,
+            shadowRadius: 8,
+          }
+        : { elevation: 12 }),
+    },
+    /** Fills fixed-height sheet so ScrollView gets a bounded viewport and scrolls. */
+    anchoredPickerScrollFill: { flex: 1, minHeight: 0 },
+    anchoredPickerScrollContent: { flexGrow: 0 },
+    anchoredSearchInput: {
+      marginHorizontal: Spacing.sm,
+      marginTop: Spacing.sm,
+      marginBottom: Spacing.xs,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.sm,
+      fontSize: FontSize.sm,
+      color: colors.text,
+      backgroundColor: colors.background,
+    },
+    anchoredPickerOption: {
+      paddingVertical: 6,
+      paddingHorizontal: Spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    anchoredPickerOptionActive: { backgroundColor: colors.background },
+    anchoredPickerOptionText: { fontSize: FontSize.sm, color: colors.text },
+    anchoredPickerOptionTextActive: { color: colors.primary, fontWeight: '600' },
     /** Fly pattern sheet (embedded — avoids a second root Modal eating touches on web / stacked modals) */
     catchPatternPickerOverlay: {
       position: 'absolute',
@@ -437,16 +592,6 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       maxHeight: '58%',
       marginHorizontal: Spacing.xs,
     },
-    searchInput: {
-      margin: Spacing.sm,
-      padding: Spacing.md,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: BorderRadius.md,
-      fontSize: FontSize.md,
-      color: colors.text,
-      backgroundColor: colors.background,
-    },
     catchFlyPickerList: { maxHeight: 320 },
     catchFlyPickerOption: {
       paddingVertical: Spacing.md,
@@ -462,7 +607,7 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: Spacing.sm,
-      marginBottom: Spacing.xs,
+      marginBottom: Spacing.sm,
     },
     catchFlyRigRadioPressable: {
       justifyContent: 'center',
@@ -470,7 +615,7 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       paddingVertical: 2,
       marginRight: -Spacing.xs,
     },
-    flyFieldLabelInline: { marginBottom: 0, flex: 1 },
+    flyFieldLabelInline: { marginBottom: 0, flex: 1, minWidth: 0 },
     addSecondaryFlyButton: {
       paddingVertical: Spacing.sm,
       paddingHorizontal: Spacing.md,
@@ -482,6 +627,22 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       alignSelf: 'flex-start',
     },
     addSecondaryFlyButtonText: { fontSize: FontSize.sm, color: colors.primary },
+    /** Inline next to “Secondary fly” header */
+    removeSecondaryFlyButton: {
+      paddingVertical: 4,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      borderStyle: 'dashed',
+      flexShrink: 0,
+      marginBottom: 0,
+    },
+    removeSecondaryFlyButtonText: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.primary,
+    },
     catchModalInput: {
       backgroundColor: colors.background,
       borderRadius: BorderRadius.md,
@@ -510,7 +671,7 @@ function createCatchDetailsStyles(colors: ThemeColors) {
     catchPhotoActionsRow: {
       flexDirection: 'row',
       gap: Spacing.md,
-      marginBottom: Spacing.md,
+      marginBottom: Spacing.sm,
       alignItems: 'center',
     },
     catchPhotoScroll: {
@@ -552,6 +713,17 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.sm },
+    /** Released chips + catch depth on one row */
+    releasedDepthRow: {
+      flexDirection: 'row',
+      gap: Spacing.md,
+      alignItems: 'flex-start',
+      marginBottom: Spacing.sm,
+    },
+    releasedDepthLeft: { flex: 1, minWidth: 0 },
+    releasedDepthRight: { minWidth: 108, maxWidth: 140, flexShrink: 0, alignSelf: 'stretch' },
+    releasedDepthChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+    catchDepthInput: { marginBottom: 0 },
     chip: {
       paddingHorizontal: Spacing.md,
       paddingVertical: Spacing.sm,
@@ -610,6 +782,7 @@ export function CatchDetailsModal({
   getPresentationForFly,
   onSubmitAdd,
   onSubmitEdit,
+  onSkipAdd,
   onPickPhoto: onPickPhotoProp,
   deferCloudWrites = false,
   initialAddPhotoUris,
@@ -627,6 +800,8 @@ export function CatchDetailsModal({
   /** True after user picks "Other" or when editing a custom species not in the preset list. */
   const [catchSpeciesOther, setCatchSpeciesOther] = useState(false);
   const [catchSize, setCatchSize] = useState('');
+  const [catchWeightLb, setCatchWeightLb] = useState('');
+  const [catchWeightOz, setCatchWeightOz] = useState('');
   const [catchNote, setCatchNote] = useState('');
   const [catchDepth, setCatchDepth] = useState('');
   const [catchPhotoUris, setCatchPhotoUris] = useState<string[]>([]);
@@ -634,7 +809,7 @@ export function CatchDetailsModal({
   const initialEditRemoteUrlsRef = useRef<string[]>([]);
   /** Set when user picks a photo that includes EXIF (library or camera). */
   const [photoExifMeta, setPhotoExifMeta] = useState<PhotoExifMetadata | null>(null);
-  const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper'>('primary');
+  const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper' | null>(null);
   const [catchPresentation, setCatchPresentation] = useState<PresentationMethod | null>(null);
   const [catchReleased, setCatchReleased] = useState<boolean | null>(true);
   const [catchStructure, setCatchStructure] = useState<Structure | null>(null);
@@ -654,6 +829,8 @@ export function CatchDetailsModal({
   const [dropperCatalogFlyId, setDropperCatalogFlyId] = useState<string | null>(null);
   const [dropperPatternManual, setDropperPatternManual] = useState(false);
   const [catchSpeciesDropdownOpen, setCatchSpeciesDropdownOpen] = useState(false);
+  const [catchPresentationDropdownOpen, setCatchPresentationDropdownOpen] = useState(false);
+  const [catchStructureDropdownOpen, setCatchStructureDropdownOpen] = useState(false);
   const [catchSpeciesSearch, setCatchSpeciesSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [coordRecenterTick, setCoordRecenterTick] = useState(0);
@@ -664,6 +841,18 @@ export function CatchDetailsModal({
   const [importCatchAt, setImportCatchAt] = useState(() => new Date());
   const [showImportDatePicker, setShowImportDatePicker] = useState(false);
   const [showImportTimePicker, setShowImportTimePicker] = useState(false);
+
+  const catchModalContentRef = useRef<View>(null);
+  const speciesFieldRef = useRef<View>(null);
+  const presentationFieldRef = useRef<View>(null);
+  const structureFieldRef = useRef<View>(null);
+  /** Position for species / presentation / structure sheets (relative to catch modal box). */
+  const [anchoredDropdownLayout, setAnchoredDropdownLayout] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxScroll: number;
+  } | null>(null);
 
   /** Log past trips: all catches on an imported draft (add + edit), not live sessions. */
   const showImportCatchTime =
@@ -695,6 +884,63 @@ export function CatchDetailsModal({
     const filtered = SPECIES_OPTIONS.filter((s) => s.toLowerCase().includes(q));
     return filtered.includes('Other') ? filtered : [...filtered, 'Other'];
   }, [catchSpeciesSearch]);
+
+  const measureOpenBelowField = useCallback((fieldRef: RefObject<View | null>, thenOpen: () => void) => {
+    const modal = catchModalContentRef.current;
+    const field = fieldRef.current;
+    if (!modal || !field) {
+      setAnchoredDropdownLayout(null);
+      thenOpen();
+      return;
+    }
+    modal.measureInWindow((mx, my, mw, mh) => {
+      field.measureInWindow((fx, fy, fw, fh) => {
+        const pad = Spacing.sm;
+        let left = fx - mx;
+        let width = Math.max(fw, 200);
+        const innerW = mw - pad * 2;
+        width = Math.min(width, innerW);
+        if (left + width > mw - pad) left = Math.max(pad, mw - pad - width);
+        if (left < pad) left = pad;
+        const top = fy - my + fh + 2;
+        const footerReserve = 56;
+        const available = mh - top - pad - footerReserve;
+        const maxScroll = Math.max(180, Math.min(360, available));
+        setAnchoredDropdownLayout({ top, left, width, maxScroll });
+        thenOpen();
+      });
+    });
+  }, []);
+
+  const openSpeciesDropdown = useCallback(() => {
+    Keyboard.dismiss();
+    setCatchFlyDropdownOpen(null);
+    setCatchPresentationDropdownOpen(false);
+    setCatchStructureDropdownOpen(false);
+    requestAnimationFrame(() => {
+      measureOpenBelowField(speciesFieldRef, () => setCatchSpeciesDropdownOpen(true));
+    });
+  }, [measureOpenBelowField]);
+
+  const openPresentationDropdown = useCallback(() => {
+    Keyboard.dismiss();
+    setCatchFlyDropdownOpen(null);
+    setCatchSpeciesDropdownOpen(false);
+    setCatchStructureDropdownOpen(false);
+    requestAnimationFrame(() => {
+      measureOpenBelowField(presentationFieldRef, () => setCatchPresentationDropdownOpen(true));
+    });
+  }, [measureOpenBelowField]);
+
+  const openStructureDropdown = useCallback(() => {
+    Keyboard.dismiss();
+    setCatchFlyDropdownOpen(null);
+    setCatchSpeciesDropdownOpen(false);
+    setCatchPresentationDropdownOpen(false);
+    requestAnimationFrame(() => {
+      measureOpenBelowField(structureFieldRef, () => setCatchStructureDropdownOpen(true));
+    });
+  }, [measureOpenBelowField]);
 
   /** Prefer the live row from `allEvents` so lat/lon match the store after sync (menu can hold a stale ref). */
   const editTargetCatch = useMemo(() => {
@@ -742,25 +988,23 @@ export function CatchDetailsModal({
     setCatchSpecies('');
     setCatchSpeciesOther(false);
     setCatchSize('');
+    setCatchWeightLb('');
+    setCatchWeightOz('');
     setCatchNote('');
     setCatchDepth('');
     setCatchPhotoUris([]);
     initialEditRemoteUrlsRef.current = [];
     setPhotoExifMeta(null);
-    setCatchCaughtOnFly('primary');
+    setCatchCaughtOnFly(null);
     setCatchReleased(true);
     setCatchStructure(null);
     setPinLat(null);
     setPinLon(null);
     setLatText('');
     setLonText('');
-    if (p?.pattern && getPresentationForFly) {
-      setCatchPresentation(getPresentationForFly(p.pattern, p.size ?? null, p.color ?? null));
-    } else {
-      setCatchPresentation(null);
-    }
+    setCatchPresentation(null);
     setFlyPatternPickerOpen(false);
-  }, [seedPrimary, seedDropper, getPresentationForFly]);
+  }, [seedPrimary, seedDropper]);
 
   const loadFormForEdit = useCallback(
     (ev: TripEvent) => {
@@ -815,13 +1059,28 @@ export function CatchDetailsModal({
       const presetSpecies = SPECIES_OPTIONS.slice(0, -1);
       setCatchSpeciesOther(Boolean(speciesStr.trim() && !presetSpecies.includes(speciesStr)));
       setCatchSize(data.size_inches != null ? String(data.size_inches) : '');
+      setCatchWeightLb(data.weight_lb != null ? String(data.weight_lb) : '');
+      setCatchWeightOz(data.weight_oz != null ? String(data.weight_oz) : '');
       setCatchNote(data.note ?? '');
       setCatchDepth(data.depth_ft != null ? String(data.depth_ft) : '');
       setCatchPhotoUris(normalizeCatchPhotoUrls(data));
       initialEditRemoteUrlsRef.current = normalizeCatchPhotoUrls(data).filter(isRemoteStorageUrl);
       setPhotoExifMeta(null);
-      setCatchCaughtOnFly(data.caught_on_fly ?? 'primary');
-      setCatchPresentation(data.presentation_method ?? null);
+      setCatchCaughtOnFly(
+        data.caught_on_fly === 'dropper' ? 'dropper' : data.caught_on_fly === 'primary' ? 'primary' : null,
+      );
+      const primaryPatternTrim = (fd?.pattern ?? '').trim();
+      if (!primaryPatternTrim) {
+        setCatchPresentation(null);
+      } else if (ps.manual) {
+        setCatchPresentation(data.presentation_method ?? null);
+      } else if (getPresentationForFly) {
+        setCatchPresentation(
+          getPresentationForFly(primaryPatternTrim, fd?.size ?? null, fd?.color ?? null),
+        );
+      } else {
+        setCatchPresentation(data.presentation_method ?? null);
+      }
       setCatchReleased(data.released ?? null);
       setCatchStructure(data.structure ?? null);
       const laRaw = ev.latitude;
@@ -845,7 +1104,7 @@ export function CatchDetailsModal({
         setImportCatchAt(Number.isNaN(ts) ? new Date() : new Date(ts));
       }
     },
-    [allEvents, userFlies, resolvedFlyCatalog, trip.imported],
+    [allEvents, userFlies, resolvedFlyCatalog, trip.imported, getPresentationForFly],
   );
 
   /** Edit: load before paint so lat/lon fields and map show the catch immediately (avoids empty fields until interaction). */
@@ -869,6 +1128,10 @@ export function CatchDetailsModal({
     if (!visible) {
       setShowImportDatePicker(false);
       setShowImportTimePicker(false);
+      setCatchSpeciesDropdownOpen(false);
+      setCatchPresentationDropdownOpen(false);
+      setCatchStructureDropdownOpen(false);
+      setAnchoredDropdownLayout(null);
     }
   }, [visible]);
 
@@ -971,10 +1234,11 @@ export function CatchDetailsModal({
     };
   }, [visible, mode, resetFormForAdd, initialAddPhotoUris, importPhotoMetaSeed, trip]);
 
+  /** Catalog/box primary fly → presentation from fly; manual “Other” pattern → no auto-fill (user picks or saved value). */
   useEffect(() => {
-    if (!visible || mode !== 'add' || !catchFlyName?.trim() || !getPresentationForFly) return;
-    setCatchPresentation(getPresentationForFly(catchFlyName, catchFlySize, catchFlyColor));
-  }, [visible, mode, catchFlyName, catchFlySize, catchFlyColor, getPresentationForFly]);
+    if (!visible || !catchFlyName.trim() || !getPresentationForFly || primaryPatternManual) return;
+    setCatchPresentation(getPresentationForFly(catchFlyName.trim(), catchFlySize, catchFlyColor));
+  }, [visible, catchFlyName, catchFlySize, catchFlyColor, getPresentationForFly, primaryPatternManual]);
 
   const syncPinFromText = useCallback(() => {
     const la = latText.trim() ? Number(latText.trim()) : NaN;
@@ -1075,6 +1339,9 @@ export function CatchDetailsModal({
     Keyboard.dismiss();
     setCatchFlyDropdownOpen(null);
     setCatchSpeciesDropdownOpen(false);
+    setCatchPresentationDropdownOpen(false);
+    setCatchStructureDropdownOpen(false);
+    setAnchoredDropdownLayout(null);
     setFlyPatternPickerFor(which);
     setFlyPatternPickerOpen(true);
   }, []);
@@ -1278,6 +1545,7 @@ export function CatchDetailsModal({
     const { primary, dropper } = resolvePrimaryDropper();
     const species = catchSpecies.trim() || null;
     const sizeNum = catchSize.trim() ? parseFloat(catchSize.trim()) : null;
+    const weightParsed = parseWeightLbOz(catchWeightLb, catchWeightOz);
     const depthNum = catchDepth.trim() ? parseFloat(catchDepth.trim()) : null;
     const { lat, lon } = resolveCatchFormCoords(latText, lonText, pinLat, pinLon);
     if (lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)) {
@@ -1317,8 +1585,11 @@ export function CatchDetailsModal({
           catchFields: {
             species: species ?? undefined,
             size_inches: sizeNum ?? undefined,
+            ...(weightParsed
+              ? { weight_lb: weightParsed.weight_lb, weight_oz: weightParsed.weight_oz }
+              : {}),
             note: catchNote.trim() || undefined,
-            caught_on_fly: catchCaughtOnFly,
+            ...(catchCaughtOnFly != null ? { caught_on_fly: catchCaughtOnFly } : {}),
             quantity: 1,
             depth_ft: depthNum ?? undefined,
             presentation_method: catchPresentation ?? undefined,
@@ -1410,6 +1681,8 @@ export function CatchDetailsModal({
         const catchData: CatchData = {
           species,
           size_inches: sizeNum != null && Number.isFinite(sizeNum) ? sizeNum : null,
+          weight_lb: weightParsed ? weightParsed.weight_lb : null,
+          weight_oz: weightParsed ? weightParsed.weight_oz : null,
           note: catchNote.trim() || null,
           photo_url: finalUrls[0] ?? null,
           photo_urls: finalUrls.length ? finalUrls : null,
@@ -1509,29 +1782,31 @@ export function CatchDetailsModal({
           style={StyleSheet.absoluteFill}
           onPress={() => {
             Keyboard.dismiss();
+            setCatchPhotoUris([]);
+            setPhotoExifMeta(null);
             onClose();
           }}
         />
         <View style={styles.catchModalOverlay}>
-          <View style={styles.catchModal}>
+          <View ref={catchModalContentRef} style={styles.catchModal} collapsable={false}>
             <View style={styles.catchModalHeader}>
               <Text style={styles.catchModalTitle} numberOfLines={1}>
                 {title}
               </Text>
-              {mode === 'edit' ? (
-                <Pressable
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    onClose();
-                  }}
-                  hitSlop={12}
-                  style={styles.catchModalHeaderClose}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close"
-                >
-                  <MaterialIcons name="close" size={24} color={colors.text} />
-                </Pressable>
-              ) : null}
+              <Pressable
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setCatchPhotoUris([]);
+                  setPhotoExifMeta(null);
+                  onClose();
+                }}
+                hitSlop={12}
+                style={styles.catchModalHeaderClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <MaterialIcons name="close" size={24} color={colors.text} />
+              </Pressable>
             </View>
             <ScrollView
               style={styles.catchModalScroll}
@@ -1541,7 +1816,7 @@ export function CatchDetailsModal({
               nestedScrollEnabled
             >
               {showImportCatchTime ? (
-                <View style={{ marginBottom: Spacing.lg }}>
+                <View style={{ marginBottom: Spacing.sm }}>
                   <Text style={styles.flyFieldLabel}>When was this catch?</Text>
                   <Text style={[styles.coordHint, { marginBottom: Spacing.sm }]}>
                     Defaults to photo time when available, otherwise the trip start from the import flow.
@@ -1654,7 +1929,16 @@ export function CatchDetailsModal({
                     <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
                   </Pressable>
                 )}
-                <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('size')}>
+                <Pressable
+                  style={styles.catchFlyDropdownCell}
+                  onPress={() => {
+                    setCatchSpeciesDropdownOpen(false);
+                    setCatchPresentationDropdownOpen(false);
+                    setCatchStructureDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
+                    setCatchFlyDropdownOpen('size');
+                  }}
+                >
                   <Text
                     style={[
                       styles.catchFlyDropdownValue,
@@ -1666,7 +1950,16 @@ export function CatchDetailsModal({
                   </Text>
                   <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
                 </Pressable>
-                <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('color')}>
+                <Pressable
+                  style={styles.catchFlyDropdownCell}
+                  onPress={() => {
+                    setCatchSpeciesDropdownOpen(false);
+                    setCatchPresentationDropdownOpen(false);
+                    setCatchStructureDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
+                    setCatchFlyDropdownOpen('color');
+                  }}
+                >
                   <Text
                     style={[
                       styles.catchFlyDropdownValue,
@@ -1682,7 +1975,7 @@ export function CatchDetailsModal({
 
               {catchFlyName2 != null ? (
                 <>
-                  <View style={[styles.catchFlyRigHeaderRow, { marginTop: Spacing.md }]}>
+                  <View style={styles.catchFlyRigHeaderRow}>
                     <Pressable
                       style={styles.catchFlyRigRadioPressable}
                       onPress={() => setCatchCaughtOnFly('dropper')}
@@ -1697,7 +1990,30 @@ export function CatchDetailsModal({
                         color={catchCaughtOnFly === 'dropper' ? colors.primary : colors.textSecondary}
                       />
                     </Pressable>
-                    <Text style={[styles.flyFieldLabel, styles.flyFieldLabelInline]}>Secondary fly</Text>
+                    <Text
+                      style={[styles.flyFieldLabel, styles.flyFieldLabelInline]}
+                      numberOfLines={1}
+                    >
+                      Secondary fly
+                    </Text>
+                    <Pressable
+                      style={styles.removeSecondaryFlyButton}
+                      onPress={() => {
+                        setCatchFlyName2(null);
+                        setCatchFlySize2(null);
+                        setCatchFlyColor2(null);
+                        setDropperUserBoxFlyId(null);
+                        setDropperCatalogFlyId(null);
+                        setDropperPatternManual(false);
+                        setCatchCaughtOnFly(null);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove secondary fly"
+                    >
+                      <Text style={styles.removeSecondaryFlyButtonText} numberOfLines={1}>
+                        Remove secondary
+                      </Text>
+                    </Pressable>
                   </View>
                   <View style={styles.catchFlyDropdownRowWrap}>
                     {dropperPatternManual ? (
@@ -1735,7 +2051,16 @@ export function CatchDetailsModal({
                         <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
                       </Pressable>
                     )}
-                    <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('size2')}>
+                    <Pressable
+                      style={styles.catchFlyDropdownCell}
+                      onPress={() => {
+                        setCatchSpeciesDropdownOpen(false);
+                        setCatchPresentationDropdownOpen(false);
+                        setCatchStructureDropdownOpen(false);
+                        setAnchoredDropdownLayout(null);
+                        setCatchFlyDropdownOpen('size2');
+                      }}
+                    >
                       <Text
                         style={[
                           styles.catchFlyDropdownValue,
@@ -1747,7 +2072,16 @@ export function CatchDetailsModal({
                       </Text>
                       <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
                     </Pressable>
-                    <Pressable style={styles.catchFlyDropdownCell} onPress={() => setCatchFlyDropdownOpen('color2')}>
+                    <Pressable
+                      style={styles.catchFlyDropdownCell}
+                      onPress={() => {
+                        setCatchSpeciesDropdownOpen(false);
+                        setCatchPresentationDropdownOpen(false);
+                        setCatchStructureDropdownOpen(false);
+                        setAnchoredDropdownLayout(null);
+                        setCatchFlyDropdownOpen('color2');
+                      }}
+                    >
                       <Text
                         style={[
                           styles.catchFlyDropdownValue,
@@ -1760,20 +2094,6 @@ export function CatchDetailsModal({
                       <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
                     </Pressable>
                   </View>
-                  <Pressable
-                    style={[styles.addSecondaryFlyButton, { marginTop: Spacing.sm }]}
-                    onPress={() => {
-                      setCatchFlyName2(null);
-                      setCatchFlySize2(null);
-                      setCatchFlyColor2(null);
-                      setDropperUserBoxFlyId(null);
-                      setDropperCatalogFlyId(null);
-                      setDropperPatternManual(false);
-                      setCatchCaughtOnFly('primary');
-                    }}
-                  >
-                    <Text style={styles.addSecondaryFlyButtonText}>Remove secondary fly</Text>
-                  </Pressable>
                 </>
               ) : (
                 <Pressable
@@ -1837,17 +2157,54 @@ export function CatchDetailsModal({
                 </Text>
               ) : null}
 
-              <Text style={styles.flyFieldLabel}>Size (inches)</Text>
-              <TextInput
-                style={styles.catchModalInput}
-                placeholder="e.g. 14"
-                placeholderTextColor={colors.textTertiary}
-                value={catchSize}
-                onChangeText={setCatchSize}
-                keyboardType="decimal-pad"
-              />
+              <View style={styles.sizeWeightRow}>
+                <View style={styles.sizeWeightSizeCol}>
+                  <Text style={styles.flyFieldLabel}>Size (inches)</Text>
+                  <TextInput
+                    style={[styles.catchModalInput, styles.catchModalInputNoBottomMargin]}
+                    placeholder="e.g. 14"
+                    placeholderTextColor={colors.textTertiary}
+                    value={catchSize}
+                    onChangeText={setCatchSize}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <View style={styles.sizeWeightWeightCol}>
+                  <Text style={styles.flyFieldLabel}>Weight</Text>
+                  <View style={styles.weightInlineRow}>
+                    <TextInput
+                      style={styles.weightNumInput}
+                      placeholder="0"
+                      placeholderTextColor={colors.textTertiary}
+                      value={catchWeightLb}
+                      onChangeText={setCatchWeightLb}
+                      keyboardType="number-pad"
+                      maxLength={4}
+                      accessibilityLabel="Pounds"
+                    />
+                    <Text style={styles.weightSuffix}>lb</Text>
+                    <TextInput
+                      style={styles.weightNumInput}
+                      placeholder="0"
+                      placeholderTextColor={colors.textTertiary}
+                      value={catchWeightOz}
+                      onChangeText={setCatchWeightOz}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      accessibilityLabel="Ounces"
+                    />
+                    <Text style={styles.weightSuffix}>oz</Text>
+                  </View>
+                </View>
+              </View>
               <Text style={styles.flyFieldLabel}>Species</Text>
-              <Pressable style={styles.catchFlyDropdownRow} onPress={() => setCatchSpeciesDropdownOpen(true)}>
+              <Pressable
+                ref={speciesFieldRef}
+                style={styles.catchFlyDropdownRow}
+                onPress={openSpeciesDropdown}
+                accessibilityRole="combobox"
+                accessibilityState={{ expanded: catchSpeciesDropdownOpen }}
+              >
                 <Text
                   style={[
                     styles.catchFlyDropdownValue,
@@ -1870,6 +2227,86 @@ export function CatchDetailsModal({
                   onChangeText={setCatchSpecies}
                 />
               ) : null}
+              <View style={styles.presentationStructureRow}>
+                <View style={styles.presentationStructureCol}>
+                  <Text style={styles.flyFieldLabel}>Presentation</Text>
+                  <Pressable
+                    ref={presentationFieldRef}
+                    style={[styles.catchFlyDropdownRow, styles.catchFlyDropdownInPair]}
+                    onPress={openPresentationDropdown}
+                    accessibilityRole="combobox"
+                    accessibilityState={{ expanded: catchPresentationDropdownOpen }}
+                  >
+                    <Text
+                      style={[
+                        styles.catchFlyDropdownValue,
+                        catchPresentation == null && styles.catchFlyDropdownPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {catchPresentation != null
+                        ? presentationMethodLabel(catchPresentation)
+                        : 'Select presentation'}
+                    </Text>
+                    <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
+                <View style={styles.presentationStructureCol}>
+                  <Text style={styles.flyFieldLabel}>Water structure</Text>
+                  <Pressable
+                    ref={structureFieldRef}
+                    style={[styles.catchFlyDropdownRow, styles.catchFlyDropdownInPair]}
+                    onPress={openStructureDropdown}
+                    accessibilityRole="combobox"
+                    accessibilityState={{ expanded: catchStructureDropdownOpen }}
+                  >
+                    <Text
+                      style={[
+                        styles.catchFlyDropdownValue,
+                        catchStructure == null && styles.catchFlyDropdownPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {catchStructure != null
+                        ? structureMethodLabel(catchStructure)
+                        : 'Select structure'}
+                    </Text>
+                    <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
+              </View>
+              <View style={styles.releasedDepthRow}>
+                <View style={styles.releasedDepthLeft}>
+                  <Text style={styles.flyFieldLabel}>Released?</Text>
+                  <View style={styles.releasedDepthChipRow}>
+                    <Pressable
+                      style={[styles.chip, catchReleased === true && styles.chipActive]}
+                      onPress={() => setCatchReleased(true)}
+                    >
+                      <Text style={[styles.chipText, catchReleased === true && styles.chipTextActive]}>
+                        Released
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.chip, catchReleased === false && styles.chipActive]}
+                      onPress={() => setCatchReleased(false)}
+                    >
+                      <Text style={[styles.chipText, catchReleased === false && styles.chipTextActive]}>Kept</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.releasedDepthRight}>
+                  <Text style={styles.flyFieldLabel}>Catch Depth</Text>
+                  <TextInput
+                    style={[styles.catchModalInput, styles.catchDepthInput]}
+                    placeholder="e.g. 3"
+                    placeholderTextColor={colors.textTertiary}
+                    value={catchDepth}
+                    onChangeText={setCatchDepth}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
               <Text style={styles.flyFieldLabel}>Notes</Text>
               <TextInput
                 style={[styles.catchModalInput, styles.catchModalNoteInput]}
@@ -1879,62 +2316,10 @@ export function CatchDetailsModal({
                 onChangeText={setCatchNote}
                 multiline
               />
-              <Text style={styles.flyFieldLabel}>Presentation</Text>
-              <View style={styles.chipRow}>
-                {(['dry', 'nymph', 'streamer', 'wet', 'other'] as const).map((m) => (
-                  <Pressable
-                    key={m}
-                    style={[styles.chip, catchPresentation === m && styles.chipActive]}
-                    onPress={() => setCatchPresentation(m)}
-                  >
-                    <Text style={[styles.chipText, catchPresentation === m && styles.chipTextActive]}>
-                      {m.charAt(0).toUpperCase() + m.slice(1)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.flyFieldLabel}>Released?</Text>
-              <View style={styles.chipRow}>
-                <Pressable
-                  style={[styles.chip, catchReleased === true && styles.chipActive]}
-                  onPress={() => setCatchReleased(true)}
-                >
-                  <Text style={[styles.chipText, catchReleased === true && styles.chipTextActive]}>Released</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.chip, catchReleased === false && styles.chipActive]}
-                  onPress={() => setCatchReleased(false)}
-                >
-                  <Text style={[styles.chipText, catchReleased === false && styles.chipTextActive]}>Kept</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.flyFieldLabel}>Water Structure</Text>
-              <View style={styles.chipRow}>
-                {(['pool', 'riffle', 'run', 'undercut_bank', 'eddy', 'other'] as const).map((s) => (
-                  <Pressable
-                    key={s}
-                    style={[styles.chip, catchStructure === s && styles.chipActive]}
-                    onPress={() => setCatchStructure(s)}
-                  >
-                    <Text style={[styles.chipText, catchStructure === s && styles.chipTextActive]}>
-                      {s === 'undercut_bank' ? 'Undercut' : s.charAt(0).toUpperCase() + s.slice(1)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.flyFieldLabel}>Catch Depth</Text>
-              <TextInput
-                style={styles.catchModalInput}
-                placeholder="e.g. 3"
-                placeholderTextColor={colors.textTertiary}
-                value={catchDepth}
-                onChangeText={setCatchDepth}
-                keyboardType="decimal-pad"
-              />
 
               {mode === 'add' ? (
                 <>
-                  <Text style={[styles.flyFieldLabel, { marginTop: Spacing.lg }]}>Catch location</Text>
+                  <Text style={[styles.flyFieldLabel, { marginTop: Spacing.sm }]}>Catch location</Text>
                   <CatchPinPickerMap
                     latitude={pinLat}
                     longitude={pinLon}
@@ -1948,7 +2333,7 @@ export function CatchDetailsModal({
 
               {mode === 'edit' ? (
                 <>
-                  <Text style={[styles.flyFieldLabel, { marginTop: Spacing.lg }]}>Catch location</Text>
+                  <Text style={[styles.flyFieldLabel, { marginTop: Spacing.sm }]}>Catch location</Text>
                   <CatchPinPickerMap
                     latitude={mapDisplayLat}
                     longitude={mapDisplayLon}
@@ -2030,6 +2415,10 @@ export function CatchDetailsModal({
                   onPress={() => {
                     Keyboard.dismiss();
                     setCatchFlyDropdownOpen(null);
+                    setCatchSpeciesDropdownOpen(false);
+                    setCatchPresentationDropdownOpen(false);
+                    setCatchStructureDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
                   }}
                 />
                 <View style={styles.catchFlyPickerSheet}>
@@ -2075,17 +2464,32 @@ export function CatchDetailsModal({
             ) : null}
 
             {catchSpeciesDropdownOpen ? (
-              <View style={styles.pickerOverlayHost} pointerEvents="box-none">
+              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
                 <Pressable
                   style={styles.pickerBackdrop}
                   onPress={() => {
                     Keyboard.dismiss();
                     setCatchSpeciesDropdownOpen(false);
+                    setCatchPresentationDropdownOpen(false);
+                    setCatchStructureDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
                   }}
                 />
-                <View style={styles.catchFlyPickerSheet}>
+                <View
+                  style={[
+                    styles.anchoredPickerSheet,
+                    anchoredDropdownLayout
+                      ? {
+                          top: anchoredDropdownLayout.top,
+                          left: anchoredDropdownLayout.left,
+                          width: anchoredDropdownLayout.width,
+                          maxHeight: anchoredDropdownLayout.maxScroll + 58,
+                        }
+                      : { top: 120, left: Spacing.lg, right: Spacing.lg, maxHeight: 340 },
+                  ]}
+                >
                   <TextInput
-                    style={styles.searchInput}
+                    style={styles.anchoredSearchInput}
                     placeholder="Search species…"
                     placeholderTextColor={colors.textTertiary}
                     value={catchSpeciesSearch}
@@ -2093,7 +2497,13 @@ export function CatchDetailsModal({
                     autoCorrect={false}
                     autoCapitalize="none"
                   />
-                  <ScrollView style={styles.catchFlyPickerList} keyboardShouldPersistTaps="handled">
+                  <ScrollView
+                    style={{ height: anchoredDropdownLayout?.maxScroll ?? 260 }}
+                    contentContainerStyle={styles.anchoredPickerScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator
+                  >
                     {filteredSpeciesOptions.map((species) => {
                       const isOther = species === 'Other';
                       const isSelected = isOther
@@ -2102,7 +2512,10 @@ export function CatchDetailsModal({
                       return (
                         <Pressable
                           key={species}
-                          style={[styles.catchFlyPickerOption, isSelected && styles.catchFlyPickerOptionActive]}
+                          style={[
+                            styles.anchoredPickerOption,
+                            isSelected && styles.anchoredPickerOptionActive,
+                          ]}
                           onPress={() => {
                             if (isOther) {
                               setCatchSpecies('');
@@ -2112,15 +2525,182 @@ export function CatchDetailsModal({
                               setCatchSpeciesOther(false);
                             }
                             setCatchSpeciesDropdownOpen(false);
+                            setAnchoredDropdownLayout(null);
                           }}
                         >
                           <Text
                             style={[
-                              styles.catchFlyPickerOptionText,
-                              isSelected && styles.catchFlyPickerOptionTextActive,
+                              styles.anchoredPickerOptionText,
+                              isSelected && styles.anchoredPickerOptionTextActive,
                             ]}
                           >
                             {species}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              </View>
+            ) : null}
+
+            {catchPresentationDropdownOpen ? (
+              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
+                <Pressable
+                  style={styles.pickerBackdrop}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setCatchPresentationDropdownOpen(false);
+                    setCatchStructureDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
+                  }}
+                />
+                <View
+                  style={[
+                    styles.anchoredPickerSheet,
+                    anchoredDropdownLayout
+                      ? {
+                          top: anchoredDropdownLayout.top,
+                          left: anchoredDropdownLayout.left,
+                          width: anchoredDropdownLayout.width,
+                          height: anchoredDropdownLayout.maxScroll,
+                          maxHeight: anchoredDropdownLayout.maxScroll,
+                        }
+                      : { top: 120, left: Spacing.lg, right: Spacing.lg, height: 300, maxHeight: 300 },
+                  ]}
+                >
+                  <ScrollView
+                    style={styles.anchoredPickerScrollFill}
+                    contentContainerStyle={styles.anchoredPickerScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator
+                  >
+                    <Pressable
+                      style={[
+                        styles.anchoredPickerOption,
+                        catchPresentation == null && styles.anchoredPickerOptionActive,
+                      ]}
+                      onPress={() => {
+                        setCatchPresentation(null);
+                        setCatchPresentationDropdownOpen(false);
+                        setAnchoredDropdownLayout(null);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.anchoredPickerOptionText,
+                          catchPresentation == null && styles.anchoredPickerOptionTextActive,
+                        ]}
+                      >
+                        None
+                      </Text>
+                    </Pressable>
+                    {PRESENTATION_OPTIONS.map((opt) => {
+                      const isSelected = catchPresentation === opt.value;
+                      return (
+                        <Pressable
+                          key={opt.value}
+                          style={[
+                            styles.anchoredPickerOption,
+                            isSelected && styles.anchoredPickerOptionActive,
+                          ]}
+                          onPress={() => {
+                            setCatchPresentation(opt.value);
+                            setCatchPresentationDropdownOpen(false);
+                            setAnchoredDropdownLayout(null);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.anchoredPickerOptionText,
+                              isSelected && styles.anchoredPickerOptionTextActive,
+                            ]}
+                          >
+                            {opt.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              </View>
+            ) : null}
+
+            {catchStructureDropdownOpen ? (
+              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
+                <Pressable
+                  style={styles.pickerBackdrop}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setCatchStructureDropdownOpen(false);
+                    setCatchPresentationDropdownOpen(false);
+                    setAnchoredDropdownLayout(null);
+                  }}
+                />
+                <View
+                  style={[
+                    styles.anchoredPickerSheet,
+                    anchoredDropdownLayout
+                      ? {
+                          top: anchoredDropdownLayout.top,
+                          left: anchoredDropdownLayout.left,
+                          width: anchoredDropdownLayout.width,
+                          height: anchoredDropdownLayout.maxScroll,
+                          maxHeight: anchoredDropdownLayout.maxScroll,
+                        }
+                      : { top: 120, left: Spacing.lg, right: Spacing.lg, height: 300, maxHeight: 300 },
+                  ]}
+                >
+                  <ScrollView
+                    style={styles.anchoredPickerScrollFill}
+                    contentContainerStyle={styles.anchoredPickerScrollContent}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator
+                  >
+                    <Pressable
+                      style={[
+                        styles.anchoredPickerOption,
+                        catchStructure == null && styles.anchoredPickerOptionActive,
+                      ]}
+                      onPress={() => {
+                        setCatchStructure(null);
+                        setCatchStructureDropdownOpen(false);
+                        setAnchoredDropdownLayout(null);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.anchoredPickerOptionText,
+                          catchStructure == null && styles.anchoredPickerOptionTextActive,
+                        ]}
+                      >
+                        None
+                      </Text>
+                    </Pressable>
+                    {STRUCTURE_OPTIONS.map((opt) => {
+                      const isSelected = catchStructure === opt.value;
+                      return (
+                        <Pressable
+                          key={opt.value}
+                          style={[
+                            styles.anchoredPickerOption,
+                            isSelected && styles.anchoredPickerOptionActive,
+                          ]}
+                          onPress={() => {
+                            setCatchStructure(opt.value);
+                            setCatchStructureDropdownOpen(false);
+                            setAnchoredDropdownLayout(null);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.anchoredPickerOptionText,
+                              isSelected && styles.anchoredPickerOptionTextActive,
+                            ]}
+                          >
+                            {opt.label}
                           </Text>
                         </Pressable>
                       );
@@ -2134,12 +2714,21 @@ export function CatchDetailsModal({
               <Pressable
                 style={styles.catchModalCancel}
                 onPress={() => {
+                  Keyboard.dismiss();
                   setCatchPhotoUris([]);
                   setPhotoExifMeta(null);
+                  if (mode === 'add' && onSkipAdd) {
+                    onSkipAdd();
+                  }
                   onClose();
                 }}
+                accessibilityLabel={
+                  mode === 'add' && onSkipAdd
+                    ? 'Skip, log catch without filling details'
+                    : 'Skip, close without saving'
+                }
               >
-                <Text style={styles.catchModalCancelText}>Cancel</Text>
+                <Text style={styles.catchModalCancelText}>Skip</Text>
               </Pressable>
               <Pressable
                 style={styles.confirmFlyButton}
