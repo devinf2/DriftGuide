@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { JournalFishingTimeline } from '@/src/components/journal/JournalFishingTimeline';
 import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
+import { usePendingTripPayloadForTrip } from '@/src/hooks/usePendingTripPayload';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useTripStore } from '@/src/stores/tripStore';
 import { fetchTripEvents } from '@/src/services/sync';
 import {
   fetchMergedSessionEventsForTrips,
@@ -112,6 +114,8 @@ export function SharedTripTimelineSection({
 }: SharedTripTimelineSectionProps) {
   const { colors } = useAppTheme();
   const sessionId = trip.shared_session_id ?? null;
+  const pendingSyncTrips = useTripStore((s) => s.pendingSyncTrips);
+  const pendingPayload = usePendingTripPayloadForTrip(trip.id, trip.user_id === userId);
 
   const [members, setMembers] = useState<
     { user_id: string; display_name: string; avatar_url: string | null }[]
@@ -123,6 +127,22 @@ export function SharedTripTimelineSection({
   const [peerEvents, setPeerEvents] = useState<TripEvent[]>([]);
   const [peerTripForPeerMode, setPeerTripForPeerMode] = useState<Trip | null>(null);
   const [loadingRemote, setLoadingRemote] = useState(false);
+
+  const showTimelineSync = useMemo(
+    () =>
+      trip.user_id === userId && (!sessionId || timelineMode === 'group' || timelineMode === trip.id),
+    [trip.user_id, userId, sessionId, timelineMode, trip.id],
+  );
+
+  const eventSyncStatusForEvent = useCallback(
+    (ev: TripEvent) => {
+      if (!showTimelineSync) return 'synced' as const;
+      if (ev.trip_id !== trip.id) return 'synced' as const;
+      if (!pendingSyncTrips.includes(trip.id)) return 'synced' as const;
+      return pendingPayload?.eventSyncState?.[ev.id] ?? ('pending' as const);
+    },
+    [showTimelineSync, trip.id, pendingSyncTrips, pendingPayload],
+  );
 
   const noopEvents = useCallback(() => {}, []);
   const noopTripPatch = useCallback(() => {}, []);
@@ -298,6 +318,7 @@ export function SharedTripTimelineSection({
         onCatchPhotoPress={onCatchPhotoPress}
         onRequestEditTripPin={onRequestEditTripPin}
         colorTokens={colors}
+        eventSyncStatusForEvent={showTimelineSync ? eventSyncStatusForEvent : undefined}
       />
     );
   }
@@ -451,6 +472,7 @@ export function SharedTripTimelineSection({
           onCatchPhotoPress={onCatchPhotoPress}
           onRequestEditTripPin={timelineMode === trip.id ? onRequestEditTripPin : undefined}
           colorTokens={colors}
+          eventSyncStatusForEvent={showTimelineSync ? eventSyncStatusForEvent : undefined}
           compactAttributionLabels={timelineMode === trip.id}
           attributionLabelForEvent={(ev) => {
             if (timelineMode === 'group') {

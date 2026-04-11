@@ -1026,19 +1026,39 @@ export default function NewTripScreen() {
       </ScrollView>
       {!isConnected && (
         <View style={styles.offlineBanner}>
-          <Text style={styles.offlineBannerText}>Offline – showing downloaded waterways only</Text>
+          <Text style={styles.offlineBannerText}>
+            Offline — downloaded waterways only. Connect to the internet to create a planned trip.
+          </Text>
         </View>
       )}
       <View style={styles.pinnedButtonContainer}>
         <Pressable
-          style={[styles.planButton, (!selectedLocation || !sessionType) && styles.planButtonDisabled]}
+          style={[
+            styles.planButton,
+            (!selectedLocation || !sessionType || !isConnected) && styles.planButtonDisabled,
+          ]}
           onPress={handlePlanTrip}
-          disabled={!selectedLocation || !sessionType || saving}
+          disabled={!selectedLocation || !sessionType || saving || !isConnected}
+          accessibilityState={{
+            disabled: !selectedLocation || !sessionType || saving || !isConnected,
+          }}
+          accessibilityHint={
+            !isConnected
+              ? 'Creating a planned trip requires an internet connection.'
+              : undefined
+          }
         >
           {saving ? (
             <ActivityIndicator color={colors.textInverse} />
           ) : (
-            <Text style={styles.planButtonText}>Create Trip</Text>
+            <Text
+              style={[
+                styles.planButtonText,
+                (!selectedLocation || !sessionType || !isConnected) && styles.planButtonTextDisabled,
+              ]}
+            >
+              {!isConnected ? 'Need connection to save' : 'Create Trip'}
+            </Text>
           )}
         </Pressable>
       </View>
@@ -1077,15 +1097,16 @@ function createNewTripStyles(colors: ThemeColors) {
   },
   offlineBanner: {
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    backgroundColor: colors.warning + '20',
+    paddingVertical: Spacing.md,
+    backgroundColor: colors.warning + '22',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.warning + '55',
   },
   offlineBannerText: {
     fontSize: FontSize.sm,
-    color: colors.textSecondary,
+    color: colors.text,
     textAlign: 'center',
+    lineHeight: 20,
   },
   pinnedButtonContainer: {
     paddingHorizontal: Spacing.lg,
@@ -1556,6 +1577,9 @@ function createNewTripStyles(colors: ThemeColors) {
     color: colors.textInverse,
     fontSize: FontSize.md,
     fontWeight: '700',
+  },
+  planButtonTextDisabled: {
+    opacity: 0.92,
   },
   planButtonSecondary: {
     paddingVertical: Spacing.md,

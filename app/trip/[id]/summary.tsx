@@ -50,6 +50,7 @@ import {
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useTripStore } from '@/src/stores/tripStore';
+import { getPendingTrips } from '@/src/services/pendingSyncStorage';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS, CLARITY_LABELS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
@@ -156,18 +157,58 @@ export default function TripSummaryScreen() {
   }, [user?.id, refreshFriends]);
 
   useEffect(() => {
+    let cancelled = false;
     async function load() {
-      if (!user || !id) return;
-      const trips = await fetchTripsFromCloud(user.id);
-      const found = trips.find(t => t.id === id);
-      if (found) setTrip(found);
+      const uid = user?.id;
+      if (!uid || !id) return;
+      setLoading(true);
+      const pendingMap = await getPendingTrips();
+      if (cancelled) return;
+      const pendingPayload = pendingMap[id] ?? null;
 
-      const tripEvents = await fetchTripEvents(id);
-      setEvents(tripEvents);
+      let cloudTrip: Trip | null = null;
+      let apiEvents: TripEvent[] = [];
+
+      if (isConnected) {
+        try {
+          const trips = await fetchTripsFromCloud(uid);
+          if (cancelled) return;
+          cloudTrip = trips.find((t) => t.id === id) ?? null;
+          apiEvents = await fetchTripEvents(id);
+          if (cancelled) return;
+        } catch {
+          cloudTrip = null;
+          apiEvents = [];
+        }
+      }
+
+      if (cancelled) return;
+
+      // Pending bundle is the source of truth until sync removes it (offline or mid-upload).
+      const mergedTrip = pendingPayload?.trip ?? cloudTrip ?? null;
+      const mergedEvents =
+        apiEvents.length > 0 ? apiEvents : (pendingPayload?.events ?? []);
+
+      // Do not re-run load when pendingSyncTrips changes: background sync can clear the pending
+      // queue while the user is still "offline" (simulated or real), leaving no cloud row yet —
+      // that would flash trip → "Trip not found". Keep last good local state until we're online.
+      setTrip((prev) => {
+        if (mergedTrip) return mergedTrip;
+        if (!isConnected && prev?.id === id) return prev;
+        return null;
+      });
+      setEvents((prev) => {
+        if (mergedEvents.length > 0) return mergedEvents;
+        if (!isConnected && prev.some((e) => e.trip_id === id)) return prev;
+        return mergedEvents;
+      });
       setLoading(false);
     }
-    load();
-  }, [id, user]);
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, user?.id, isConnected]);
 
   const handleSessionChanged = useCallback((sid: string | null) => {
     setTrip((prev) => (prev ? { ...prev, shared_session_id: sid } : null));

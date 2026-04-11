@@ -25,6 +25,8 @@ import {
   getPendingTrips,
   removePendingTrip,
   clearAllPendingSyncTrips,
+  buildInitialEventSyncState,
+  type DeferredSurveyFields,
 } from '@/src/services/pendingSyncStorage';
 import { withTimeout } from '@/src/utils/promiseTimeout';
 import {
@@ -92,7 +94,11 @@ interface TripState {
   pauseTrip: () => Promise<void>;
   resumeTrip: () => Promise<void>;
   endTrip: () => Promise<{ synced: boolean }>;
-  updateTripSurvey: (tripId: string, payload: { rating: number | null; user_reported_clarity: string | null; notes: string | null }) => Promise<boolean>;
+  updateTripSurvey: (
+    tripId: string,
+    payload: { rating: number | null; user_reported_clarity: string | null; notes: string | null },
+    action: 'submit' | 'skip',
+  ) => Promise<{ localSaved: boolean; cloudSynced: boolean }>;
   retryPendingSyncs: () => Promise<void>;
   isOnline: boolean;
   setOnlineStatus: (online: boolean) => void;
@@ -652,27 +658,45 @@ export const useTripStore = create<TripState>()(
         return { synced: true };
       },
 
-      updateTripSurvey: async (tripId, payload): Promise<boolean> => {
+      updateTripSurvey: async (tripId, payload, action): Promise<{ localSaved: boolean; cloudSynced: boolean }> => {
         const { activeTrip, events } = get();
-        if (!activeTrip || activeTrip.id !== tripId) return false;
+        if (!activeTrip || activeTrip.id !== tripId) {
+          return { localSaved: false, cloudSynced: false };
+        }
+        const notesBefore = activeTrip.notes;
         const updatedTrip: Trip = {
           ...activeTrip,
           rating: payload.rating,
           user_reported_clarity: payload.user_reported_clarity as Trip['user_reported_clarity'],
           notes: payload.notes ?? activeTrip.notes,
         };
-        const synced = await syncTripToCloud(updatedTrip, events);
-        if (!synced) {
-          try {
-            await savePendingTrip(tripId, updatedTrip, events);
-          } catch (e) {
-            console.error('Failed to save pending trip locally:', e);
-          }
-          set(state => ({
-            pendingSyncTrips: [...state.pendingSyncTrips, tripId],
-          }));
+        const surveyMeta =
+          action === 'submit' && payload.rating != null
+            ? {
+                surveyPendingCloud: true as const,
+                deferredSurvey: {
+                  rating: payload.rating,
+                  user_reported_clarity: (payload.user_reported_clarity ?? null) as DeferredSurveyFields['user_reported_clarity'],
+                  notes: (payload.notes ?? activeTrip.notes) as string | null,
+                },
+                tripNotesPreSurvey: notesBefore,
+                eventSyncState: buildInitialEventSyncState(events),
+              }
+            : {
+                surveyPendingCloud: false as const,
+                omitDeferredSurvey: true as const,
+                eventSyncState: buildInitialEventSyncState(events),
+              };
+        try {
+          await savePendingTrip(tripId, updatedTrip, events, surveyMeta);
+        } catch (e) {
+          console.error('Failed to save pending trip locally:', e);
+          return { localSaved: false, cloudSynced: false };
         }
-        set({
+        set((state) => ({
+          pendingSyncTrips: state.pendingSyncTrips.includes(tripId)
+            ? state.pendingSyncTrips
+            : [...state.pendingSyncTrips, tripId],
           activeTrip: null,
           fishingElapsedMs: 0,
           fishingSegmentStartedAt: null,
@@ -685,8 +709,26 @@ export const useTripStore = create<TripState>()(
           nextFlyRecommendation: null,
           weatherData: null,
           waterFlowData: null,
-        });
-        return synced;
+        }));
+
+        void import('@/src/services/tripOutboxSync')
+          .then(({ runTripOutboxExclusive, syncPendingTripBundle }) => {
+            void runTripOutboxExclusive(async () => {
+              const pending = await getPendingTrips();
+              const p = pending[tripId];
+              if (!p) return;
+              const ok = await syncPendingTripBundle(p);
+              if (ok) {
+                await removePendingTrip(tripId);
+                useTripStore.setState((s) => ({
+                  pendingSyncTrips: s.pendingSyncTrips.filter((id) => id !== tripId),
+                }));
+              }
+            });
+          })
+          .catch((e) => console.warn('[updateTripSurvey] background sync kick failed', e));
+
+        return { localSaved: true, cloudSynced: false };
       },
 
       retryPendingSyncs: async () => {
@@ -694,18 +736,21 @@ export const useTripStore = create<TripState>()(
         if (pendingSyncTrips.length === 0) return;
         set({ isSyncingPending: true });
         try {
-          const pending = await getPendingTrips();
-          for (const tripId of pendingSyncTrips) {
-            const payload = pending[tripId];
-            if (!payload) continue;
-            const ok = await syncTripToCloud(payload.trip, payload.events);
-            if (ok) {
-              await removePendingTrip(tripId);
-              set(state => ({
-                pendingSyncTrips: state.pendingSyncTrips.filter((id) => id !== tripId),
-              }));
+          const { runTripOutboxExclusive, syncPendingTripBundle } = await import('@/src/services/tripOutboxSync');
+          await runTripOutboxExclusive(async () => {
+            const pending = await getPendingTrips();
+            for (const tripId of Object.keys(pending)) {
+              const payload = pending[tripId];
+              if (!payload) continue;
+              const ok = await syncPendingTripBundle(payload);
+              if (ok) {
+                await removePendingTrip(tripId);
+                set((state) => ({
+                  pendingSyncTrips: state.pendingSyncTrips.filter((id) => id !== tripId),
+                }));
+              }
             }
-          }
+          });
         } finally {
           set({ isSyncingPending: false });
         }

@@ -5,6 +5,7 @@ import {
   updatePendingTripEventPhotoUrl,
   type PendingPhoto,
 } from './pendingPhotoStorage';
+import { deleteSandboxPendingPhotoFile } from './persistentPhotoUri';
 import { useTripStore } from '@/src/stores/tripStore';
 
 function pendingToAddPhotoOptions(p: PendingPhoto): Parameters<typeof addPhoto>[0] {
@@ -49,6 +50,7 @@ export async function processPendingPhotos(): Promise<void> {
       }
 
       await removePendingPhoto(p.id);
+      await deleteSandboxPendingPhotoFile(p.uri);
     } catch (e) {
       console.warn('[processPendingPhotos] failed for', p.id, e);
       // leave in queue to retry later

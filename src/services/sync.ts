@@ -48,6 +48,8 @@ function tripToUpsertPayload(trip: Trip, ownerUserId: string) {
     active_fishing_ms: trip.active_fishing_ms ?? null,
     shared_session_id: trip.shared_session_id ?? null,
     trip_photo_visibility: trip.trip_photo_visibility ?? null,
+    survey_submitted_at: trip.survey_submitted_at ?? null,
+    last_full_sync_at: trip.last_full_sync_at ?? null,
   };
 }
 
@@ -88,7 +90,7 @@ async function effectiveSharedSessionIdForSync(
   return sid;
 }
 
-async function upsertTripToSupabase(trip: Trip): Promise<boolean> {
+export async function upsertTripToSupabase(trip: Trip): Promise<boolean> {
   const { data: authData, error: authError } = await supabase.auth.getUser();
   const user = authData?.user;
   if (authError || !user) {
@@ -140,7 +142,7 @@ async function upsertTripToSupabase(trip: Trip): Promise<boolean> {
   return true;
 }
 
-function tripEventToUpsertRow(e: TripEvent) {
+export function tripEventToUpsertRow(e: TripEvent) {
   return {
     id: e.id,
     trip_id: e.trip_id,
@@ -154,7 +156,7 @@ function tripEventToUpsertRow(e: TripEvent) {
 }
 
 /** Upsert one trip_events row (with PGRST204 fallback without conditions_snapshot). */
-async function upsertTripEventsRows(rows: ReturnType<typeof tripEventToUpsertRow>[]): Promise<boolean> {
+export async function upsertTripEventsRows(rows: ReturnType<typeof tripEventToUpsertRow>[]): Promise<boolean> {
   let { error: eventsError } = await supabase.from('trip_events').upsert(rows);
   if (eventsError?.code === 'PGRST204') {
     const fallbackRows = rows.map(({ conditions_snapshot, ...rest }) => rest);
@@ -236,7 +238,7 @@ export function getFlyForCatch(
 }
 
 /** Upsert conditions_snapshots and catches for all catch events; trigger keeps community_catches in sync. */
-async function syncCatchesAndConditions(trip: Trip, events: TripEvent[]): Promise<void> {
+export async function syncCatchesAndConditions(trip: Trip, events: TripEvent[]): Promise<void> {
   const catchEvents = events.filter((e) => e.event_type === 'catch');
   for (const e of catchEvents) {
     await upsertCatchEventToCloud(trip, e, events);

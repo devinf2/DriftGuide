@@ -46,13 +46,11 @@ export default function TripSurveyScreen() {
     if (!id || !trip) return;
     setPendingAction(action);
     try {
-      const synced = await updateTripSurvey(id, payload);
-      if (!synced) {
-        Alert.alert(
-          'Saved on device',
-          'Survey will sync when you\'re back online or when you open the app with connection.',
-          [{ text: 'OK' }],
-        );
+      const result = await updateTripSurvey(id, payload, action);
+      if (!result.localSaved) {
+        Alert.alert('Could not save', 'Please try again.');
+        setPendingAction(null);
+        return;
       }
       router.replace(`/trip/${id}/summary`);
     } catch {

@@ -188,6 +188,10 @@ export interface Trip {
   shared_session_id?: string | null;
   /** Override profile default for album photos on profile; null = use profile default. */
   trip_photo_visibility?: TripPhotoVisibility | null;
+  /** Set on successful server sync when a survey rating was included. */
+  survey_submitted_at?: string | null;
+  /** Last full bundle sync to the server (client clock). */
+  last_full_sync_at?: string | null;
 }
 
 export interface TripEvent {

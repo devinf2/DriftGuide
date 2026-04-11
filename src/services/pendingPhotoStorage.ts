@@ -68,9 +68,12 @@ export function buildPendingFromAddPhotoOptions(
 export async function savePendingPhoto(
   payload: Omit<PendingPhoto, 'id' | 'createdAt'>,
 ): Promise<string> {
+  const { copyUriToPendingPhotoSandbox } = await import('./persistentPhotoUri');
+  const durableUri = await copyUriToPendingPhotoSandbox(payload.uri);
   const id = uuidv4();
   const item: PendingPhoto = {
     ...payload,
+    uri: durableUri,
     id,
     createdAt: new Date().toISOString(),
   };

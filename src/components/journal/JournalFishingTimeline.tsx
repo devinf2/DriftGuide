@@ -45,6 +45,7 @@ import {
 } from '@/src/utils/journalTimeline';
 import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
 import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
+import type { EventSyncStatus } from '@/src/types/sync';
 import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
 import { formatEventTime } from '@/src/utils/formatters';
 import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
@@ -83,6 +84,40 @@ function CatchDetailsBlock({
   );
 }
 
+const timelineSyncDotStyles = StyleSheet.create({
+  col: { paddingTop: 4, width: 14, alignItems: 'center' },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+});
+
+function labelForSyncStatus(s: EventSyncStatus): string {
+  switch (s) {
+    case 'synced':
+      return 'Synced to cloud';
+    case 'pending':
+      return 'Waiting to upload';
+    case 'syncing':
+      return 'Uploading';
+    case 'error':
+      return 'Upload failed, will retry';
+    default:
+      return '';
+  }
+}
+
+function TimelineSyncDot({ status, palette }: { status: EventSyncStatus; palette: ThemeColors }) {
+  const color =
+    status === 'error' ? palette.error : status === 'synced' ? palette.success : palette.warning;
+  return (
+    <View
+      style={timelineSyncDotStyles.col}
+      accessibilityRole="text"
+      accessibilityLabel={labelForSyncStatus(status)}
+    >
+      <View style={[timelineSyncDotStyles.dot, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
 export interface JournalFishingTimelineProps {
   trip: Trip;
   events: TripEvent[];
@@ -105,6 +140,8 @@ export interface JournalFishingTimelineProps {
   compactAttributionLabels?: boolean;
   /** When embedded in a dark surface (e.g. active trip), pass `useAppTheme().colors` for readable text. */
   colorTokens?: ThemeColors;
+  /** Cloud backup state per row (own-trip pending sync). Omit to hide the column. */
+  eventSyncStatusForEvent?: (event: TripEvent) => EventSyncStatus;
 }
 
 export function JournalFishingTimeline({
@@ -121,6 +158,7 @@ export function JournalFishingTimeline({
   attributionAvatarUriForEvent,
   compactAttributionLabels = false,
   colorTokens,
+  eventSyncStatusForEvent,
 }: JournalFishingTimelineProps) {
   const palette = colorTokens ?? Colors;
   const styles = useMemo(() => createJournalFishingTimelineStyles(palette), [palette]);
@@ -600,6 +638,9 @@ export function JournalFishingTimeline({
                         />
                       ) : null}
                     </View>
+                    {eventSyncStatusForEvent ? (
+                      <TimelineSyncDot status={eventSyncStatusForEvent(event)} palette={palette} />
+                    ) : null}
                     {editMode ? (
                       <Pressable
                         style={styles.rowMenuBtn}
