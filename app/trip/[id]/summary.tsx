@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   Alert,
   Platform,
   Modal,
-  Dimensions,
   Linking,
   Switch,
   TextInput,
@@ -43,6 +42,11 @@ import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
 import { getTripEventDescription } from '@/src/utils/journalTimeline';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
+import {
+  getSessionTripPhotos,
+  getTripPhotosCacheDebugKeys,
+  setSessionTripPhotos,
+} from '@/src/utils/tripPhotosSessionCache';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -52,6 +56,10 @@ import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
+import {
+  photosToViewerSlides,
+  TripFullScreenPhotoViewerModal,
+} from '@/src/components/trip/TripFullScreenPhotoViewerModal';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
@@ -79,6 +87,8 @@ function exitTripSummary(router: ReturnType<typeof useRouter>) {
   }
 }
 
+const TRIP_PHOTOS_DEBUG = typeof __DEV__ !== 'undefined' && __DEV__;
+
 export default function TripSummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -96,6 +106,8 @@ export default function TripSummaryScreen() {
   const [events, setEvents] = useState<TripEvent[]>([]);
   const [tripPhotos, setTripPhotos] = useState<Photo[]>([]);
   const [tripPhotosLoading, setTripPhotosLoading] = useState(false);
+  const tripPhotosRowCountRef = useRef(0);
+  tripPhotosRowCountRef.current = tripPhotos.length;
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('fishing');
   const [fullScreenPhoto, setFullScreenPhoto] = useState<{
@@ -106,6 +118,7 @@ export default function TripSummaryScreen() {
     species?: string;
     caption?: string;
   } | null>(null);
+  const [tripPhotoViewerIndex, setTripPhotoViewerIndex] = useState<number | null>(null);
   const [tripPinPlacement, setTripPinPlacement] = useState<TripPinPlacementState | null>(null);
   const [tripPinPlacementSaving, setTripPinPlacementSaving] = useState(false);
   /** Map tab: catch pin tapped when there is no photo (full-screen flow uses `fullScreenPhoto`) */
@@ -160,28 +173,160 @@ export default function TripSummaryScreen() {
     setTrip((prev) => (prev ? { ...prev, shared_session_id: sid } : null));
   }, []);
 
-  const loadTripPhotos = useCallback(async () => {
-    if (!user || !id) return;
-    setTripPhotosLoading(true);
-    try {
-      const photos = await fetchPhotos(user.id, { tripId: id });
-      setTripPhotos(photos);
-    } catch {
-      setTripPhotos([]);
-    } finally {
-      setTripPhotosLoading(false);
-    }
-  }, [user?.id, id]);
+  const tripPhotosFetchSeqRef = useRef(0);
+  const warmTripPhotosKeyRef = useRef<string | null>(null);
+  const lastTripPhotosIdentityRef = useRef<string | null>(null);
 
-  // Load trip photos when entry loads for the Photos tab
+  const refreshTripPhotos = useCallback(
+    async (showLoading: boolean) => {
+      if (!user || !id) {
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:skip (no user/id)');
+        return;
+      }
+      if (showLoading) {
+        setTripPhotosLoading(true);
+      } else {
+        setTripPhotosLoading(false);
+      }
+      const seq = ++tripPhotosFetchSeqRef.current;
+      if (TRIP_PHOTOS_DEBUG) {
+        console.log('[TripPhotos:summary] refresh:start', {
+          showLoading,
+          seq,
+          cacheKey: `${user.id}:${id}`,
+        });
+      }
+      try {
+        const photos = await fetchPhotos(user.id, { tripId: id });
+        if (seq !== tripPhotosFetchSeqRef.current) {
+          if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:stale after fetch', { seq });
+          return;
+        }
+        setTripPhotos(photos);
+        setSessionTripPhotos(user.id, id, photos);
+        warmTripPhotosKeyRef.current = `${user.id}:${id}`;
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:ok', { seq, count: photos.length });
+      } catch (e) {
+        if (seq !== tripPhotosFetchSeqRef.current) return;
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:error', { seq, showLoading, e });
+        if (showLoading) {
+          setTripPhotos([]);
+          setSessionTripPhotos(user.id, id, []);
+        }
+      } finally {
+        if (showLoading && seq === tripPhotosFetchSeqRef.current) {
+          setTripPhotosLoading(false);
+        }
+      }
+    },
+    [user?.id, id],
+  );
+
   useEffect(() => {
-    if (trip && id) loadTripPhotos();
-  }, [trip, id, loadTripPhotos]);
+    if (!user?.id || !id) {
+      if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] identity:clear (no user/id)');
+      setTripPhotos([]);
+      lastTripPhotosIdentityRef.current = null;
+      warmTripPhotosKeyRef.current = null;
+      return;
+    }
+    const identity = `${user.id}:${id}`;
+    if (lastTripPhotosIdentityRef.current === identity) {
+      return;
+    }
+    lastTripPhotosIdentityRef.current = identity;
+    warmTripPhotosKeyRef.current = null;
+    const cached = getSessionTripPhotos(user.id, id);
+    if (TRIP_PHOTOS_DEBUG) {
+      console.log('[TripPhotos:summary] identity:hydrate', {
+        identity,
+        cacheHit: cached !== undefined,
+        cachedCount: cached?.length ?? null,
+        cacheKeysNow: getTripPhotosCacheDebugKeys(),
+      });
+    }
+    setTripPhotos(cached !== undefined ? cached : []);
+  }, [id, user?.id]);
+
+  useEffect(() => {
+    if (!id || !user?.id) return;
+    const key = `${user.id}:${id}`;
+    /** Read Map directly — identity effect’s setState may not be committed before this effect runs. */
+    const cachedList = getSessionTripPhotos(user.id, id);
+    if (cachedList !== undefined) {
+      setTripPhotos(cachedList);
+    }
+    const hasSessionCache = cachedList !== undefined;
+    const hasWarmedThisTrip = warmTripPhotosKeyRef.current === key;
+    const hasRowsAlready = tripPhotosRowCountRef.current > 0;
+    const showBlocking = !hasSessionCache && !hasWarmedThisTrip && !hasRowsAlready;
+    if (TRIP_PHOTOS_DEBUG) {
+      console.log('[TripPhotos:summary] mountFetchEffect', {
+        key,
+        hasSessionCache,
+        cachedCount: cachedList?.length ?? null,
+        hasWarmedThisTrip,
+        warmKey: warmTripPhotosKeyRef.current,
+        rowCountRef: tripPhotosRowCountRef.current,
+        showBlocking,
+        allCacheKeys: getTripPhotosCacheDebugKeys(),
+      });
+    }
+    void refreshTripPhotos(showBlocking);
+  }, [id, user?.id, refreshTripPhotos]);
+
+  useEffect(() => {
+    if (tripPhotoViewerIndex == null) return;
+    if (tripPhotos.length === 0) {
+      setTripPhotoViewerIndex(null);
+      return;
+    }
+    if (tripPhotoViewerIndex >= tripPhotos.length) {
+      setTripPhotoViewerIndex(tripPhotos.length - 1);
+    }
+  }, [tripPhotoViewerIndex, tripPhotos.length]);
+
+  const tripPhotoViewerSlides = useMemo(
+    () => photosToViewerSlides(tripPhotos, trip?.location?.name),
+    [tripPhotos, trip?.location?.name],
+  );
+
+  const tripPhotoViewerSlidesFull = useMemo(() => {
+    if (tripPhotoViewerIndex != null && tripPhotos.length > 0) {
+      return tripPhotoViewerSlides;
+    }
+    if (fullScreenPhoto) {
+      return [
+        {
+          remoteUri: fullScreenPhoto.url,
+          location: fullScreenPhoto.location,
+          fly: fullScreenPhoto.fly,
+          date: fullScreenPhoto.date,
+          species: fullScreenPhoto.species,
+          caption: fullScreenPhoto.caption,
+        },
+      ];
+    }
+    return [];
+  }, [tripPhotoViewerIndex, tripPhotos.length, tripPhotoViewerSlides, fullScreenPhoto]);
+
+  const tripPhotoViewerVisible = tripPhotoViewerSlidesFull.length > 0;
+  const tripPhotoViewerActiveIndex = tripPhotoViewerIndex ?? 0;
+
+  const closeTripPhotoViewer = useCallback(() => {
+    setTripPhotoViewerIndex(null);
+    setFullScreenPhoto(null);
+  }, []);
+
+  const onTripPhotoViewerIndexChange = useCallback((next: number) => {
+    setTripPhotoViewerIndex((prev) => (prev != null ? next : prev));
+  }, []);
 
   const handleCatchPhotoPress = useCallback((event: TripEvent) => {
     const data = event.data as CatchData;
     const hero = getCatchHeroPhotoUrl(data);
     if (!hero) return;
+    setTripPhotoViewerIndex(null);
     setFullScreenPhoto({
       url: hero,
       location: trip?.location?.name ?? undefined,
@@ -198,6 +343,7 @@ export default function TripSummaryScreen() {
       const data = ev.data as CatchData;
       const hero = getCatchHeroPhotoUrl(data);
       if (hero) {
+        setTripPhotoViewerIndex(null);
         setFullScreenPhoto({
           url: hero,
           location: trip?.location?.name ?? undefined,
@@ -286,15 +432,12 @@ export default function TripSummaryScreen() {
   }, []);
 
   const handleTripPhotoPress = useCallback((photo: Photo) => {
-    setFullScreenPhoto({
-      url: photo.url,
-      location: trip?.location?.name ?? undefined,
-      fly: [photo.fly_pattern, photo.fly_size ? `#${photo.fly_size}` : null, photo.fly_color].filter(Boolean).join(' ') || undefined,
-      date: (photo.captured_at || photo.created_at) ? formatTripDate(photo.captured_at || photo.created_at!) : undefined,
-      species: photo.species ?? undefined,
-      caption: photo.caption ?? undefined,
-    });
-  }, [trip?.location?.name]);
+    const i = tripPhotos.findIndex((p) => p.id === photo.id);
+    if (i >= 0) {
+      setFullScreenPhoto(null);
+      setTripPhotoViewerIndex(i);
+    }
+  }, [tripPhotos]);
 
   const handleKeepOfflineChange = useCallback(
     async (next: boolean) => {
@@ -457,61 +600,16 @@ export default function TripSummaryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      {/* Full-screen photo view — same as photo library */}
-      <Modal
-        visible={fullScreenPhoto != null}
-        animationType="fade"
-        transparent
-        statusBarTranslucent
-        onRequestClose={() => setFullScreenPhoto(null)}
-      >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
-          <Pressable
-            style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
-            onPress={() => setFullScreenPhoto(null)}
-          >
-            <MaterialCommunityIcons name="close" size={28} color={themeColors.textInverse} />
-          </Pressable>
-          {fullScreenPhoto && (
-            <ScrollView
-              style={styles.fullScreenPhotoScroll}
-              contentContainerStyle={[styles.fullScreenPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
-              showsVerticalScrollIndicator={false}
-            >
-              <OfflineTripPhotoImage
-                remoteUri={fullScreenPhoto.url}
-                style={[styles.fullScreenPhotoImage, { width: Dimensions.get('window').width, height: Math.round(Dimensions.get('window').height * 0.55) }]}
-                contentFit="contain"
-              />
-              <View style={styles.fullScreenPhotoInfo}>
-                {fullScreenPhoto.location ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.location}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.fly ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="hook" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.fly}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.date ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialIcons name="calendar-today" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.date}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.species ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="fish" size={16} color={themeColors.textInverse} /> {fullScreenPhoto.species}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.caption ? (
-                  <Text style={styles.fullScreenPhotoCaption}>{fullScreenPhoto.caption}</Text>
-                ) : null}
-              </View>
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
+      <TripFullScreenPhotoViewerModal
+        visible={tripPhotoViewerVisible}
+        onClose={closeTripPhotoViewer}
+        slides={tripPhotoViewerSlidesFull}
+        index={tripPhotoViewerActiveIndex}
+        onIndexChange={onTripPhotoViewerIndexChange}
+        paddingTop={effectiveTop}
+        paddingBottom={insets.bottom}
+        closeButtonTop={insets.top + Spacing.sm}
+      />
 
       {/* Map tab: catch without photo */}
       <Modal
@@ -1130,7 +1228,7 @@ function SummaryPhotosTab({
       <View style={summaryStyles.summaryPhotosHeader}>
         <Text style={summaryStyles.summaryPhotosTitle}>Trip photos</Text>
       </View>
-      {loading ? (
+      {loading && tripPhotos.length === 0 ? (
         <View style={summaryStyles.summaryPhotosPlaceholder}>
           <ActivityIndicator color={palette.primary} />
         </View>
@@ -1788,42 +1886,6 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
-  },
-
-  fullScreenPhotoWrap: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-  },
-  fullScreenPhotoClose: {
-    position: 'absolute',
-    right: Spacing.lg,
-    zIndex: 10,
-    padding: Spacing.sm,
-  },
-  fullScreenPhotoScroll: {
-    flex: 1,
-  },
-  fullScreenPhotoScrollContent: {
-    flexGrow: 1,
-  },
-  fullScreenPhotoImage: {
-    marginTop: Spacing.sm,
-  },
-  fullScreenPhotoInfo: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xl,
-    gap: Spacing.xs,
-  },
-  fullScreenPhotoInfoRow: {
-    fontSize: FontSize.md,
-    color: c.textInverse,
-    marginBottom: Spacing.xs,
-  },
-  fullScreenPhotoCaption: {
-    fontSize: FontSize.sm,
-    color: c.textTertiary,
-    marginTop: Spacing.xs,
   },
 
   mapCatchModalRoot: {

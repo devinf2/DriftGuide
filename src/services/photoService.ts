@@ -35,7 +35,13 @@ export async function fetchPhotos(userId: string, options: FetchPhotosOptions = 
     throw error;
   }
   const list = (data as Photo[]) || [];
-  console.log('[fetchPhotos] photos table', { userId, tripId: options.tripId, count: list.length });
+  // `tripId` omitted = whole library (e.g. journal tab). Trip screen always passes `{ tripId }`.
+  console.log('[fetchPhotos] photos table', {
+    userId,
+    scope: options.tripId != null ? 'single_trip' : 'all_user_photos',
+    tripId: options.tripId ?? null,
+    count: list.length,
+  });
   return list;
 }
 

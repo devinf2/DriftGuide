@@ -103,6 +103,7 @@ function JournalTripCarousel({
       <ScrollView
         horizontal
         pagingEnabled
+        style={{ width, height }}
         showsHorizontalScrollIndicator={false}
         nestedScrollEnabled
         decelerationRate="fast"
@@ -156,8 +157,10 @@ const JournalTripGridCard = memo(function JournalTripGridCard({
     locationType && LocationTypeColors[locationType] ? LocationTypeColors[locationType] : colors.primary;
   const carouselHeight = Math.round(cardWidth * 1.02);
 
+  // Carousel must sit outside a parent Pressable — otherwise the press handler wins over
+  // horizontal ScrollView pan gestures and photos cannot be swiped (dots still update from state).
   return (
-    <Pressable style={[styles.tripGridCard, { width: cardWidth }]} onPress={onPress}>
+    <View style={[styles.tripGridCard, { width: cardWidth }]}>
       <JournalTripCarousel
         urls={imageUrls}
         width={cardWidth}
@@ -165,7 +168,10 @@ const JournalTripGridCard = memo(function JournalTripGridCard({
         colors={colors}
         styles={styles}
       />
-      <View style={styles.tripGridBody}>
+      <Pressable
+        style={({ pressed }) => [styles.tripGridBody, pressed && styles.tripGridBodyPressed]}
+        onPress={onPress}
+      >
         <View style={styles.tripGridLocationRow}>
           <MaterialIcons name="place" size={12} color={accent} style={styles.tripGridPin} />
           <Text style={styles.tripGridLocation} numberOfLines={2}>
@@ -185,8 +191,8 @@ const JournalTripGridCard = memo(function JournalTripGridCard({
             {formatTripDate(trip.start_time)}
           </Text>
         </View>
-      </View>
-    </Pressable>
+      </Pressable>
+    </View>
   );
 }, (prev, next) => {
   if (prev.trip.id !== next.trip.id) return false;
@@ -632,6 +638,7 @@ export default function JournalScreen() {
           numColumns={2}
           renderItem={renderTrip}
           keyExtractor={(item) => item.id}
+          nestedScrollEnabled
           columnWrapperStyle={filteredTrips.length > 0 ? styles.journalGridRow : undefined}
           contentContainerStyle={
             filteredTrips.length === 0
@@ -1069,6 +1076,9 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     paddingHorizontal: 6,
     paddingTop: 6,
     paddingBottom: 6,
+  },
+  tripGridBodyPressed: {
+    opacity: 0.75,
   },
   tripGridLocationRow: {
     flexDirection: 'row',

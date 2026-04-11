@@ -58,6 +58,10 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
+import {
+  photosToViewerSlides,
+  TripFullScreenPhotoViewerModal,
+} from '@/src/components/trip/TripFullScreenPhotoViewerModal';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import {
   AIQueryData,
@@ -77,6 +81,11 @@ import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPho
 import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import { getTripEventDescription } from '@/src/utils/journalTimeline';
 import { formatEventTime, formatFishCount, formatTripDate } from '@/src/utils/formatters';
+import {
+  getSessionTripPhotos,
+  getTripPhotosCacheDebugKeys,
+  setSessionTripPhotos,
+} from '@/src/utils/tripPhotosSessionCache';
 import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
 import {
   findActiveFlyEventIdBefore,
@@ -137,6 +146,9 @@ function aiQueryEventsToChatMessages(events: TripEvent[]): TripGuideChatMessage[
   return rows;
 }
 
+/** Set false to silence `[TripPhotos]` / `[TripPhotosCache]` console noise while debugging other issues. */
+const TRIP_PHOTOS_DEBUG = typeof __DEV__ !== 'undefined' && __DEV__;
+
 export default function TripDashboardScreen() {
   const { colors, resolvedScheme } = useAppTheme();
   const styles = useMemo(() => createTripDashboardStyles(colors), [colors]);
@@ -182,7 +194,7 @@ export default function TripDashboardScreen() {
   const [tripPhotoUri, setTripPhotoUri] = useState<string | null>(null);
   const [tripPhotoCaption, setTripPhotoCaption] = useState('');
   const [tripPhotoSpecies, setTripPhotoSpecies] = useState('');
-  /** Full-screen photo view (timeline or Photos tab) — same UX as photo library */
+  /** Full-screen photo view: timeline / map catch (single image) */
   const [fullScreenPhoto, setFullScreenPhoto] = useState<{
     url: string;
     location?: string;
@@ -191,6 +203,12 @@ export default function TripDashboardScreen() {
     species?: string;
     caption?: string;
   } | null>(null);
+  /** Photos tab: index into `tripPhotos` for swipeable full-screen viewer */
+  const [tripPhotoViewerIndex, setTripPhotoViewerIndex] = useState<number | null>(null);
+
+  /** Updated every render so photo-tab effects see current row count (avoids stale closure). */
+  const tripPhotosRowCountRef = useRef(0);
+  tripPhotosRowCountRef.current = tripPhotos.length;
 
   const [aiPendingQuestion, setAiPendingQuestion] = useState<string | null>(null);
   const [aiInput, setAiInput] = useState('');
@@ -301,22 +319,204 @@ export default function TripDashboardScreen() {
     })();
   }, []);
 
-  const loadTripPhotos = useCallback(async () => {
-    if (!activeTrip?.id || !activeTrip?.user_id) return;
-    setTripPhotosLoading(true);
-    try {
-      const photos = await fetchPhotos(activeTrip.user_id, { tripId: activeTrip.id });
-      setTripPhotos(photos);
-    } catch {
+  const tripPhotosFetchSeqRef = useRef(0);
+  /** After a successful fetch for `userId:tripId`, tab revisits skip the blocking spinner (Map can clear on Fast Refresh). */
+  const warmTripPhotosKeyRef = useRef<string | null>(null);
+  const lastTripPhotosIdentityRef = useRef<string | null>(null);
+
+  const refreshTripPhotos = useCallback(
+    async (showLoading: boolean) => {
+      if (!activeTrip?.id || !activeTrip?.user_id) {
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos] refresh:skip (no activeTrip id/user_id)');
+        return;
+      }
+      const uid = activeTrip.user_id;
+      const tid = activeTrip.id;
+      if (showLoading) {
+        setTripPhotosLoading(true);
+      } else {
+        setTripPhotosLoading(false);
+      }
+      const seq = ++tripPhotosFetchSeqRef.current;
+      if (TRIP_PHOTOS_DEBUG) {
+        console.log('[TripPhotos] refresh:start', {
+          showLoading,
+          seq,
+          cacheKey: `${uid}:${tid}`,
+          routeParamId: id,
+          routeMatchesActiveTripId: tid === id,
+        });
+      }
+      try {
+        const photos = await fetchPhotos(uid, { tripId: tid });
+        if (seq !== tripPhotosFetchSeqRef.current) {
+          if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos] refresh:stale after fetch', { seq });
+          return;
+        }
+        setTripPhotos(photos);
+        setSessionTripPhotos(uid, tid, photos);
+        warmTripPhotosKeyRef.current = `${uid}:${tid}`;
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos] refresh:ok', { seq, count: photos.length });
+      } catch (e) {
+        if (seq !== tripPhotosFetchSeqRef.current) return;
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos] refresh:error', { seq, showLoading, e });
+        if (showLoading) {
+          setTripPhotos([]);
+          setSessionTripPhotos(uid, tid, []);
+        }
+      } finally {
+        if (showLoading && seq === tripPhotosFetchSeqRef.current) {
+          setTripPhotosLoading(false);
+        }
+      }
+    },
+    [activeTrip?.id, activeTrip?.user_id, id],
+  );
+
+  /**
+   * When user/trip identity changes: restore from session cache (or empty).
+   * Do NOT run `setTripPhotos` on every effect run — that wipes in-memory rows when cache is empty
+   * (e.g. tab switch) and causes a spinner every time.
+   */
+  useEffect(() => {
+    if (!activeTrip?.user_id || !activeTrip?.id) {
+      if (TRIP_PHOTOS_DEBUG) {
+        console.log('[TripPhotos] identity:clear state (missing activeTrip user_id or id)', {
+          routeParamId: id,
+        });
+      }
       setTripPhotos([]);
-    } finally {
-      setTripPhotosLoading(false);
+      lastTripPhotosIdentityRef.current = null;
+      warmTripPhotosKeyRef.current = null;
+      return;
     }
+    const uid = activeTrip.user_id;
+    const tid = activeTrip.id;
+    const identity = `${uid}:${tid}`;
+    if (lastTripPhotosIdentityRef.current === identity) {
+      return;
+    }
+    lastTripPhotosIdentityRef.current = identity;
+    warmTripPhotosKeyRef.current = null;
+    const cached = getSessionTripPhotos(uid, tid);
+    if (TRIP_PHOTOS_DEBUG) {
+      console.log('[TripPhotos] identity:hydrate', {
+        identity,
+        routeParamId: id,
+        routeMatchesTid: tid === id,
+        authUserId: user?.id,
+        cacheHit: cached !== undefined,
+        cachedCount: cached?.length ?? null,
+        cacheKeysNow: getTripPhotosCacheDebugKeys(),
+      });
+    }
+    setTripPhotos(cached !== undefined ? cached : []);
   }, [activeTrip?.id, activeTrip?.user_id]);
 
   useEffect(() => {
-    if (activeTrip && activeTab === 'photos') loadTripPhotos();
-  }, [activeTrip, activeTab, loadTripPhotos]);
+    if (!activeTrip?.id || !activeTrip?.user_id || activeTab !== 'photos') return;
+    const uid = activeTrip.user_id;
+    const tid = activeTrip.id;
+    const key = `${uid}:${tid}`;
+    /** Read Map directly — React state/ref from identity effect may not have flushed yet this commit. */
+    const cachedList = getSessionTripPhotos(uid, tid);
+    if (cachedList !== undefined) {
+      setTripPhotos(cachedList);
+    }
+    const hasSessionCache = cachedList !== undefined;
+    const hasWarmedThisTrip = warmTripPhotosKeyRef.current === key;
+    const hasRowsAlready = tripPhotosRowCountRef.current > 0;
+    const showBlockingSpinner = !hasSessionCache && !hasWarmedThisTrip && !hasRowsAlready;
+    if (TRIP_PHOTOS_DEBUG) {
+      console.log('[TripPhotos] photosTabEffect', {
+        key,
+        routeParamId: id,
+        routeMatchesTid: tid === id,
+        hasSessionCache,
+        cachedCount: cachedList?.length ?? null,
+        hasWarmedThisTrip,
+        warmKey: warmTripPhotosKeyRef.current,
+        rowCountRef: tripPhotosRowCountRef.current,
+        showBlockingSpinner,
+        allCacheKeys: getTripPhotosCacheDebugKeys(),
+      });
+    }
+    void refreshTripPhotos(showBlockingSpinner);
+  }, [activeTrip?.id, activeTrip?.user_id, activeTab, refreshTripPhotos, id]);
+
+  useEffect(() => {
+    if (!TRIP_PHOTOS_DEBUG) return;
+    if (activeTab !== 'photos' || !activeTrip?.id) return;
+    const blocking = tripPhotosLoading && tripPhotos.length === 0;
+    if (blocking) {
+      console.log('[TripPhotos] UI:blockingSpinner visible', {
+        tripPhotosLoading,
+        tripPhotoCount: tripPhotos.length,
+        sharedSession: !!activeTrip.shared_session_id,
+        tid: activeTrip.id,
+        routeParamId: id,
+        tripOwnerId: activeTrip.user_id,
+        authUserId: user?.id,
+        cacheKeys: getTripPhotosCacheDebugKeys(),
+      });
+    }
+  }, [
+    activeTab,
+    activeTrip?.id,
+    activeTrip?.shared_session_id,
+    activeTrip?.user_id,
+    tripPhotosLoading,
+    tripPhotos.length,
+    id,
+    user?.id,
+  ]);
+
+  useEffect(() => {
+    if (tripPhotoViewerIndex == null) return;
+    if (tripPhotos.length === 0) {
+      setTripPhotoViewerIndex(null);
+      return;
+    }
+    if (tripPhotoViewerIndex >= tripPhotos.length) {
+      setTripPhotoViewerIndex(tripPhotos.length - 1);
+    }
+  }, [tripPhotoViewerIndex, tripPhotos.length]);
+
+  const tripPhotoViewerSlides = useMemo(
+    () => photosToViewerSlides(tripPhotos, activeTrip?.location?.name),
+    [tripPhotos, activeTrip?.location?.name],
+  );
+
+  const tripPhotoViewerSlidesFull = useMemo(() => {
+    if (tripPhotoViewerIndex != null && tripPhotos.length > 0) {
+      return tripPhotoViewerSlides;
+    }
+    if (fullScreenPhoto) {
+      return [
+        {
+          remoteUri: fullScreenPhoto.url,
+          location: fullScreenPhoto.location,
+          fly: fullScreenPhoto.fly,
+          date: fullScreenPhoto.date,
+          species: fullScreenPhoto.species,
+          caption: fullScreenPhoto.caption,
+        },
+      ];
+    }
+    return [];
+  }, [tripPhotoViewerIndex, tripPhotos.length, tripPhotoViewerSlides, fullScreenPhoto]);
+
+  const tripPhotoViewerVisible = tripPhotoViewerSlidesFull.length > 0;
+  const tripPhotoViewerActiveIndex = tripPhotoViewerIndex ?? 0;
+
+  const closeTripPhotoViewer = useCallback(() => {
+    setTripPhotoViewerIndex(null);
+    setFullScreenPhoto(null);
+  }, []);
+
+  const onTripPhotoViewerIndexChange = useCallback((next: number) => {
+    setTripPhotoViewerIndex((prev) => (prev != null ? next : prev));
+  }, []);
 
   const historicalAiMessages = useMemo(() => aiQueryEventsToChatMessages(events), [events]);
   const displayAiMessages = useMemo(
@@ -420,7 +620,7 @@ export default function TripDashboardScreen() {
         { isOnline: isConnected },
       );
       setTripPhotoUri(null);
-      await loadTripPhotos();
+      await refreshTripPhotos(false);
     } catch (e) {
       if (e instanceof PhotoQueuedOfflineError) {
         Alert.alert('Saved on device', 'Photo will upload when you\'re back online.');
@@ -431,7 +631,7 @@ export default function TripDashboardScreen() {
     } finally {
       setTripPhotoUploading(false);
     }
-  }, [activeTrip?.id, activeTrip?.user_id, tripPhotoUri, tripPhotoCaption, tripPhotoSpecies, currentFly, loadTripPhotos, isConnected]);
+  }, [activeTrip?.id, activeTrip?.user_id, tripPhotoUri, tripPhotoCaption, tripPhotoSpecies, currentFly, refreshTripPhotos, isConnected]);
 
   const handleCancelTripPhoto = useCallback(() => {
     setTripPhotoUri(null);
@@ -443,6 +643,7 @@ export default function TripDashboardScreen() {
     const data = event.data as CatchData;
     const hero = getCatchHeroPhotoUrl(data);
     if (!hero) return;
+    setTripPhotoViewerIndex(null);
     setFullScreenPhoto({
       url: hero,
       location: activeTrip?.location?.name ?? undefined,
@@ -453,15 +654,12 @@ export default function TripDashboardScreen() {
   }, [activeTrip?.location?.name]);
 
   const handleTripPhotoPress = useCallback((photo: Photo) => {
-    setFullScreenPhoto({
-      url: photo.url,
-      location: activeTrip?.location?.name ?? undefined,
-      fly: [photo.fly_pattern, photo.fly_size ? `#${photo.fly_size}` : null, photo.fly_color].filter(Boolean).join(' ') || undefined,
-      date: (photo.captured_at || photo.created_at) ? formatTripDate(photo.captured_at || photo.created_at!) : undefined,
-      species: photo.species ?? undefined,
-      caption: photo.caption ?? undefined,
-    });
-  }, [activeTrip?.location?.name]);
+    const i = tripPhotos.findIndex((p) => p.id === photo.id);
+    if (i >= 0) {
+      setFullScreenPhoto(null);
+      setTripPhotoViewerIndex(i);
+    }
+  }, [tripPhotos]);
 
   /** Presentation for current fly: from user fly box or COMMON_FLIES. */
   const getPresentationForCurrentFly = useCallback((): PresentationMethod | null => {
@@ -860,61 +1058,16 @@ export default function TripDashboardScreen() {
         </Pressable>
       </Modal>
 
-      {/* Full-screen photo view — same as photo library: tap thumbnail to open */}
-      <Modal
-        visible={fullScreenPhoto != null}
-        animationType="fade"
-        transparent
-        statusBarTranslucent
-        onRequestClose={() => setFullScreenPhoto(null)}
-      >
-        <View style={[styles.fullScreenPhotoWrap, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
-          <Pressable
-            style={[styles.fullScreenPhotoClose, { top: insets.top + Spacing.sm }]}
-            onPress={() => setFullScreenPhoto(null)}
-          >
-            <MaterialCommunityIcons name="close" size={28} color={colors.textInverse} />
-          </Pressable>
-          {fullScreenPhoto && (
-            <ScrollView
-              style={styles.fullScreenPhotoScroll}
-              contentContainerStyle={[styles.fullScreenPhotoScrollContent, { paddingBottom: insets.bottom + Spacing.xl }]}
-              showsVerticalScrollIndicator={false}
-            >
-              <Image
-                source={{ uri: fullScreenPhoto.url }}
-                style={[styles.fullScreenPhotoImage, { width: Dimensions.get('window').width, height: Math.round(Dimensions.get('window').height * 0.55) }]}
-                resizeMode="contain"
-              />
-              <View style={styles.fullScreenPhotoInfo}>
-                {fullScreenPhoto.location ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={colors.textInverse} /> {fullScreenPhoto.location}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.fly ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="hook" size={16} color={colors.textInverse} /> {fullScreenPhoto.fly}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.date ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialIcons name="calendar-today" size={16} color={colors.textInverse} /> {fullScreenPhoto.date}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.species ? (
-                  <Text style={styles.fullScreenPhotoInfoRow}>
-                    <MaterialCommunityIcons name="fish" size={16} color={colors.textInverse} /> {fullScreenPhoto.species}
-                  </Text>
-                ) : null}
-                {fullScreenPhoto.caption ? (
-                  <Text style={styles.fullScreenPhotoCaption}>{fullScreenPhoto.caption}</Text>
-                ) : null}
-              </View>
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
+      <TripFullScreenPhotoViewerModal
+        visible={tripPhotoViewerVisible}
+        onClose={closeTripPhotoViewer}
+        slides={tripPhotoViewerSlidesFull}
+        index={tripPhotoViewerActiveIndex}
+        onIndexChange={onTripPhotoViewerIndexChange}
+        paddingTop={effectiveTop}
+        paddingBottom={insets.bottom}
+        closeButtonTop={insets.top + Spacing.sm}
+      />
 
       <Modal
         visible={tripAiModalVisible}
@@ -1699,7 +1852,7 @@ function PhotosTab({
           )}
         </Pressable>
       </View>
-      {loading ? (
+      {loading && tripPhotos.length === 0 ? (
         <View style={styles.photosTabPlaceholder}>
           <ActivityIndicator color={colors.primary} />
         </View>
@@ -2975,41 +3128,6 @@ function createTripDashboardStyles(colors: ThemeColors) {
     fontSize: FontSize.md,
     fontWeight: '600',
     color: colors.textInverse,
-  },
-  fullScreenPhotoWrap: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-  },
-  fullScreenPhotoClose: {
-    position: 'absolute',
-    right: Spacing.lg,
-    zIndex: 10,
-    padding: Spacing.sm,
-  },
-  fullScreenPhotoScroll: {
-    flex: 1,
-  },
-  fullScreenPhotoScrollContent: {
-    flexGrow: 1,
-  },
-  fullScreenPhotoImage: {
-    marginTop: Spacing.sm,
-  },
-  fullScreenPhotoInfo: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xl,
-    gap: Spacing.xs,
-  },
-  fullScreenPhotoInfoRow: {
-    fontSize: FontSize.md,
-    color: colors.textInverse,
-    marginBottom: Spacing.xs,
-  },
-  fullScreenPhotoCaption: {
-    fontSize: FontSize.sm,
-    color: colors.textTertiary,
-    marginTop: Spacing.xs,
   },
   catchModalInput: {
     backgroundColor: colors.background,

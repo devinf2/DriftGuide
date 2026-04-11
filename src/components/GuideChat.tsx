@@ -25,9 +25,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/** Tab bar (icons + labels + safe padding) sits below the home scene; KAV must offset it or iOS adds excess bottom inset above the keyboard. */
-const TAB_SCENE_KEYBOARD_OFFSET_IOS = 56;
-
 export interface Message {
   id: string;
   role: 'user' | 'ai';
@@ -278,10 +275,11 @@ export default function GuideChat({
     }
   };
 
+  // iOS: offset must match top inset on this view only. Extra “tab bar” fudge here
+  // increases KeyboardAvoidingView bottom padding (RN: keyboardY = screenY - offset),
+  // which shows up as a gap between the composer and the keyboard on tab screens.
   const keyboardVerticalOffsetIos =
-    variant === 'full'
-      ? contentTopPadding + TAB_SCENE_KEYBOARD_OFFSET_IOS
-      : Math.max(insets.top, 64);
+    variant === 'full' ? contentTopPadding : Math.max(insets.top, 64);
 
   return (
     <KeyboardAvoidingView

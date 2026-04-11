@@ -1,5 +1,15 @@
 import type { FlyChangeData, Trip, TripEvent, TripEventWithSource } from '@/src/types';
 
+function parseTripEventCoord(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 /**
  * `trip_events.data` is JSONB; some paths return it as a JSON string. Coerce so UI and totals work.
  */
@@ -21,7 +31,12 @@ export function coerceTripEventDataObject(event: TripEvent): Record<string, unkn
 
 export function normalizeTripEventForClient(e: TripEvent): TripEvent {
   const obj = coerceTripEventDataObject(e);
-  return { ...e, data: obj as TripEvent['data'] };
+  return {
+    ...e,
+    data: obj as TripEvent['data'],
+    latitude: parseTripEventCoord(e.latitude),
+    longitude: parseTripEventCoord(e.longitude),
+  };
 }
 
 /** Single place for journal / summary timeline row titles (handles stringified `data`). */

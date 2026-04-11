@@ -126,6 +126,18 @@ export function SharedTripPhotosSection({
     [myTripPhotos, trip.id],
   );
 
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+    const youTabSpinner =
+      myPhotosLoading && photosMode === trip.id && myTripPhotosOnly.length === 0;
+    if (youTabSpinner) {
+      console.log('[TripPhotos] SharedSection You-tab blocking spinner', {
+        tripId: trip.id,
+        myTripPhotosOnlyLen: myTripPhotosOnly.length,
+      });
+    }
+  }, [myPhotosLoading, photosMode, trip.id, myTripPhotosOnly.length]);
+
   const loadGroup = useCallback(async () => {
     if (!sessionId || !isConnected) {
       setGroupPhotosRemote([]);
@@ -334,13 +346,18 @@ export function SharedTripPhotosSection({
           </View>
         ) : null}
 
-        {!offlineBlock && myPhotosLoading && photosMode === trip.id ? (
+        {!offlineBlock &&
+        myPhotosLoading &&
+        photosMode === trip.id &&
+        myTripPhotosOnly.length === 0 ? (
           <View style={styles.placeholder}>
             <ActivityIndicator color={colors.primary} />
           </View>
         ) : null}
 
-        {!offlineBlock && !(myPhotosLoading && photosMode === trip.id) && displayPhotos.length === 0 ? (
+        {!offlineBlock &&
+        !(myPhotosLoading && photosMode === trip.id && myTripPhotosOnly.length === 0) &&
+        displayPhotos.length === 0 ? (
           onAddPhoto && photosMode === trip.id ? (
             <Pressable
               style={[styles.empty, { backgroundColor: colors.surface, borderColor: colors.border }]}
@@ -360,7 +377,9 @@ export function SharedTripPhotosSection({
           )
         ) : null}
 
-        {!offlineBlock && !(myPhotosLoading && photosMode === trip.id) && displayPhotos.length > 0 ? (
+        {!offlineBlock &&
+        !(myPhotosLoading && photosMode === trip.id && myTripPhotosOnly.length === 0) &&
+        displayPhotos.length > 0 ? (
           <View style={styles.grid}>
             {displayPhotos.map((photo) => (
               <Pressable key={photo.id} onPress={() => onPhotoPress(photo)}>

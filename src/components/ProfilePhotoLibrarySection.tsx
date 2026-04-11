@@ -15,13 +15,16 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { getPinnedTripIds } from '@/src/services/tripPhotoOfflineCache';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Modal,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -33,6 +36,10 @@ import {
 } from 'react-native';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  getSessionProfilePhotos,
+  setSessionProfilePhotos,
+} from '@/src/utils/profilePhotosSessionCache';
 
 const NUM_COLS = 3;
 /** Tighter grid; must match profile tab horizontal scroll padding. */
@@ -76,7 +83,8 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   const photoModalHeroHeight = useMemo(() => Math.round(winHeight * 0.55), [winHeight]);
 
   const [photos, setPhotos] = useState<PhotoWithTrip[]>([]);
-  const [loading, setLoading] = useState(true);
+  /** Full-screen spinner only when this session has no cached grid yet for `albumOwnerId`. */
+  const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [selectedFlyPatterns, setSelectedFlyPatterns] = useState<string[]>([]);
@@ -85,7 +93,8 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   const [dateTo, setDateTo] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<'location' | 'fly' | 'species' | null>(null);
-  const [selectedPhoto, setSelectedPhoto] = useState<PhotoWithTrip | null>(null);
+  /** Index into `filteredPhotos` while the full-screen viewer is open; `null` = closed. */
+  const [photoViewerIndex, setPhotoViewerIndex] = useState<number | null>(null);
   const [addPhotoUri, setAddPhotoUri] = useState<string | null>(null);
   const [addPhotoCaption, setAddPhotoCaption] = useState('');
   const [addPhotoSpecies, setAddPhotoSpecies] = useState('');
@@ -105,25 +114,45 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   const loadPhotos = useCallback(async () => {
     if (!albumOwnerId) return;
     const seq = ++loadPhotosSeqRef.current;
-    setLoading(true);
+    const cached = getSessionProfilePhotos(albumOwnerId);
+    if (cached !== undefined) {
+      setPhotos(cached);
+    }
+    const blockingSpinner = cached === undefined;
+    if (blockingSpinner) {
+      setLoading(true);
+    }
     try {
       const pinnedIds = await getPinnedTripIds();
       if (seq !== loadPhotosSeqRef.current) return;
       setHasTripsSavedForOffline(pinnedIds.length > 0);
       if (!isConnected) {
-        setPhotos([]);
+        if (cached !== undefined) {
+          setPhotos(cached);
+        } else {
+          setPhotos([]);
+        }
         return;
       }
       const list = await fetchPhotosWithTrip(albumOwnerId);
       if (seq !== loadPhotosSeqRef.current) return;
       setPhotos(list);
+      setSessionProfilePhotos(albumOwnerId, list);
     } catch (e) {
       if (seq !== loadPhotosSeqRef.current) return;
       if (!isConnected) {
-        setPhotos([]);
+        if (cached !== undefined) {
+          setPhotos(cached);
+        } else {
+          setPhotos([]);
+        }
       } else {
         Alert.alert('Error', (e as Error).message);
-        setPhotos([]);
+        if (cached !== undefined) {
+          setPhotos(cached);
+        } else {
+          setPhotos([]);
+        }
       }
     } finally {
       if (seq === loadPhotosSeqRef.current) {
@@ -132,8 +161,24 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     }
   }, [albumOwnerId, isConnected]);
 
+  /** Hydrate from session cache before paint when owner changes; avoids empty / spinner flash on revisit. */
+  useLayoutEffect(() => {
+    if (!albumOwnerId) {
+      setPhotos([]);
+      setLoading(false);
+      return;
+    }
+    const c = getSessionProfilePhotos(albumOwnerId);
+    if (c !== undefined) {
+      setPhotos(c);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+  }, [albumOwnerId]);
+
   const isFocused = useIsFocused();
-  /** One entry point: focus + `loadPhotos` identity (owner, connectivity) replaces useFocusEffect + duplicate effect. */
+  /** Refetch on focus / pull-to-refresh; blocking UI only when no session cache for this owner. */
   useEffect(() => {
     if (!isFocused) return;
     void loadPhotos();
@@ -218,6 +263,53 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     selectedSpecies.length > 0 ||
     dateFrom.trim() !== '' ||
     dateTo.trim() !== '';
+
+  const viewerPhoto = useMemo(() => {
+    if (photoViewerIndex == null) return null;
+    return filteredPhotos[photoViewerIndex] ?? null;
+  }, [photoViewerIndex, filteredPhotos]);
+
+  const photoPagerRef = useRef<FlatList<PhotoWithTrip>>(null);
+
+  useEffect(() => {
+    if (photoViewerIndex == null) return;
+    if (filteredPhotos.length === 0) {
+      setPhotoViewerIndex(null);
+      return;
+    }
+    const max = filteredPhotos.length - 1;
+    if (photoViewerIndex > max) {
+      const next = max;
+      setPhotoViewerIndex(next);
+      requestAnimationFrame(() => {
+        try {
+          photoPagerRef.current?.scrollToIndex({ index: next, animated: false });
+        } catch {
+          /* layout not ready */
+        }
+      });
+    }
+  }, [filteredPhotos.length, photoViewerIndex]);
+
+  const getPhotoPagerItemLayout = useCallback(
+    (_data: ArrayLike<PhotoWithTrip> | null | undefined, index: number) => ({
+      length: winWidth,
+      offset: winWidth * index,
+      index,
+    }),
+    [winWidth],
+  );
+
+  const onPhotoPagerMomentumEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (winWidth <= 0 || filteredPhotos.length <= 1) return;
+      const page = Math.round(e.nativeEvent.contentOffset.x / winWidth);
+      if (page >= 0 && page < filteredPhotos.length) {
+        setPhotoViewerIndex(page);
+      }
+    },
+    [winWidth, filteredPhotos.length],
+  );
 
   const toggleLocation = useCallback((id: string) => {
     setSelectedLocationIds((prev) =>
@@ -324,8 +416,12 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
                 setDeletingPhotoId(photo.id);
                 try {
                   await deletePhoto(photo.id, user.id);
-                  setSelectedPhoto(null);
-                  setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+                  setPhotoViewerIndex(null);
+                  setPhotos((prev) => {
+                    const next = prev.filter((p) => p.id !== photo.id);
+                    if (albumOwnerId) setSessionProfilePhotos(albumOwnerId, next);
+                    return next;
+                  });
                 } catch (e) {
                   Alert.alert('Could not delete', (e as Error).message);
                 } finally {
@@ -337,7 +433,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
         ],
       );
     },
-    [user?.id, isConnected],
+    [user?.id, isConnected, albumOwnerId],
   );
 
   return (
@@ -415,7 +511,10 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
               <Pressable
                 key={photo.id}
                 style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
-                onPress={() => setSelectedPhoto(photo)}
+                onPress={() => {
+                  const i = filteredPhotos.findIndex((p) => p.id === photo.id);
+                  if (i >= 0) setPhotoViewerIndex(i);
+                }}
               >
                 <OfflineTripPhotoImage
                   remoteUri={photo.url}
@@ -717,20 +816,20 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
       </Modal>
 
       <Modal
-        visible={selectedPhoto != null}
+        visible={viewerPhoto != null}
         animationType="fade"
         transparent
         statusBarTranslucent
-        onRequestClose={() => setSelectedPhoto(null)}
+        onRequestClose={() => setPhotoViewerIndex(null)}
       >
         <View style={[styles.fullScreenPhoto, { paddingTop: effectiveTop, paddingBottom: insets.bottom }]}>
           <Pressable
             style={[styles.fullScreenClose, { top: insets.top + Spacing.sm }]}
-            onPress={() => setSelectedPhoto(null)}
+            onPress={() => setPhotoViewerIndex(null)}
           >
             <MaterialCommunityIcons name="close" size={28} color={colors.textInverse} />
           </Pressable>
-          {selectedPhoto && (
+          {viewerPhoto && (
             <ScrollView
               style={styles.fullScreenScroll}
               contentContainerStyle={[
@@ -739,7 +838,38 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
               ]}
               showsVerticalScrollIndicator={false}
             >
-              {Platform.OS === 'ios' ? (
+              {filteredPhotos.length > 1 ? (
+                <FlatList
+                  ref={photoPagerRef}
+                  data={filteredPhotos}
+                  horizontal
+                  pagingEnabled
+                  keyExtractor={(item) => item.id}
+                  showsHorizontalScrollIndicator={false}
+                  style={[styles.photoPager, { height: photoModalHeroHeight }]}
+                  initialScrollIndex={photoViewerIndex ?? 0}
+                  getItemLayout={getPhotoPagerItemLayout}
+                  onMomentumScrollEnd={onPhotoPagerMomentumEnd}
+                  onScrollToIndexFailed={({ index }) => {
+                    setTimeout(() => {
+                      try {
+                        photoPagerRef.current?.scrollToIndex({ index, animated: false });
+                      } catch {
+                        /* ignore */
+                      }
+                    }, 50);
+                  }}
+                  renderItem={({ item }) => (
+                    <View style={[styles.photoPagerPage, { width: winWidth, height: photoModalHeroHeight }]}>
+                      <OfflineTripPhotoImage
+                        remoteUri={item.url}
+                        style={{ width: winWidth, height: photoModalHeroHeight }}
+                        contentFit="contain"
+                      />
+                    </View>
+                  )}
+                />
+              ) : Platform.OS === 'ios' ? (
                 <ScrollView
                   style={[styles.fullScreenZoomViewport, { width: winWidth, height: photoModalHeroHeight }]}
                   contentContainerStyle={{ width: winWidth, height: photoModalHeroHeight }}
@@ -752,7 +882,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
                 >
                   <View style={{ width: winWidth, height: photoModalHeroHeight }}>
                     <OfflineTripPhotoImage
-                      remoteUri={selectedPhoto.url}
+                      remoteUri={viewerPhoto.url}
                       style={{ width: winWidth, height: photoModalHeroHeight }}
                       contentFit="contain"
                     />
@@ -760,54 +890,59 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
                 </ScrollView>
               ) : (
                 <OfflineTripPhotoImage
-                  remoteUri={selectedPhoto.url}
+                  remoteUri={viewerPhoto.url}
                   style={[styles.fullScreenImage, { width: winWidth, height: photoModalHeroHeight }]}
                   contentFit="contain"
                 />
               )}
               <View style={styles.photoInfo}>
-                {selectedPhoto.trip?.location?.name ? (
-                  <Text style={styles.photoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={16} color={colors.textInverse} />{' '}
-                    {selectedPhoto.trip.location.name}
+                {filteredPhotos.length > 1 ? (
+                  <Text style={styles.photoPagerCount}>
+                    {`${(photoViewerIndex ?? 0) + 1} / ${filteredPhotos.length}`}
                   </Text>
                 ) : null}
-                {selectedPhoto.fly_pattern || selectedPhoto.fly_size || selectedPhoto.fly_color ? (
+                {viewerPhoto.trip?.location?.name ? (
+                  <Text style={styles.photoInfoRow}>
+                    <MaterialCommunityIcons name="map-marker" size={16} color={colors.textInverse} />{' '}
+                    {viewerPhoto.trip.location.name}
+                  </Text>
+                ) : null}
+                {viewerPhoto.fly_pattern || viewerPhoto.fly_size || viewerPhoto.fly_color ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="hook" size={16} color={colors.textInverse} />{' '}
                     {[
-                      selectedPhoto.fly_pattern,
-                      selectedPhoto.fly_size ? `#${selectedPhoto.fly_size}` : null,
-                      selectedPhoto.fly_color,
+                      viewerPhoto.fly_pattern,
+                      viewerPhoto.fly_size ? `#${viewerPhoto.fly_size}` : null,
+                      viewerPhoto.fly_color,
                     ]
                       .filter(Boolean)
                       .join(' ')}
                   </Text>
                 ) : null}
-                {selectedPhoto.captured_at || selectedPhoto.created_at ? (
+                {viewerPhoto.captured_at || viewerPhoto.created_at ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="calendar" size={16} color={colors.textInverse} />{' '}
-                    {format(new Date(selectedPhoto.captured_at || selectedPhoto.created_at!), 'MMM d, yyyy')}
+                    {format(new Date(viewerPhoto.captured_at || viewerPhoto.created_at!), 'MMM d, yyyy')}
                   </Text>
                 ) : null}
-                {selectedPhoto.species ? (
+                {viewerPhoto.species ? (
                   <Text style={styles.photoInfoRow}>
                     <MaterialCommunityIcons name="fish" size={16} color={colors.textInverse} />{' '}
-                    {selectedPhoto.species}
+                    {viewerPhoto.species}
                   </Text>
                 ) : null}
-                {selectedPhoto.caption ? (
-                  <Text style={styles.photoInfoCaption}>{selectedPhoto.caption}</Text>
+                {viewerPhoto.caption ? (
+                  <Text style={styles.photoInfoCaption}>{viewerPhoto.caption}</Text>
                 ) : null}
                 {!readOnlyAlbum ? (
                   <Pressable
                     style={styles.deletePhotoButton}
-                    onPress={() => handleConfirmDeletePhoto(selectedPhoto)}
-                    disabled={deletingPhotoId === selectedPhoto.id}
+                    onPress={() => handleConfirmDeletePhoto(viewerPhoto)}
+                    disabled={deletingPhotoId === viewerPhoto.id}
                     accessibilityRole="button"
                     accessibilityLabel="Delete photo"
                   >
-                    {deletingPhotoId === selectedPhoto.id ? (
+                    {deletingPhotoId === viewerPhoto.id ? (
                       <ActivityIndicator size="small" color={colors.error} />
                     ) : (
                       <>
@@ -1118,6 +1253,22 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
   },
   fullScreenImage: {
     marginTop: Spacing.sm,
+  },
+  /** Horizontal pager in full-screen viewer (`filteredPhotos.length > 1`). */
+  photoPager: {
+    marginTop: Spacing.sm,
+    flexGrow: 0,
+  },
+  photoPagerPage: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoPagerCount: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: colors.textTertiary,
+    marginBottom: Spacing.sm,
+    textAlign: 'center',
   },
   /** iOS: single child for UIScrollView pinch zoom (see full-screen photo modal). */
   fullScreenZoomViewport: {

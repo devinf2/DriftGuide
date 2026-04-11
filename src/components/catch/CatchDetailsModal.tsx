@@ -94,6 +94,21 @@ function buildFlyChangePayload(primary: FlyChangeData, dropper: FlyChangeData | 
   return base;
 }
 
+/** Read lat/lon for submit: text fields win over possibly stale pin state (syncPinFromText + setState is async). */
+function resolveCatchFormCoords(
+  latText: string,
+  lonText: string,
+  pinLat: number | null,
+  pinLon: number | null,
+): { lat: number | null; lon: number | null } {
+  const la = latText.trim() ? Number(latText.trim()) : NaN;
+  const lo = lonText.trim() ? Number(lonText.trim()) : NaN;
+  if (Number.isFinite(la) && Number.isFinite(lo)) {
+    return { lat: la, lon: lo };
+  }
+  return { lat: pinLat, lon: pinLon };
+}
+
 function flyDataMatches(a: FlyChangeData, b: FlyChangeData): boolean {
   return (
     a.pattern === b.pattern &&
@@ -822,6 +837,9 @@ export function CatchDetailsModal({
       setLatText(laOk != null ? String(laOk) : '');
       setLonText(loOk != null ? String(loOk) : '');
       setEditPinFormSynced(true);
+      if (laOk != null && loOk != null) {
+        setCoordRecenterTick((t) => t + 1);
+      }
       if (trip.imported) {
         const ts = Date.parse(ev.timestamp);
         setImportCatchAt(Number.isNaN(ts) ? new Date() : new Date(ts));
@@ -957,10 +975,6 @@ export function CatchDetailsModal({
     if (!visible || mode !== 'add' || !catchFlyName?.trim() || !getPresentationForFly) return;
     setCatchPresentation(getPresentationForFly(catchFlyName, catchFlySize, catchFlyColor));
   }, [visible, mode, catchFlyName, catchFlySize, catchFlyColor, getPresentationForFly]);
-
-  useEffect(() => {
-    setCoordRecenterTick(0);
-  }, [editTargetCatch?.id]);
 
   const syncPinFromText = useCallback(() => {
     const la = latText.trim() ? Number(latText.trim()) : NaN;
@@ -1265,9 +1279,11 @@ export function CatchDetailsModal({
     const species = catchSpecies.trim() || null;
     const sizeNum = catchSize.trim() ? parseFloat(catchSize.trim()) : null;
     const depthNum = catchDepth.trim() ? parseFloat(catchDepth.trim()) : null;
-    syncPinFromText();
-    const lat = pinLat;
-    const lon = pinLon;
+    const { lat, lon } = resolveCatchFormCoords(latText, lonText, pinLat, pinLon);
+    if (lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)) {
+      setPinLat(lat);
+      setPinLon(lon);
+    }
 
     setSubmitting(true);
     try {
