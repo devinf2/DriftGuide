@@ -9,6 +9,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "test": "vitest run",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -50,7 +51,8 @@
     "@types/react": "~19.1.10",
     "@types/uuid": "^10.0.0",
     "patch-package": "^8.0.1",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
   },
   "private": true
 }

@@ -22,6 +22,8 @@ import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/T
 import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
 import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
 import { GuideLocationRecommendationCards } from '@/src/components/GuideLocationRecommendationCards';
+import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
+import { OfflineGuideActionStack } from '@/src/components/OfflineGuideActionStack';
 import { SpotTaggedText } from '@/src/components/SpotTaggedText';
 import type { GuideIntelSource, GuideLocationRecommendation } from '@/src/services/guideIntelContract';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
@@ -45,7 +47,15 @@ import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constan
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
-import { askAI, getSeason, getSpotFishingSummary, getSpotHowToFish, getTimeOfDay } from '@/src/services/ai';
+import {
+  askAI,
+  buildOfflineGuideSections,
+  getSeason,
+  getSpotFishingSummary,
+  getSpotHowToFish,
+  getTimeOfDay,
+  type OfflineGuideSections,
+} from '@/src/services/ai';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
 import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
@@ -109,6 +119,8 @@ type TripGuideChatMessage = {
   id: string;
   role: 'user' | 'ai';
   text: string;
+  /** When true, render as a reference card below the main offline answer. */
+  isOfflineSupplement?: boolean;
   linkedSpots?: { id: string; name: string }[];
   ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
   webSources?: GuideIntelSource[];
@@ -140,6 +152,15 @@ function aiQueryEventsToChatMessages(events: TripEvent[]): TripGuideChatMessage[
               sourcesFetchedAt: ws[0]?.fetchedAt ?? ev.timestamp,
             }
           : {}),
+      });
+    }
+    const sup = typeof d.supplementResponse === 'string' ? d.supplementResponse.trim() : '';
+    if (sup) {
+      rows.push({
+        id: `${ev.id}-a2`,
+        role: 'ai',
+        text: sup,
+        isOfflineSupplement: true,
       });
     }
   }
@@ -230,6 +251,8 @@ export default function TripDashboardScreen() {
   const [strategyLoading, setStrategyLoading] = useState(false);
   /** Avoid re-calling spot summary APIs every time the trip guide modal opens. */
   const strategyFetchedForTripIdRef = useRef<string | null>(null);
+  const [offlineGuideSections, setOfflineGuideSections] = useState<OfflineGuideSections | null>(null);
+  const [offlineGuideLoading, setOfflineGuideLoading] = useState(false);
 
   /** Fly names for picker: from Fly Box when available, else default list */
   const flyPickerNames = userFlies.length > 0
@@ -575,6 +598,72 @@ export default function TripDashboardScreen() {
       cancelled = true;
     };
   }, [tripAiModalVisible, activeTrip?.id, activeTrip?.location?.id, activeTrip?.location?.name, weatherData, waterFlowData]);
+
+  useEffect(() => {
+    if (!tripAiModalVisible || isConnected || !activeTrip) {
+      setOfflineGuideSections(null);
+      setOfflineGuideLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setOfflineGuideLoading(true);
+    setOfflineGuideSections(null);
+    void (async () => {
+      const now = new Date();
+      const primaryStr = currentFly
+        ? `${currentFly.pattern}${currentFly.size ? ` #${currentFly.size}` : ''}${currentFly.color ? ` (${currentFly.color})` : ''}`
+        : null;
+      const dropperStr = currentFly2
+        ? `${currentFly2.pattern}${currentFly2.size ? ` #${currentFly2.size}` : ''}${currentFly2.color ? ` (${currentFly2.color})` : ''}`
+        : null;
+      try {
+        const base = {
+          location: activeTrip.location || null,
+          fishingType: activeTrip.fishing_type || 'fly',
+          weather: weatherData,
+          waterFlow: waterFlowData,
+          currentFly: primaryStr,
+          currentFly2: dropperStr,
+          fishCount,
+          recentEvents: events,
+          timeOfDay: getTimeOfDay(now),
+          season: getSeason(now),
+          userFlies: userFlies.length > 0 ? userFlies : undefined,
+        };
+        const ctx = await enrichContextWithLocationCatchData(base, {
+          question: '',
+          locations,
+          userId: activeTrip.user_id ?? null,
+          userLat: userProxRefForAI.current?.[1] ?? null,
+          userLng: userProxRefForAI.current?.[0] ?? null,
+          referenceDate: now,
+        });
+        if (!cancelled) setOfflineGuideSections(buildOfflineGuideSections(ctx, ''));
+      } catch {
+        if (!cancelled) setOfflineGuideSections(null);
+      } finally {
+        if (!cancelled) setOfflineGuideLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tripAiModalVisible,
+    isConnected,
+    activeTrip?.id,
+    activeTrip?.location,
+    activeTrip?.user_id,
+    activeTrip?.fishing_type,
+    weatherData,
+    waterFlowData,
+    currentFly,
+    currentFly2,
+    fishCount,
+    events,
+    userFlies,
+    locations,
+  ]);
 
   useEffect(() => {
     if (!tripAiModalVisible) return;
@@ -980,6 +1069,7 @@ export default function TripDashboardScreen() {
           fetchedAt: s.fetchedAt,
           excerpt: s.excerpt,
         })),
+        response.supplementText ?? null,
       );
 
       setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 100);
@@ -1160,6 +1250,10 @@ export default function TripDashboardScreen() {
             scrollRef={aiScrollRef}
             styles={styles}
             colors={colors}
+            isOffline={!isConnected}
+            offlineSections={offlineGuideSections}
+            offlineLoading={offlineGuideLoading}
+            strategyLoading={strategyLoading}
           />
         </SafeAreaView>
       </Modal>
@@ -1172,11 +1266,6 @@ export default function TripDashboardScreen() {
           </Text>
         </View>
         <View style={styles.headerRight}>
-          {!isConnected && (
-            <View style={styles.offlineBadge}>
-              <Text style={styles.offlineBadgeText}>Offline</Text>
-            </View>
-          )}
           <Pressable
             style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1, marginRight: Spacing.sm }]}
             onPress={() => setPeopleSheetVisible(true)}
@@ -2221,6 +2310,10 @@ function AIGuideTab({
   strategySlot,
   styles,
   colors,
+  isOffline,
+  offlineSections,
+  offlineLoading,
+  strategyLoading,
 }: {
   messages: TripGuideChatMessage[];
   input: string;
@@ -2231,7 +2324,90 @@ function AIGuideTab({
   strategySlot?: ReactNode;
   styles: any;
   colors: ThemeColors;
+  isOffline?: boolean;
+  offlineSections?: OfflineGuideSections | null;
+  offlineLoading?: boolean;
+  strategyLoading?: boolean;
 }) {
+  const chatMessages = messages.map((msg) =>
+    msg.role === 'ai' && msg.isOfflineSupplement ? (
+      <View key={msg.id} style={styles.aiDriftGuideRow}>
+        <DriftGuideReferenceCard rawText={msg.text} colors={colors} />
+      </View>
+    ) : (
+      <View
+        key={msg.id}
+        style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
+      >
+        {msg.role === 'user' ? (
+          <Text style={[styles.bubbleText, styles.userBubbleText]}>{msg.text}</Text>
+        ) : (
+          <SpotTaggedText text={msg.text} baseStyle={[styles.bubbleText, styles.aiBubbleText]} />
+        )}
+        {msg.role === 'ai' && msg.locationRecommendation ? (
+          <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+        ) : null}
+        {msg.role === 'ai' ? (
+          <GuideChatLinkedSpots
+            linkedSpots={msg.linkedSpots}
+            ambiguous={msg.ambiguousSpots}
+            colors={colors}
+          />
+        ) : null}
+        {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
+          <GuideChatWebSources
+            sources={msg.webSources}
+            fetchedAt={msg.sourcesFetchedAt}
+            colors={colors}
+          />
+        ) : null}
+      </View>
+    ),
+  );
+
+  const thinkingRow =
+    loading ? (
+      <View style={[styles.bubble, styles.aiBubble, styles.aiThinkingBubble]}>
+        <ActivityIndicator size="small" color={colors.primary} />
+        <Text style={styles.aiBubbleText}>Thinking...</Text>
+      </View>
+    ) : null;
+
+  if (isOffline) {
+    return (
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={180}
+      >
+        <ScrollView
+          ref={scrollRef}
+          style={styles.aiScrollView}
+          contentContainerStyle={[styles.aiScrollContent, { flexGrow: 1, paddingBottom: Spacing.xxl }]}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.aiContextNote}>
+            Offline — strategy and chat stay on this device. The cards below your messages open full detail sheets.
+            Reconnect to ask new questions and refresh conditions.
+          </Text>
+          {strategySlot}
+          <Text style={styles.aiContextNote}>
+            AI uses your trip history, current conditions, and fishing data to give personalized advice.
+          </Text>
+          {chatMessages}
+          {thinkingRow}
+          <OfflineGuideActionStack
+            colors={colors}
+            sections={offlineSections ?? null}
+            loading={Boolean(offlineLoading)}
+            fliesStrategyContent={strategySlot ?? null}
+            strategyLoading={strategyLoading}
+          />
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -2252,45 +2428,9 @@ function AIGuideTab({
         </Text>
 
         {/* Chat Messages */}
-        {messages.map((msg) => (
-          <View
-            key={msg.id}
-            style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
-          >
-            {msg.role === 'user' ? (
-              <Text style={[styles.bubbleText, styles.userBubbleText]}>{msg.text}</Text>
-            ) : (
-              <SpotTaggedText
-                text={msg.text}
-                baseStyle={[styles.bubbleText, styles.aiBubbleText]}
-              />
-            )}
-            {msg.role === 'ai' && msg.locationRecommendation ? (
-              <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
-            ) : null}
-            {msg.role === 'ai' ? (
-              <GuideChatLinkedSpots
-                linkedSpots={msg.linkedSpots}
-                ambiguous={msg.ambiguousSpots}
-                colors={colors}
-              />
-            ) : null}
-            {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
-              <GuideChatWebSources
-                sources={msg.webSources}
-                fetchedAt={msg.sourcesFetchedAt}
-                colors={colors}
-              />
-            ) : null}
-          </View>
-        ))}
+        {chatMessages}
 
-        {loading && (
-          <View style={[styles.bubble, styles.aiBubble]}>
-            <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 8 }} />
-            <Text style={styles.aiBubbleText}>Thinking...</Text>
-          </View>
-        )}
+        {thinkingRow}
       </ScrollView>
 
       {/* Input */}
@@ -2475,6 +2615,9 @@ function TripTimelineAiModal({
                   ...prev,
                   question: q.trim() || 'Question',
                   response: r.trim() || null,
+                  ...(typeof prev.supplementResponse === 'string'
+                    ? { supplementResponse: prev.supplementResponse }
+                    : {}),
                 },
               };
               onApply(upsertEventSorted(allEvents, next));
@@ -2552,17 +2695,6 @@ function createTripDashboardStyles(colors: ThemeColors) {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
-  },
-  offlineBadge: {
-    backgroundColor: colors.warning,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 2,
-  },
-  offlineBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: colors.text,
   },
   cachedDataBanner: {
     paddingVertical: Spacing.sm,
@@ -3547,6 +3679,11 @@ function createTripDashboardStyles(colors: ThemeColors) {
     padding: Spacing.md,
     gap: Spacing.sm,
   },
+  aiDriftGuideRow: {
+    alignSelf: 'flex-start',
+    width: '100%',
+    maxWidth: '85%',
+  },
   aiGetRecButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3666,8 +3803,8 @@ function createTripDashboardStyles(colors: ThemeColors) {
     maxWidth: '85%',
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'stretch',
   },
   userBubble: {
     alignSelf: 'flex-end',
@@ -3677,10 +3814,16 @@ function createTripDashboardStyles(colors: ThemeColors) {
     alignSelf: 'flex-start',
     backgroundColor: colors.surface,
   },
+  /** Thinking row: icon + label on one line */
+  aiThinkingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   bubbleText: {
     fontSize: FontSize.md,
     lineHeight: 22,
-    flex: 1,
+    alignSelf: 'stretch',
   },
   userBubbleText: {
     color: colors.textInverse,

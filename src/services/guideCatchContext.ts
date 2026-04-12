@@ -2,7 +2,9 @@ import type { Location } from '@/src/types';
 import type { AIContext } from '@/src/services/ai';
 import { getTimeOfDay } from '@/src/services/ai';
 import { fetchTopCatalogLocationIdsByRecentCatches } from '@/src/services/catchAggregates';
-import { invokeGuideIntel, parseExtractLocationsResponse } from '@/src/services/guideIntelClient';
+import { invokeGuideIntel, isOnlineForGuideIntel, parseExtractLocationsResponse } from '@/src/services/guideIntelClient';
+import { getDownloadedWaterways } from '@/src/services/waterwayCache';
+import { buildOfflinePackAggregatesFromDownloads } from '@/src/services/offlineGuideLocalIntel';
 import { supabase } from '@/src/services/supabase';
 import { questionWantsLocationRecommendation } from '@/src/utils/guideChatIntent';
 import {
@@ -22,6 +24,24 @@ import {
 
 const CATCH_LOOKBACK_DAYS = 60;
 const MAX_ROWS_PER_QUERY = 2500;
+
+async function mergeOfflinePackIntelIfOffline(
+  ctx: AIContext,
+  packParams: {
+    locationIds: string[];
+    userId: string | null;
+    userLat: number | null;
+    userLng: number | null;
+    refDate: Date;
+    refBucket: string;
+  },
+): Promise<AIContext> {
+  if (await isOnlineForGuideIntel()) return ctx;
+  const waterways = await getDownloadedWaterways();
+  const agg = buildOfflinePackAggregatesFromDownloads(waterways, packParams);
+  if (!agg) return ctx;
+  return { ...ctx, guideOfflinePackAggregates: agg };
+}
 
 /** Prefer hour spoken in the question (e.g. "at 10", "at 10am") for time-bucket stats. */
 export function parseReferenceDateFromQuestion(question: string, fallback: Date): Date {
@@ -419,7 +439,23 @@ export async function enrichContextWithLocationCatchData(
   const q = params.question.trim();
   if (!q) {
     const guideRegionLabel = await resolveRegionLabelAsync(params.userLat, params.userLng);
-    return { ...base, guideLocationCatchSummary: null, guideInternalMaxN: 0, guideRegionLabel };
+    const refDate = params.referenceDate;
+    const refBucket = getTimeOfDay(refDate);
+    const emptyQCtx: AIContext = {
+      ...base,
+      guideLocationCatchSummary: null,
+      guideInternalMaxN: 0,
+      guideRegionLabel,
+    };
+    const locIds = base.location?.id ? [base.location.id] : [];
+    return mergeOfflinePackIntelIfOffline(emptyQCtx, {
+      locationIds: locIds,
+      userId: params.userId,
+      userLat: params.userLat,
+      userLng: params.userLng,
+      refDate,
+      refBucket,
+    });
   }
 
   const guideRegionLabel = await resolveRegionLabelAsync(params.userLat, params.userLng);
@@ -524,25 +560,40 @@ export async function enrichContextWithLocationCatchData(
   }
 
   if (locList.length === 0) {
+    const packIds = screenLoc?.id ? [screenLoc.id] : [];
+    const packArgs = {
+      locationIds: packIds,
+      userId: params.userId,
+      userLat: params.userLat,
+      userLng: params.userLng,
+      refDate,
+      refBucket,
+    };
     if (!extractionAppendix.trim()) {
-      return {
+      return mergeOfflinePackIntelIfOffline(
+        {
+          ...base,
+          guideLocationCatchSummary: null,
+          guideInternalMaxN: 0,
+          guideRegionLabel,
+          guideLocationAmbiguous:
+            guideLocationAmbiguousMut.length > 0 ? guideLocationAmbiguousMut : undefined,
+        },
+        packArgs,
+      );
+    }
+    return mergeOfflinePackIntelIfOffline(
+      {
         ...base,
-        guideLocationCatchSummary: null,
+        guideLocationCatchSummary: extractionAppendix,
         guideInternalMaxN: 0,
         guideRegionLabel,
+        guideLinkedSpots: guideLinkedSpotsDeduped.length > 0 ? guideLinkedSpotsDeduped : undefined,
         guideLocationAmbiguous:
           guideLocationAmbiguousMut.length > 0 ? guideLocationAmbiguousMut : undefined,
-      };
-    }
-    return {
-      ...base,
-      guideLocationCatchSummary: extractionAppendix,
-      guideInternalMaxN: 0,
-      guideRegionLabel,
-      guideLinkedSpots: guideLinkedSpotsDeduped.length > 0 ? guideLinkedSpotsDeduped : undefined,
-      guideLocationAmbiguous:
-        guideLocationAmbiguousMut.length > 0 ? guideLocationAmbiguousMut : undefined,
-    };
+      },
+      packArgs,
+    );
   }
 
   /** Avoid expanding every nearby parent when the question is only "near me" with a broad catalog list. */
@@ -627,13 +678,23 @@ export async function enrichContextWithLocationCatchData(
     maxCommunity = Math.max(maxCommunity, communityAgg.get(id)?.total ?? 0);
   }
 
-  return {
-    ...base,
-    guideLocationCatchSummary: summary,
-    guideInternalMaxN: maxCommunity,
-    guideRegionLabel,
-    guideLinkedSpots: guideLinkedSpotsDeduped.length > 0 ? guideLinkedSpotsDeduped : undefined,
-    guideLocationAmbiguous:
-      guideLocationAmbiguousMut.length > 0 ? guideLocationAmbiguousMut : undefined,
-  };
+  return mergeOfflinePackIntelIfOffline(
+    {
+      ...base,
+      guideLocationCatchSummary: summary,
+      guideInternalMaxN: maxCommunity,
+      guideRegionLabel,
+      guideLinkedSpots: guideLinkedSpotsDeduped.length > 0 ? guideLinkedSpotsDeduped : undefined,
+      guideLocationAmbiguous:
+        guideLocationAmbiguousMut.length > 0 ? guideLocationAmbiguousMut : undefined,
+    },
+    {
+      locationIds: ids,
+      userId: params.userId,
+      userLat: params.userLat,
+      userLng: params.userLng,
+      refDate,
+      refBucket,
+    },
+  );
 }

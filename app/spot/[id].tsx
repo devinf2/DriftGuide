@@ -23,8 +23,10 @@ import {
   getSpotDetailedReport,
   getSpotHowToFish,
   askAI,
+  buildOfflineGuideSections,
   getSeason,
   getTimeOfDay,
+  type OfflineGuideSections,
   type SpotFishingSummaryOptions,
 } from '@/src/services/ai';
 import type { GuideIntelSource, GuideLocationRecommendation } from '@/src/services/guideIntelContract';
@@ -39,11 +41,13 @@ import { getStreamFlow } from '@/src/services/waterFlow';
 import type { AccessPoint, LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
 import { fetchApprovedAccessPointsForLocations } from '@/src/services/accessPointService';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
+import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
 import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
 import { GuideLocationRecommendationCards } from '@/src/components/GuideLocationRecommendationCards';
 import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
 import { SpotTaggedText } from '@/src/components/SpotTaggedText';
 import { OfflineFallbackGuide } from '@/src/components/OfflineFallbackGuide';
+import { OfflineGuideActionStack } from '@/src/components/OfflineGuideActionStack';
 import { buildOfflineSpotGuide } from '@/src/services/offlineSpotGuide';
 
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
@@ -214,6 +218,7 @@ export default function SpotFishingTripScreen() {
       id: string;
       role: 'user' | 'ai';
       text: string;
+      isOfflineSupplement?: boolean;
       linkedSpots?: { id: string; name: string }[];
       ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
       webSources?: GuideIntelSource[];
@@ -226,6 +231,8 @@ export default function SpotFishingTripScreen() {
   const aiScrollRef = useRef<ScrollView>(null);
   const [howToFish, setHowToFish] = useState<string | null>(null);
   const [howToFishLoading, setHowToFishLoading] = useState(false);
+  const [offlineSpotGuideSections, setOfflineSpotGuideSections] = useState<OfflineGuideSections | null>(null);
+  const [offlineSpotGuideLoading, setOfflineSpotGuideLoading] = useState(false);
   const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
   const [communityFishN, setCommunityFishN] = useState(0);
   const [communityRatingsLoading, setCommunityRatingsLoading] = useState(false);
@@ -596,25 +603,138 @@ export default function SpotFishingTripScreen() {
         referenceDate: now,
       });
       const answer = await askAI(context, q);
-      setAiMessages((prev) => [
-        ...prev,
-        {
+      const sup = answer.supplementText?.trim();
+      setAiMessages((prev) => {
+        const main = {
           id: String(Date.now() + 1),
-          role: 'ai',
+          role: 'ai' as const,
           text: answer.text,
           linkedSpots: context.guideLinkedSpots,
           ambiguousSpots: context.guideLocationAmbiguous,
           webSources: answer.sources,
           sourcesFetchedAt: answer.fetchedAt,
           locationRecommendation: answer.locationRecommendation,
-        },
-      ]);
+        };
+        if (!sup) return [...prev, main];
+        return [
+          ...prev,
+          main,
+          {
+            id: String(Date.now() + 2),
+            role: 'ai' as const,
+            text: sup,
+            isOfflineSupplement: true,
+          },
+        ];
+      });
     } catch {
       setAiMessages(prev => [...prev, { id: String(Date.now() + 1), role: 'ai', text: 'Sorry, I couldn’t get an answer. Try again.' }]);
     } finally {
       setAiLoading(false);
     }
   }, [aiInput, location, conditions, weatherData, waterFlowData, locations, user?.id]);
+
+  const spotAiStrategyFragment = useMemo(
+    () => (
+      <>
+        <Text style={[styles.guideSectionLabel, styles.guideSectionLabelFirst]}>Best time to fish</Text>
+        <View style={styles.guideCard}>
+          {summaryLoading ? (
+            <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+          ) : bestTime ? (
+            <Text style={styles.strategyBestTime}>{bestTime}</Text>
+          ) : (
+            <Text style={styles.fliesPlaceholder}>—</Text>
+          )}
+        </View>
+        <Text style={styles.guideSectionLabel}>Top flies</Text>
+        <View style={styles.guideCard}>
+          {summaryLoading ? (
+            <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+          ) : topFlies.length > 0 ? (
+            <View style={styles.fliesTwoCol}>
+              <View style={styles.fliesColumn}>
+                {topFlies.slice(0, 3).map((fly, i) => (
+                  <View key={i} style={styles.flyRow}>
+                    <View style={styles.flyBullet} />
+                    <Text style={styles.flyName} numberOfLines={2}>
+                      {fly}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.fliesColumn}>
+                {topFlies.slice(3, 6).map((fly, i) => (
+                  <View key={i + 3} style={styles.flyRow}>
+                    <View style={styles.flyBullet} />
+                    <Text style={styles.flyName} numberOfLines={2}>
+                      {fly}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : (
+            <Text style={styles.fliesPlaceholder}>No fly suggestions for this spot.</Text>
+          )}
+        </View>
+        <Text style={styles.guideSectionLabel}>How to fish it</Text>
+        <View style={styles.guideCard}>
+          {howToFishLoading ? (
+            <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
+          ) : howToFish ? (
+            <Text style={styles.howToFishText}>{howToFish}</Text>
+          ) : (
+            <Text style={styles.fliesPlaceholder}>—</Text>
+          )}
+        </View>
+      </>
+    ),
+    [styles, colors.primary, summaryLoading, bestTime, topFlies, howToFishLoading, howToFish],
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || spotNetOn || !location || !conditions) {
+      setOfflineSpotGuideSections(null);
+      setOfflineSpotGuideLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setOfflineSpotGuideLoading(true);
+    setOfflineSpotGuideSections(null);
+    void (async () => {
+      const now = new Date();
+      try {
+        const base = {
+          location: location as Location,
+          fishingType: 'fly' as const,
+          weather: weatherData ?? null,
+          waterFlow: waterFlowData ?? null,
+          currentFly: null,
+          fishCount: 0,
+          recentEvents: [],
+          timeOfDay: getTimeOfDay(now),
+          season: getSeason(now),
+        };
+        const ctx = await enrichContextWithLocationCatchData(base, {
+          question: '',
+          locations,
+          userId: user?.id ?? null,
+          userLat: userProxRef.current?.[1] ?? null,
+          userLng: userProxRef.current?.[0] ?? null,
+          referenceDate: now,
+        });
+        if (!cancelled) setOfflineSpotGuideSections(buildOfflineGuideSections(ctx, ''));
+      } catch {
+        if (!cancelled) setOfflineSpotGuideSections(null);
+      } finally {
+        if (!cancelled) setOfflineSpotGuideLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, spotNetOn, location?.id, conditions, weatherData, waterFlowData, locations, user?.id]);
 
   const handlePlanTripHere = () => {
     if (!id) return;
@@ -1049,105 +1169,119 @@ export default function SpotFishingTripScreen() {
         <LocationCommunityRatingsTab colors={colors} loading={communityRatingsLoading} rows={communityRatingRows} />
       ) : null}
 
-      {activeTab === 'ai' && (
+      {activeTab === 'ai' && !spotNetOn ? (
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={120}>
+          <ScrollView
+            ref={aiScrollRef}
+            style={styles.tabScroll}
+            contentContainerStyle={[styles.aiScrollContent, { flexGrow: 1, paddingBottom: Spacing.xxl }]}
+            keyboardShouldPersistTaps="handled"
+          >
+            {showSpotOfflineGuide ? <OfflineFallbackGuide /> : null}
+            <Text style={styles.aiOfflineHint}>
+              Offline — strategy and chat stay on this device. The cards below your messages open full detail sheets.
+              Reconnect to ask new questions.
+            </Text>
+            {spotAiStrategyFragment}
+            <Text style={styles.aiContextNote}>
+              Ask a question about this spot. The guide uses current conditions, location, and your DriftGuide logs when available.
+            </Text>
+            {aiMessages.map((msg) =>
+              msg.role === 'ai' && msg.isOfflineSupplement ? (
+                <View key={msg.id} style={styles.aiDriftGuideRow}>
+                  <DriftGuideReferenceCard rawText={msg.text} colors={colors} />
+                </View>
+              ) : (
+                <View
+                  key={msg.id}
+                  style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
+                >
+                  {msg.role === 'user' ? (
+                    <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{msg.text}</Text>
+                  ) : (
+                    <SpotTaggedText text={msg.text} baseStyle={styles.bubbleText} />
+                  )}
+                  {msg.role === 'ai' && msg.locationRecommendation ? (
+                    <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+                  ) : null}
+                  {msg.role === 'ai' ? (
+                    <GuideChatLinkedSpots
+                      linkedSpots={msg.linkedSpots}
+                      ambiguous={msg.ambiguousSpots}
+                      colors={colors}
+                    />
+                  ) : null}
+                  {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
+                    <GuideChatWebSources
+                      sources={msg.webSources}
+                      fetchedAt={msg.sourcesFetchedAt}
+                      colors={colors}
+                    />
+                  ) : null}
+                </View>
+              ),
+            )}
+            {aiLoading ? <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: Spacing.sm }} /> : null}
+            <OfflineGuideActionStack
+              colors={colors}
+              sections={offlineSpotGuideSections}
+              loading={offlineSpotGuideLoading}
+              fliesStrategyContent={spotAiStrategyFragment}
+              strategyLoading={summaryLoading || howToFishLoading}
+            />
+          </ScrollView>
+        </KeyboardAvoidingView>
+      ) : null}
+
+      {activeTab === 'ai' && spotNetOn ? (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={120}>
           <ScrollView ref={aiScrollRef} style={styles.tabScroll} contentContainerStyle={styles.aiScrollContent} keyboardShouldPersistTaps="handled">
             {showSpotOfflineGuide ? <OfflineFallbackGuide /> : null}
-            {!spotNetOn ? (
-              <Text style={styles.aiOfflineHint}>
-                Offline: chat uses saved conditions and catalog data only. Reconnect for live AI and fresh flows.
-              </Text>
-            ) : null}
-            {/* Best time to fish */}
-            <Text style={[styles.guideSectionLabel, styles.guideSectionLabelFirst]}>Best time to fish</Text>
-            <View style={styles.guideCard}>
-              {summaryLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-              ) : bestTime ? (
-                <Text style={styles.strategyBestTime}>{bestTime}</Text>
-              ) : (
-                <Text style={styles.fliesPlaceholder}>—</Text>
-              )}
-            </View>
-
-            {/* Top flies */}
-            <Text style={styles.guideSectionLabel}>Top flies</Text>
-            <View style={styles.guideCard}>
-              {summaryLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-              ) : topFlies.length > 0 ? (
-                <View style={styles.fliesTwoCol}>
-                  <View style={styles.fliesColumn}>
-                    {topFlies.slice(0, 3).map((fly, i) => (
-                      <View key={i} style={styles.flyRow}>
-                        <View style={styles.flyBullet} />
-                        <Text style={styles.flyName} numberOfLines={2}>{fly}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  <View style={styles.fliesColumn}>
-                    {topFlies.slice(3, 6).map((fly, i) => (
-                      <View key={i + 3} style={styles.flyRow}>
-                        <View style={styles.flyBullet} />
-                        <Text style={styles.flyName} numberOfLines={2}>{fly}</Text>
-                      </View>
-                    ))}
-                  </View>
+            {spotAiStrategyFragment}
+            <Text style={styles.aiContextNote}>
+              Ask a question about this spot. The guide uses current conditions, location, and your DriftGuide logs when available.
+            </Text>
+            {aiMessages.map((msg) =>
+              msg.role === 'ai' && msg.isOfflineSupplement ? (
+                <View key={msg.id} style={styles.aiDriftGuideRow}>
+                  <DriftGuideReferenceCard rawText={msg.text} colors={colors} />
                 </View>
               ) : (
-                <Text style={styles.fliesPlaceholder}>No fly suggestions for this spot.</Text>
-              )}
-            </View>
-
-            {/* How to fish it */}
-            <Text style={styles.guideSectionLabel}>How to fish it</Text>
-            <View style={styles.guideCard}>
-              {howToFishLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={styles.strategyLoader} />
-              ) : howToFish ? (
-                <Text style={styles.howToFishText}>{howToFish}</Text>
-              ) : (
-                <Text style={styles.fliesPlaceholder}>—</Text>
-              )}
-            </View>
-
-            <Text style={styles.aiContextNote}>
-              {spotNetOn
-                ? 'Ask a question about this spot. The guide uses current conditions, location, and your DriftGuide logs when available.'
-                : 'Reconnect to ask new questions.'}
-            </Text>
-            {aiMessages.map((msg) => (
-              <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}>
-                {msg.role === 'user' ? (
-                  <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{msg.text}</Text>
-                ) : (
-                  <SpotTaggedText text={msg.text} baseStyle={styles.bubbleText} />
-                )}
-                {msg.role === 'ai' && msg.locationRecommendation ? (
-                  <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
-                ) : null}
-                {msg.role === 'ai' ? (
-                  <GuideChatLinkedSpots
-                    linkedSpots={msg.linkedSpots}
-                    ambiguous={msg.ambiguousSpots}
-                    colors={colors}
-                  />
-                ) : null}
-                {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
-                  <GuideChatWebSources
-                    sources={msg.webSources}
-                    fetchedAt={msg.sourcesFetchedAt}
-                    colors={colors}
-                  />
-                ) : null}
-              </View>
-            ))}
+                <View
+                  key={msg.id}
+                  style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.aiBubble]}
+                >
+                  {msg.role === 'user' ? (
+                    <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{msg.text}</Text>
+                  ) : (
+                    <SpotTaggedText text={msg.text} baseStyle={styles.bubbleText} />
+                  )}
+                  {msg.role === 'ai' && msg.locationRecommendation ? (
+                    <GuideLocationRecommendationCards recommendation={msg.locationRecommendation} colors={colors} />
+                  ) : null}
+                  {msg.role === 'ai' ? (
+                    <GuideChatLinkedSpots
+                      linkedSpots={msg.linkedSpots}
+                      ambiguous={msg.ambiguousSpots}
+                      colors={colors}
+                    />
+                  ) : null}
+                  {msg.role === 'ai' && msg.webSources && msg.webSources.length > 0 ? (
+                    <GuideChatWebSources
+                      sources={msg.webSources}
+                      fetchedAt={msg.sourcesFetchedAt}
+                      colors={colors}
+                    />
+                  ) : null}
+                </View>
+              ),
+            )}
             {aiLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: Spacing.sm }} />}
           </ScrollView>
           <View style={styles.aiInputRow}>
             <TextInput
               style={styles.aiInput}
-              placeholder={spotNetOn ? 'Ask about this spot…' : 'Offline guide — ask using saved data…'}
+              placeholder="Ask about this spot…"
               placeholderTextColor={colors.textTertiary}
               value={aiInput}
               onChangeText={setAiInput}
@@ -1164,7 +1298,7 @@ export default function SpotFishingTripScreen() {
             </Pressable>
           </View>
         </KeyboardAvoidingView>
-      )}
+      ) : null}
 
       {activeTab === 'map' && (
         (() => {
@@ -1807,6 +1941,11 @@ function createSpotStyles(colors: ThemeColors) {
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
+  },
+  aiDriftGuideRow: {
+    alignSelf: 'flex-start',
+    width: '100%',
+    maxWidth: '85%',
   },
   bubbleText: {
     fontSize: FontSize.md,

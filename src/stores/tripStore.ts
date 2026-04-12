@@ -125,7 +125,12 @@ interface TripState {
   addNote: (text: string, latitude?: number | null, longitude?: number | null) => void;
   addBite: (latitude?: number | null, longitude?: number | null) => void;
   addFishOn: (latitude?: number | null, longitude?: number | null) => void;
-  addAIQuery: (question: string, response: string, webSources?: AIQueryWebSource[]) => void;
+  addAIQuery: (
+    question: string,
+    response: string,
+    webSources?: AIQueryWebSource[],
+    supplementResponse?: string | null,
+  ) => void;
   updateWeatherCache: (weather: WeatherData) => void;
   updateNextFlyRecommendation: () => void;
   fetchConditions: () => Promise<void>;
@@ -1094,7 +1099,7 @@ export const useTripStore = create<TripState>()(
         }));
       },
 
-      addAIQuery: (question, response, webSources) => {
+      addAIQuery: (question, response, webSources, supplementResponse) => {
         const { activeTrip, weatherData, waterFlowData, isTripPaused } = get();
         if (!activeTrip || isTripPaused) return;
 
@@ -1106,6 +1111,7 @@ export const useTripStore = create<TripState>()(
           data: {
             question,
             response,
+            ...(supplementResponse?.trim() ? { supplementResponse: supplementResponse.trim() } : {}),
             ...(webSources && webSources.length > 0 ? { webSources } : {}),
           },
           conditions_snapshot: buildConditionsSnapshot(weatherData, waterFlowData),

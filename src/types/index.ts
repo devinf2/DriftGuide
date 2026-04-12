@@ -258,6 +258,8 @@ export interface AIQueryWebSource {
 export interface AIQueryData {
   question: string;
   response: string | null;
+  /** Optional second assistant bubble (e.g. offline bundled guide). */
+  supplementResponse?: string | null;
   webSources?: AIQueryWebSource[];
 }
 

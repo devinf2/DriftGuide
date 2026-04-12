@@ -18,13 +18,7 @@ import {
   parseGuideIntelChatResponse,
   parseSpotSummaryEdgeResponse,
 } from '@/src/services/guideIntelClient';
-import {
-  bestTimeForClock,
-  clockRangeForTimeOfDay,
-  ensureBestTimeIsClockRange,
-  fliesForSeason,
-  waterBodyHint,
-} from '@/src/utils/offlineGuideBasics';
+import { clockRangeForTimeOfDay, ensureBestTimeIsClockRange } from '@/src/utils/offlineGuideBasics';
 import type {
   GuideIntelChatDataTier,
   GuideIntelSource,
@@ -42,6 +36,12 @@ import {
   wrapPlainCatalogNamesInSpotTags,
 } from '@/src/utils/guideSpotTagNormalize';
 import { catalogLocationIdForSpotSuggestion } from '@/src/utils/spotSuggestionMatch';
+import { stripOfflineGuideMarkdown } from '@/src/utils/stripOfflineGuideMarkdown';
+import type { GuideOfflinePackAggregates } from '@/src/services/offlineGuideLocalIntel';
+import { buildOfflineGuideSections } from '@/src/services/offlineGuideReplySections';
+
+export type { OfflineGuideSections, OfflineGuideSectionContext } from '@/src/services/offlineGuideReplySections';
+export { buildOfflineGuideSections };
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 /** Use the cheaper model for most AI calls to control cost */
@@ -88,6 +88,11 @@ export interface AIContext {
     extractedPhrase: string;
     candidates: { id: string; name: string }[];
   }[];
+  /**
+   * Offline-only: merged stats from downloaded waterway catch bundles (AsyncStorage).
+   * Set by enrichContextWithLocationCatchData when the device is offline.
+   */
+  guideOfflinePackAggregates?: GuideOfflinePackAggregates | null;
 }
 
 export function getSeason(date: Date): string {
@@ -363,6 +368,8 @@ export function chatDataTierFromContext(context: AIContext): GuideIntelChatDataT
 
 export type GuideAIReply = {
   text: string;
+  /** Second assistant bubble (e.g. bundled offline reference). */
+  supplementText?: string | null;
   sources?: GuideIntelSource[];
   fetchedAt?: string;
   locationRecommendation?: GuideLocationRecommendation | null;
@@ -380,92 +387,15 @@ function normalizeGuideChatReplyText(text: string, context: AIContext): string {
   return wrapPlainCatalogNamesInSpotTags(afterQuotes, entries);
 }
 
-function questionSoundsFlyRelated(q: string): boolean {
-  return (
-    /\b(fly|flies|pattern|lure|bait|nymph|dry|streamer|midge|caddis|hopper|dropper|rig)\b/i.test(q) ||
-    /\bwhat (should|to) (use|try|tie)\b/i.test(q) ||
-    /\b(recommend|suggest)\b.*\b(fly|pattern)\b/i.test(q)
-  );
-}
-
 /**
  * Deterministic “offline guide” chat: no network; uses trip context, cached conditions, and catalog links only.
  */
 function buildOfflineGuideChatReply(context: AIContext, question: string): GuideAIReply {
-  const q = question.trim();
-  const ql = q.toLowerCase();
-  const parts: string[] = [];
-
-  parts.push(
-    '**Offline guide** — using only data on this device (trip, saved catalog, cached conditions). Reconnect for live AI and fresh weather/flows.',
-  );
-
-  if (context.guideLocationAmbiguous?.length) {
-    for (const amb of context.guideLocationAmbiguous) {
-      const opts = amb.candidates.map((c) => `<<spot:${c.id}:${c.name}>>`).join(', ');
-      parts.push(`That could mean a few waters. Tap the one you mean: ${opts}.`);
-    }
-  }
-
-  const wantPlace = questionWantsLocationRecommendation(q);
-  const wantsFly = questionSoundsFlyRelated(ql);
-
-  const linked: { id: string; name: string }[] = [...(context.guideLinkedSpots ?? [])];
-  if (context.location?.id && context.location.name?.trim()) {
-    const name = context.location.name.trim();
-    if (!linked.some((s) => s.id === context.location!.id)) {
-      linked.unshift({ id: context.location.id, name });
-    }
-  }
-
-  const hasAmbiguity = Boolean(context.guideLocationAmbiguous?.length);
-  if (wantPlace && linked.length > 0 && !hasAmbiguity) {
-    const tagged = linked
-      .slice(0, 4)
-      .map((s) => `<<spot:${s.id}:${s.name}>>`)
-      .join(', ');
-    parts.push(`From your offline catalog and this screen, good options to open or compare: ${tagged}.`);
-  } else if (wantPlace && linked.length === 0 && !hasAmbiguity) {
-    parts.push(
-      'For where to fish offline, open a saved trip or spot first so I can tie picks to a specific water in your download.',
-    );
-  }
-
-  if (context.location?.type) {
-    parts.push(waterBodyHint(context.location.type));
-  }
-  parts.push(bestTimeForClock(context.timeOfDay));
-
-  if (wantsFly || (!wantPlace && ql.length > 0)) {
-    const flies = fliesForSeason(context.season);
-    parts.push(`Common ${context.season} patterns to try: ${flies.slice(0, 5).join(', ')}.`);
-    if (context.currentFly) {
-      parts.push(
-        context.currentFly2
-          ? `On the water you're fishing ${context.currentFly} / ${context.currentFly2}. If it's gone quiet, change depth or try a contrasting size or color from the list.`
-          : `You're on ${context.currentFly}. If it's slow, vary depth or switch to another pattern from the list.`,
-      );
-    }
-  }
-
-  if (context.weather) {
-    parts.push(
-      `Cached weather: ${context.weather.temperature_f}°F, ${context.weather.condition}. Wind ${context.weather.wind_speed_mph} mph ${context.weather.wind_direction}.`,
-    );
-  }
-  if (context.waterFlow) {
-    parts.push(
-      `Cached flows: ${context.waterFlow.flow_cfs} CFS; clarity ${CLARITY_LABELS[context.waterFlow.clarity]}.`,
-    );
-  }
-
-  if (context.recentEvents.length > 0 && (wantsFly || /\b(trip|caught|catch|working)\b/i.test(ql))) {
-    const tripLine = buildTripSummary(context.recentEvents).replace(/\n/g, ' ');
-    parts.push(`This trip: ${tripLine}`);
-  }
-
-  const raw = parts.join('\n\n');
-  return { text: normalizeGuideChatReplyText(raw, context) };
+  const s = buildOfflineGuideSections(context, question);
+  return {
+    text: normalizeGuideChatReplyText(stripOfflineGuideMarkdown(s.fullReplyBeforeNormalize), context),
+    supplementText: s.supplementText,
+  };
 }
 
 export async function askAI(context: AIContext, question: string): Promise<GuideAIReply> {

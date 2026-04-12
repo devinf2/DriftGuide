@@ -1,3 +1,4 @@
+import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
 import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
 import { GuideChatWebSources } from '@/src/components/GuideChatWebSources';
 import { SpotTaggedText } from '@/src/components/SpotTaggedText';
@@ -30,6 +31,7 @@ export interface Message {
   role: 'user' | 'ai';
   text: string;
   timestamp: Date;
+  isOfflineSupplement?: boolean;
   linkedSpots?: { id: string; name: string }[];
   ambiguousSpots?: { extractedPhrase: string; candidates: { id: string; name: string }[] }[];
   webSources?: GuideIntelSource[];
@@ -152,6 +154,11 @@ function createStyles(colors: ThemeColors) {
     aiBubbleText: {
       color: colors.text,
     },
+    aiDriftGuideRow: {
+      alignSelf: 'flex-start',
+      width: '100%',
+      maxWidth: '92%',
+    },
     inputRow: {
       flexDirection: 'row',
       padding: Spacing.md,
@@ -261,7 +268,22 @@ export default function GuideChat({
         locationRecommendation: response.locationRecommendation,
       };
 
-      setMessages((prev) => [...prev, aiMsg]);
+      const sup = response.supplementText?.trim();
+      setMessages((prev) => {
+        const tail = sup
+          ? [
+              aiMsg,
+              {
+                id: (Date.now() + 2).toString(),
+                role: 'ai' as const,
+                text: sup,
+                timestamp: new Date(),
+                isOfflineSupplement: true,
+              },
+            ]
+          : [aiMsg];
+        return [...prev, ...tail];
+      });
     } catch {
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -341,6 +363,10 @@ export default function GuideChat({
           msg.role === 'user' ? (
             <View key={msg.id} style={[styles.bubble, styles.userBubble]}>
               <Text style={[styles.bubbleText, styles.userBubbleText]}>{msg.text}</Text>
+            </View>
+          ) : msg.isOfflineSupplement ? (
+            <View key={msg.id} style={styles.aiDriftGuideRow}>
+              <DriftGuideReferenceCard rawText={msg.text} colors={colors} />
             </View>
           ) : (
             <View key={msg.id} style={[styles.bubble, styles.aiBubble]}>

@@ -53,6 +53,7 @@ import { useTripStore } from '@/src/stores/tripStore';
 import { getPendingTrips } from '@/src/services/pendingSyncStorage';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS, CLARITY_LABELS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
@@ -1231,6 +1232,11 @@ function AIGuideTab({
                     <Text style={summaryStyles.aiAnswerText}>{data.response}</Text>
                   </View>
                 )}
+                {typeof data.supplementResponse === 'string' && data.supplementResponse.trim() ? (
+                  <View style={summaryStyles.aiDriftGuideWrap}>
+                    <DriftGuideReferenceCard rawText={data.supplementResponse.trim()} colors={palette} />
+                  </View>
+                ) : null}
                 {data.webSources && data.webSources.length > 0 ? (
                   <View style={summaryStyles.aiSourcesWrap}>
                     <Text style={summaryStyles.aiSourcesLabel}>Web sources</Text>
@@ -2166,6 +2172,9 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.textSecondary,
     flex: 1,
     lineHeight: 20,
+  },
+  aiDriftGuideWrap: {
+    marginTop: Spacing.xs,
   },
   aiSourcesWrap: {
     marginTop: Spacing.xs,
