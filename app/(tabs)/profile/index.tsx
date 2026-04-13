@@ -1,9 +1,13 @@
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
-import { ProfileTripsPhotosHub } from '@/src/components/profile/ProfileTripsPhotosHub';
+import {
+  ProfileTripsPhotosHub,
+  type ProfileTripsPhotosHubRef,
+} from '@/src/components/profile/ProfileTripsPhotosHub';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { uploadProfileAvatar } from '@/src/services/photoService';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
+import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -12,12 +16,14 @@ import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/util
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Dimensions,
     Modal,
+    NativeScrollEvent,
+    NativeSyntheticEvent,
     Platform,
     Pressable,
     RefreshControl,
@@ -82,8 +88,22 @@ export default function ProfileScreen() {
   const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [photoLibraryRefreshSignal, setPhotoLibraryRefreshSignal] = useState(0);
+  const profileHubRef = useRef<ProfileTripsPhotosHubRef>(null);
+  const albumHubInvalidateVersion = useTripStore((s) => s.albumHubInvalidateVersion);
+  const prevAlbumHubInvalidateRef = useRef<number | null>(null);
 
   const userId = user?.id ?? null;
+
+  useEffect(() => {
+    if (prevAlbumHubInvalidateRef.current === null) {
+      prevAlbumHubInvalidateRef.current = albumHubInvalidateVersion;
+      return;
+    }
+    if (albumHubInvalidateVersion !== prevAlbumHubInvalidateRef.current) {
+      prevAlbumHubInvalidateRef.current = albumHubInvalidateVersion;
+      setPhotoLibraryRefreshSignal((n) => n + 1);
+    }
+  }, [albumHubInvalidateVersion]);
 
   const pendingIncomingFriendRequests = useMemo(
     () =>
@@ -179,6 +199,14 @@ export default function ProfileScreen() {
 
   const displayName = profileDisplayName(profile);
 
+  const onProfileScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    const threshold = 280;
+    if (layoutMeasurement.height + contentOffset.y >= contentSize.height - threshold) {
+      profileHubRef.current?.loadMoreFromScroll();
+    }
+  }, []);
+
   return (
     <Fragment>
       {effectiveTop > 0 && (
@@ -193,6 +221,8 @@ export default function ProfileScreen() {
       <ScrollView
         style={styles.container}
         alwaysBounceVertical
+        onScroll={onProfileScroll}
+        scrollEventThrottle={400}
         contentContainerStyle={[
           styles.content,
           {
@@ -286,7 +316,7 @@ export default function ProfileScreen() {
           <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
         </View>
 
-        <ProfileTripsPhotosHub refreshSignal={photoLibraryRefreshSignal} />
+        <ProfileTripsPhotosHub ref={profileHubRef} refreshSignal={photoLibraryRefreshSignal} />
       </ScrollView>
 
       <Modal

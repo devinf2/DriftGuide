@@ -29,12 +29,15 @@ export function JournalTripCarousel({
   height,
   colors,
   styles,
+  onImagePress,
 }: {
   urls: string[];
   width: number;
   height: number;
   colors: ThemeColors;
   styles: ReturnType<typeof createJournalTripGridStyles>;
+  /** When set, tapping a photo opens the trip (same as the card body). */
+  onImagePress?: (() => void) | null;
 }) {
   const [index, setIndex] = useState(0);
 
@@ -63,14 +66,26 @@ export function JournalTripCarousel({
           setIndex(Math.min(Math.max(page, 0), urls.length - 1));
         }}
       >
-        {urls.map((uri, i) => (
-          <Image
-            key={`${uri}-${i}`}
-            source={{ uri }}
-            style={{ width, height }}
-            resizeMode="cover"
-          />
-        ))}
+        {urls.map((uri, i) =>
+          onImagePress ? (
+            <Pressable
+              key={`${uri}-${i}`}
+              accessibilityRole="button"
+              accessibilityLabel="Open trip"
+              onPress={onImagePress}
+              style={{ width, height }}
+            >
+              <Image source={{ uri }} style={{ width, height }} resizeMode="cover" />
+            </Pressable>
+          ) : (
+            <Image
+              key={`${uri}-${i}`}
+              source={{ uri }}
+              style={{ width, height }}
+              resizeMode="cover"
+            />
+          ),
+        )}
       </ScrollView>
       {urls.length > 1 ? (
         <View style={styles.tripCarouselDots} pointerEvents="none">
@@ -114,6 +129,7 @@ export const JournalTripGridCard = memo(function JournalTripGridCard({
         height={carouselHeight}
         colors={colors}
         styles={styles}
+        onImagePress={onPress}
       />
       <Pressable
         style={({ pressed }) => [styles.tripGridBody, pressed && styles.tripGridBodyPressed]}

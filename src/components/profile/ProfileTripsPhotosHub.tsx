@@ -1,6 +1,7 @@
 import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
 import {
   ProfilePhotoLibrarySection,
+  type ProfileHubAlbumPagination,
   type ProfilePhotoLibraryHandle,
   type SharedAlbumFilters,
 } from '@/src/components/ProfilePhotoLibrarySection';
@@ -12,8 +13,17 @@ import {
 } from '@/src/components/journal/journalTripGrid';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { fetchPhotos, fetchPhotosWithTrip, type PhotoWithTrip } from '@/src/services/photoService';
-import { fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
+import {
+  fetchPhotosWithTripForTripIds,
+  fetchPhotosWithTripPage,
+  type PhotoWithTrip,
+} from '@/src/services/photoService';
+import {
+  fetchCompletedTripsPage,
+  fetchProfileAlbumFilterOptions,
+  fetchUserCatchesForTripIds,
+  type ProfileAlbumHubRpcFilters,
+} from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
@@ -26,7 +36,7 @@ import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
 import { type Href, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -119,20 +129,64 @@ function tripMatchesAlbumFilters(
 
 type ProfileTripsPhotosHubProps = {
   refreshSignal: number;
+  /** When set, load this user’s completed trips / album (RLS: e.g. accepted friend + photo visibility). */
+  peerUserId?: string | null;
 };
 
-/** Opened from profile hub — trip summary uses this so Back returns to Profile, not Home. */
+export type ProfileTripsPhotosHubRef = {
+  /** Call when the profile screen is scrolled near the bottom (loads next trips or photo page). */
+  loadMoreFromScroll: () => void;
+};
+
+const TRIPS_PAGE = 8;
+/** Library grid is 3 columns; 21 = 7 full rows per page. */
+const PHOTOS_PAGE = 21;
+
+/** Opened from own profile hub — trip summary replaces back to Profile tab. */
 const PROFILE_JOURNAL_QS = '?returnTo=profile';
 
-function journalHrefFromProfile(tripId: string): Href {
+function journalHrefFromHub(tripId: string, peerUserId: string | null | undefined): Href {
+  if (peerUserId) {
+    return `/journal/${tripId}?returnTo=friend&friendId=${encodeURIComponent(peerUserId)}` as Href;
+  }
   return `/journal/${tripId}${PROFILE_JOURNAL_QS}` as Href;
 }
 
-export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubProps) {
+function mergePhotoWithTripById(prev: PhotoWithTrip[], next: PhotoWithTrip[]): PhotoWithTrip[] {
+  const m = new Map(prev.map((p) => [p.id, p]));
+  for (const p of next) m.set(p.id, p);
+  return Array.from(m.values()).sort((a, b) =>
+    String(b.captured_at ?? b.created_at ?? '').localeCompare(String(a.captured_at ?? a.created_at ?? '')),
+  );
+}
+
+function mergePlainPhotosFromWithTrip(prev: Photo[], next: PhotoWithTrip[]): Photo[] {
+  const m = new Map(prev.map((p) => [p.id, p]));
+  for (const p of next) {
+    const { trip: _t, ...rest } = p;
+    m.set(p.id, rest as Photo);
+  }
+  return Array.from(m.values()).sort((a, b) =>
+    String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')),
+  );
+}
+
+function mergeCatchesById(prev: CatchRow[], next: CatchRow[]): CatchRow[] {
+  const m = new Map(prev.map((c) => [c.id, c]));
+  for (const c of next) m.set(c.id, c);
+  return Array.from(m.values()).sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+}
+
+export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, ProfileTripsPhotosHubProps>(
+  function ProfileTripsPhotosHub({ refreshSignal, peerUserId = null }, ref) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
+  const albumOwnerId = peerUserId ?? user?.id ?? null;
+  const isPeerAlbum = Boolean(peerUserId);
   const favoriteIds = useLocationFavoritesStore((s) => s.ids);
   const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const { colors, resolvedScheme } = useAppTheme();
@@ -141,7 +195,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
 
   const photoLibraryRef = useRef<ProfilePhotoLibraryHandle>(null);
 
-  const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
+  const [mediaTab, setMediaTab] = useState<MediaTab>('trips');
   const [layoutTab, setLayoutTab] = useState<LayoutTab>('grid');
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [selectedFlyPatterns, setSelectedFlyPatterns] = useState<string[]>([]);
@@ -151,64 +205,277 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
 
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
   const [allCatches, setAllCatches] = useState<CatchRow[]>([]);
-  const [allPhotos, setAllPhotos] = useState<Photo[]>([]);
-  const [photosForOptions, setPhotosForOptions] = useState<PhotoWithTrip[]>([]);
-  /** Initial / photos-only fetch (trips + catches load when user opens the Trips tab). */
-  const [photosLoading, setPhotosLoading] = useState(true);
+  /** Trip pages: album rows for loaded trips (thumbnails + filters). */
+  const [tripScopedPhotos, setTripScopedPhotos] = useState<PhotoWithTrip[]>([]);
+  /** Photos tab: global library pages (newest first). */
+  const [libraryPagedPhotos, setLibraryPagedPhotos] = useState<PhotoWithTrip[]>([]);
   const [tripsDataLoaded, setTripsDataLoaded] = useState(false);
   const [tripsDataLoading, setTripsDataLoading] = useState(false);
+  const [tripsLoadingMore, setTripsLoadingMore] = useState(false);
+  const [tripsHasMore, setTripsHasMore] = useState(true);
+  const [photosLibraryBooting, setPhotosLibraryBooting] = useState(false);
+  const [photosLoadingMore, setPhotosLoadingMore] = useState(false);
+  const [photosHasMore, setPhotosHasMore] = useState(true);
+  const [photoLibraryStarted, setPhotoLibraryStarted] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_MAP_CENTER);
   const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
   const [mapCameraKey, setMapCameraKey] = useState(0);
   const [journalMapUserLocation, setJournalMapUserLocation] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<LocationGroup | null>(null);
   const [selectedFishCatch, setSelectedFishCatch] = useState<CatchRow | null>(null);
+  /** Distinct filter choices for full album (RPC); merged with loaded rows until fetch completes. */
+  const [albumFilterOptions, setAlbumFilterOptions] = useState<Awaited<
+    ReturnType<typeof fetchProfileAlbumFilterOptions>
+  > | null>(null);
 
-  const loadPhotosOnly = useCallback(async () => {
-    if (!user?.id) return;
-    setPhotosLoading(true);
-    try {
-      const [photosList, photosWithTrip] = await Promise.all([
-        fetchPhotos(user.id).catch(() => [] as Photo[]),
-        fetchPhotosWithTrip(user.id).catch(() => [] as PhotoWithTrip[]),
-      ]);
-      setAllPhotos(photosList);
-      setPhotosForOptions(photosWithTrip);
-    } finally {
-      setPhotosLoading(false);
-    }
-  }, [user?.id]);
+  const nextTripOffsetRef = useRef(0);
+  const nextPhotoOffsetRef = useRef(0);
+  const tripsFetchInFlightRef = useRef(false);
+  const photosFetchInFlightRef = useRef(false);
+  const loadMoreCooldownRef = useRef(0);
+  /** Bumped when album owner or filters change — drop stale append results. */
+  const hubAlbumDataGenRef = useRef(0);
 
-  const loadTripsAndCatches = useCallback(async () => {
-    if (!user?.id) return;
-    setTripsDataLoading(true);
-    try {
-      const [trips, catches] = await Promise.all([
-        fetchTripsFromCloud(user.id),
-        fetchUserCatchesFromCloud(user.id),
-      ]);
-      setAllTrips(trips.filter((t) => t.status === 'completed'));
-      setAllCatches(catches);
-      setTripsDataLoaded(true);
-    } finally {
-      setTripsDataLoading(false);
-    }
-  }, [user?.id]);
+  const photosForOptions = useMemo(
+    () => mergePhotoWithTripById(tripScopedPhotos, libraryPagedPhotos),
+    [tripScopedPhotos, libraryPagedPhotos],
+  );
 
-  useEffect(() => {
-    setTripsDataLoaded(false);
+  const allPhotos = useMemo(
+    () => mergePlainPhotosFromWithTrip([], photosForOptions),
+    [photosForOptions],
+  );
+
+  const resetPagedHubState = useCallback(() => {
+    hubAlbumDataGenRef.current += 1;
+    nextTripOffsetRef.current = 0;
+    nextPhotoOffsetRef.current = 0;
+    setTripsHasMore(true);
+    setPhotosHasMore(true);
     setAllTrips([]);
     setAllCatches([]);
-  }, [user?.id]);
+    setTripScopedPhotos([]);
+    setLibraryPagedPhotos([]);
+    setTripsDataLoaded(false);
+    setPhotoLibraryStarted(false);
+    setTripsDataLoading(false);
+    setTripsLoadingMore(false);
+    setPhotosLibraryBooting(false);
+    setPhotosLoadingMore(false);
+    tripsFetchInFlightRef.current = false;
+    photosFetchInFlightRef.current = false;
+  }, []);
+
+  const resetTripsPagingForFilterChange = useCallback(() => {
+    nextTripOffsetRef.current = 0;
+    setTripsHasMore(true);
+    setAllTrips([]);
+    setTripScopedPhotos([]);
+    setAllCatches([]);
+    setTripsDataLoaded(false);
+    setTripsDataLoading(false);
+    setTripsLoadingMore(false);
+    tripsFetchInFlightRef.current = false;
+  }, []);
+
+  const resetPhotosPagingForFilterChange = useCallback(() => {
+    nextPhotoOffsetRef.current = 0;
+    setPhotosHasMore(true);
+    setLibraryPagedPhotos([]);
+    setPhotoLibraryStarted(false);
+    setPhotosLibraryBooting(false);
+    setPhotosLoadingMore(false);
+    photosFetchInFlightRef.current = false;
+  }, []);
+
+  const albumRpcFilters = useMemo((): ProfileAlbumHubRpcFilters => {
+    return {
+      locationIds: selectedLocationIds,
+      species: selectedSpecies,
+      flyPatterns: selectedFlyPatterns,
+      dateFrom: dateFrom.trim() || null,
+      dateTo: dateTo.trim() || null,
+    };
+  }, [selectedLocationIds, selectedSpecies, selectedFlyPatterns, dateFrom, dateTo]);
+
+  const albumFilterKey = useMemo(() => JSON.stringify(albumRpcFilters), [albumRpcFilters]);
+
+  const appendTripsPage = useCallback(
+    async (isInitial: boolean) => {
+      if (!user?.id || !albumOwnerId || tripsFetchInFlightRef.current) return;
+      if (!isInitial && (!tripsHasMore || tripsLoadingMore)) return;
+      const generation = hubAlbumDataGenRef.current;
+      tripsFetchInFlightRef.current = true;
+      if (isInitial) setTripsDataLoading(true);
+      else setTripsLoadingMore(true);
+      try {
+        const offset = nextTripOffsetRef.current;
+        const hasFilters =
+          selectedLocationIds.length > 0 ||
+          selectedFlyPatterns.length > 0 ||
+          selectedSpecies.length > 0 ||
+          dateFrom.trim() !== '' ||
+          dateTo.trim() !== '';
+        const page = await fetchCompletedTripsPage(albumOwnerId, {
+          limit: TRIPS_PAGE + 1,
+          offset,
+          filters: hasFilters ? albumRpcFilters : undefined,
+        });
+        if (generation !== hubAlbumDataGenRef.current) return;
+        const hasMore = page.length > TRIPS_PAGE;
+        const slice = hasMore ? page.slice(0, TRIPS_PAGE) : page;
+        const ids = slice.map((t) => t.id);
+
+        const [withTripPhotos, catches] = await Promise.all([
+          ids.length ? fetchPhotosWithTripForTripIds(albumOwnerId, ids) : Promise.resolve([] as PhotoWithTrip[]),
+          ids.length ? fetchUserCatchesForTripIds(albumOwnerId, ids) : Promise.resolve([] as CatchRow[]),
+        ]);
+
+        if (generation !== hubAlbumDataGenRef.current) return;
+
+        setAllTrips((prev) => {
+          const seen = new Set(prev.map((t) => t.id));
+          return [...prev, ...slice.filter((t) => !seen.has(t.id))];
+        });
+        setTripScopedPhotos((prev) => mergePhotoWithTripById(prev, withTripPhotos));
+        setAllCatches((prev) => mergeCatchesById(prev, catches));
+
+        nextTripOffsetRef.current += slice.length;
+        setTripsHasMore(hasMore && slice.length > 0);
+        setTripsDataLoaded(true);
+      } finally {
+        tripsFetchInFlightRef.current = false;
+        if (isInitial) setTripsDataLoading(false);
+        else setTripsLoadingMore(false);
+      }
+    },
+    [
+      user?.id,
+      albumOwnerId,
+      tripsHasMore,
+      tripsLoadingMore,
+      albumRpcFilters,
+      selectedLocationIds.length,
+      selectedFlyPatterns.length,
+      selectedSpecies.length,
+      dateFrom,
+      dateTo,
+    ],
+  );
+
+  const appendPhotoLibraryPage = useCallback(
+    async (isInitial: boolean, opts?: { replace?: boolean }) => {
+      if (!user?.id || !albumOwnerId || photosFetchInFlightRef.current) return;
+      if (!isInitial && (!photosHasMore || photosLoadingMore)) return;
+      const generation = hubAlbumDataGenRef.current;
+      photosFetchInFlightRef.current = true;
+      if (isInitial) setPhotosLibraryBooting(true);
+      else setPhotosLoadingMore(true);
+      try {
+        if (opts?.replace) {
+          nextPhotoOffsetRef.current = 0;
+          setPhotosHasMore(true);
+        }
+        const offset = isInitial || opts?.replace ? 0 : nextPhotoOffsetRef.current;
+        const hasFilters =
+          selectedLocationIds.length > 0 ||
+          selectedFlyPatterns.length > 0 ||
+          selectedSpecies.length > 0 ||
+          dateFrom.trim() !== '' ||
+          dateTo.trim() !== '';
+        const page = await fetchPhotosWithTripPage(albumOwnerId, {
+          limit: PHOTOS_PAGE + 1,
+          offset,
+          filters: hasFilters ? albumRpcFilters : undefined,
+        });
+        if (generation !== hubAlbumDataGenRef.current) return;
+        const hasMore = page.length > PHOTOS_PAGE;
+        const slice = hasMore ? page.slice(0, PHOTOS_PAGE) : page;
+
+        const tripIds = [...new Set(slice.map((p) => p.trip_id).filter(Boolean))] as string[];
+        const catches =
+          tripIds.length > 0 ? await fetchUserCatchesForTripIds(albumOwnerId, tripIds) : ([] as CatchRow[]);
+
+        if (generation !== hubAlbumDataGenRef.current) return;
+
+        setLibraryPagedPhotos((prev) => (opts?.replace ? mergePhotoWithTripById([], slice) : mergePhotoWithTripById(prev, slice)));
+        if (catches.length) setAllCatches((prev) => mergeCatchesById(prev, catches));
+
+        nextPhotoOffsetRef.current = offset + slice.length;
+        setPhotosHasMore(hasMore && slice.length > 0);
+        setPhotoLibraryStarted(true);
+      } finally {
+        photosFetchInFlightRef.current = false;
+        if (isInitial) setPhotosLibraryBooting(false);
+        else setPhotosLoadingMore(false);
+      }
+    },
+    [
+      user?.id,
+      albumOwnerId,
+      photosHasMore,
+      photosLoadingMore,
+      albumRpcFilters,
+      selectedLocationIds.length,
+      selectedFlyPatterns.length,
+      selectedSpecies.length,
+      dateFrom,
+      dateTo,
+    ],
+  );
+
+  const reloadPhotoLibraryFirstPage = useCallback(async () => {
+    if (!user?.id || !albumOwnerId) return;
+    await appendPhotoLibraryPage(true, { replace: true });
+  }, [user?.id, albumOwnerId, appendPhotoLibraryPage]);
 
   useEffect(() => {
-    void loadPhotosOnly();
-  }, [loadPhotosOnly]);
+    resetPagedHubState();
+  }, [albumOwnerId, resetPagedHubState]);
 
   useEffect(() => {
-    if (mediaTab !== 'trips' || !user?.id || tripsDataLoaded || tripsDataLoading) return;
-    void loadTripsAndCatches();
-  }, [mediaTab, user?.id, tripsDataLoaded, tripsDataLoading, loadTripsAndCatches]);
+    if (!user?.id || !albumOwnerId) {
+      setAlbumFilterOptions(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchProfileAlbumFilterOptions(albumOwnerId).then((opts) => {
+      if (!cancelled) setAlbumFilterOptions(opts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [albumOwnerId, user?.id, refreshSignal]);
+
+  useEffect(() => {
+    if (!user?.id || !albumOwnerId) return;
+    hubAlbumDataGenRef.current += 1;
+    resetTripsPagingForFilterChange();
+    resetPhotosPagingForFilterChange();
+  }, [albumFilterKey, albumOwnerId, user?.id, resetTripsPagingForFilterChange, resetPhotosPagingForFilterChange]);
+
+  useEffect(() => {
+    if (mediaTab !== 'trips' || !user?.id || !albumOwnerId || tripsDataLoaded || tripsDataLoading) return;
+    void appendTripsPage(true);
+  }, [mediaTab, user?.id, albumOwnerId, tripsDataLoaded, tripsDataLoading, appendTripsPage]);
+
+  /** After filter reset or first visit to Photos, load page 1 (server-filtered when filters are on). */
+  useEffect(() => {
+    if (mediaTab !== 'photos' || !user?.id || !albumOwnerId) return;
+    if (photosLibraryBooting || photosLoadingMore || photosFetchInFlightRef.current) return;
+    if (!photoLibraryStarted) {
+      void appendPhotoLibraryPage(true, { replace: true });
+    }
+  }, [
+    mediaTab,
+    user?.id,
+    albumOwnerId,
+    photoLibraryStarted,
+    photosLibraryBooting,
+    photosLoadingMore,
+    albumFilterKey,
+    appendPhotoLibraryPage,
+  ]);
 
   useEffect(() => {
     void (async () => {
@@ -217,15 +484,45 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
     })();
   }, []);
 
+  const mediaTabRef = useRef(mediaTab);
+  mediaTabRef.current = mediaTab;
+
   useEffect(() => {
     if (refreshSignal === 0) return;
+    resetPagedHubState();
     void (async () => {
-      await loadPhotosOnly();
-      if (tripsDataLoaded) {
-        await loadTripsAndCatches();
+      await appendTripsPage(true);
+      if (mediaTabRef.current === 'photos') {
+        await appendPhotoLibraryPage(true, { replace: true });
       }
     })();
-  }, [refreshSignal, loadPhotosOnly, loadTripsAndCatches, tripsDataLoaded]);
+  }, [refreshSignal, resetPagedHubState, appendTripsPage, appendPhotoLibraryPage]);
+
+  const loadMoreFromScroll = useCallback(() => {
+    const now = Date.now();
+    if (now - loadMoreCooldownRef.current < 600) return;
+    loadMoreCooldownRef.current = now;
+    if (layoutTab !== 'grid') return;
+    if (mediaTab === 'trips' && tripsHasMore && !tripsDataLoading && !tripsLoadingMore) {
+      void appendTripsPage(false);
+    }
+    if (mediaTab === 'photos' && photosHasMore && !photosLibraryBooting && !photosLoadingMore) {
+      void appendPhotoLibraryPage(false);
+    }
+  }, [
+    layoutTab,
+    mediaTab,
+    tripsHasMore,
+    tripsDataLoading,
+    tripsLoadingMore,
+    photosHasMore,
+    photosLibraryBooting,
+    photosLoadingMore,
+    appendTripsPage,
+    appendPhotoLibraryPage,
+  ]);
+
+  useImperativeHandle(ref, () => ({ loadMoreFromScroll }), [loadMoreFromScroll]);
 
   const tripPhotoUrlsMap = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -246,18 +543,38 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
     [selectedLocationIds, selectedFlyPatterns, selectedSpecies, dateFrom, dateTo],
   );
 
+  const hasActiveFilters =
+    selectedLocationIds.length > 0 ||
+    selectedFlyPatterns.length > 0 ||
+    selectedSpecies.length > 0 ||
+    dateFrom.trim() !== '' ||
+    dateTo.trim() !== '';
+
   const filteredAlbumTrips = useMemo(() => {
     return allTrips.filter((t) => tripMatchesAlbumFilters(t, allCatches, photosForOptions, filterBundle));
   }, [allTrips, allCatches, photosForOptions, filterBundle]);
 
+  /** With server-side filter pagination, loaded `allTrips` already match filters — do not filter again. */
+  const tripsForHub = useMemo(
+    () => (hasActiveFilters ? allTrips : filteredAlbumTrips),
+    [hasActiveFilters, allTrips, filteredAlbumTrips],
+  );
+
   const filteredCatchesForMap = useMemo(() => {
-    const allowedTripIds = tripsDataLoaded
-      ? new Set(filteredAlbumTrips.map((t) => t.id))
-      : new Set(
-          photosForOptions
-            .map((p) => p.trip_id)
-            .filter((tid): tid is string => Boolean(tid)),
-        );
+    const allowedTripIds =
+      mediaTab === 'photos'
+        ? new Set(
+            photosForOptions
+              .map((p) => p.trip_id)
+              .filter((tid): tid is string => Boolean(tid)),
+          )
+        : tripsDataLoaded
+          ? new Set(tripsForHub.map((t) => t.id))
+          : new Set(
+              photosForOptions
+                .map((p) => p.trip_id)
+                .filter((tid): tid is string => Boolean(tid)),
+            );
     return allCatches.filter((c) => {
       if (!allowedTripIds.has(c.trip_id)) return false;
       if (c.latitude == null || c.longitude == null) return false;
@@ -271,11 +588,19 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       }
       return true;
     });
-  }, [allCatches, filteredAlbumTrips, photosForOptions, tripsDataLoaded, selectedSpecies, selectedFlyPatterns]);
+  }, [
+    allCatches,
+    tripsForHub,
+    photosForOptions,
+    tripsDataLoaded,
+    selectedSpecies,
+    selectedFlyPatterns,
+    mediaTab,
+  ]);
 
   const locationGroups = useMemo(() => {
     const groups = new Map<string, LocationGroup>();
-    for (const trip of filteredAlbumTrips) {
+    for (const trip of tripsForHub) {
       const lat = trip.location?.latitude;
       const lng = trip.location?.longitude;
       if (lat == null || lng == null) continue;
@@ -294,27 +619,32 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       }
     }
     return Array.from(groups.values());
-  }, [filteredAlbumTrips]);
+  }, [tripsForHub]);
 
   const fishMapPins = useMemo(() => filteredCatchesForMap, [filteredCatchesForMap]);
 
   /** Trips map: trip locations. Photos map: catch pins (same as former “My Fish”). */
   const mapFraming = useMemo(() => {
     if (mediaTab === 'trips') {
-      return journalMapDefaultFraming(filteredAlbumTrips, []);
+      return journalMapDefaultFraming(tripsForHub, []);
     }
     return journalMapDefaultFraming(
       [],
       fishMapPins.map((c) => ({ latitude: c.latitude, longitude: c.longitude })),
     );
-  }, [mediaTab, filteredAlbumTrips, fishMapPins]);
+  }, [mediaTab, tripsForHub, fishMapPins]);
+
+  const mapDataBlocking = useMemo(() => {
+    if (mediaTab === 'trips') return tripsDataLoading && !tripsDataLoaded;
+    return photosLibraryBooting && libraryPagedPhotos.length === 0;
+  }, [mediaTab, tripsDataLoading, tripsDataLoaded, photosLibraryBooting, libraryPagedPhotos.length]);
 
   useEffect(() => {
-    if (photosLoading) return;
+    if (mapDataBlocking) return;
     setMapCenter(mapFraming.center);
     setMapZoom(mapFraming.zoom);
     setMapCameraKey((k) => k + 1);
-  }, [photosLoading, mapFraming]);
+  }, [mapDataBlocking, mapFraming]);
 
   useEffect(() => {
     setSelectedGroup(null);
@@ -335,6 +665,9 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
 
   const locationsMerged = useMemo(() => {
     const map = new Map<string, string>();
+    for (const row of albumFilterOptions?.locations ?? []) {
+      if (row.id && row.name) map.set(row.id, row.name);
+    }
     photosForOptions.forEach((p) => {
       const loc = p.trip?.location;
       if (loc?.id && loc?.name) map.set(loc.id, loc.name);
@@ -346,10 +679,13 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
     return Array.from(map.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [photosForOptions, allTrips]);
+  }, [albumFilterOptions, photosForOptions, allTrips]);
 
   const flyOptionsMerged = useMemo(() => {
     const set = new Set<string>();
+    for (const f of albumFilterOptions?.flyPatterns ?? []) {
+      if (f.trim()) set.add(f.trim());
+    }
     photosForOptions.forEach((p) => {
       if (p.fly_pattern?.trim()) set.add(p.fly_pattern.trim());
     });
@@ -357,10 +693,13 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       if (c.fly_pattern?.trim()) set.add(c.fly_pattern.trim());
     });
     return Array.from(set).sort();
-  }, [photosForOptions, allCatches]);
+  }, [albumFilterOptions, photosForOptions, allCatches]);
 
   const speciesOptionsMerged = useMemo(() => {
     const set = new Set<string>();
+    for (const s of albumFilterOptions?.species ?? []) {
+      if (s.trim()) set.add(s.trim());
+    }
     photosForOptions.forEach((p) => {
       if (p.species?.trim()) set.add(p.species.trim());
     });
@@ -368,7 +707,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       if (c.species?.trim()) set.add(c.species.trim());
     });
     return Array.from(set).sort();
-  }, [photosForOptions, allCatches]);
+  }, [albumFilterOptions, photosForOptions, allCatches]);
 
   const toggleLocation = useCallback((id: string) => {
     setSelectedLocationIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -380,6 +719,14 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
     setSelectedSpecies((prev) =>
       prev.includes(species) ? prev.filter((x) => x !== species) : [...prev, species],
     );
+  }, []);
+
+  const clearAlbumFilters = useCallback(() => {
+    setSelectedLocationIds([]);
+    setSelectedFlyPatterns([]);
+    setSelectedSpecies([]);
+    setDateFrom('');
+    setDateTo('');
   }, []);
 
   const sharedAlbumFilters: SharedAlbumFilters = useMemo(
@@ -397,6 +744,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       toggleSpecies,
       setDateFrom,
       setDateTo,
+      clearAll: clearAlbumFilters,
     }),
     [
       selectedLocationIds,
@@ -410,25 +758,19 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       toggleLocation,
       toggleFly,
       toggleSpecies,
+      clearAlbumFilters,
     ],
   );
-
-  const hasActiveFilters =
-    selectedLocationIds.length > 0 ||
-    selectedFlyPatterns.length > 0 ||
-    selectedSpecies.length > 0 ||
-    dateFrom.trim() !== '' ||
-    dateTo.trim() !== '';
 
   const handleMarkerPress = useCallback(
     (group: LocationGroup) => {
       if (group.trips.length === 1) {
-        router.push(journalHrefFromProfile(group.trips[0].id));
+        router.push(journalHrefFromHub(group.trips[0].id, peerUserId));
       } else {
         setSelectedGroup(group);
       }
     },
-    [router],
+    [router, peerUserId],
   );
 
   const handleFishMarkerPress = useCallback((c: CatchRow) => {
@@ -513,14 +855,31 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
   const segmentIconMuted = colors.textSecondary;
   const segmentIconActive = colors.textInverse;
 
-  if (photosLoading) {
-    return (
-      <View style={hubStyles.loadingBox}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={hubStyles.loadingText}>Loading photos…</Text>
-      </View>
-    );
-  }
+  const profileHubAlbumPagination = useMemo<ProfileHubAlbumPagination | null>(() => {
+    if (!user?.id || !albumOwnerId) return null;
+    return {
+      photos: libraryPagedPhotos,
+      loading: photosLibraryBooting && libraryPagedPhotos.length === 0,
+      loadingMore: photosLoadingMore,
+      hasMore: photosHasMore,
+      onLoadMore: loadMoreFromScroll,
+      onPhotoDeleted: (photoId) => {
+        setLibraryPagedPhotos((prev) => prev.filter((p) => p.id !== photoId));
+      },
+      onReloadAfterMutation: () => {
+        void reloadPhotoLibraryFirstPage();
+      },
+    };
+  }, [
+    user?.id,
+    albumOwnerId,
+    libraryPagedPhotos,
+    photosLibraryBooting,
+    photosLoadingMore,
+    photosHasMore,
+    loadMoreFromScroll,
+    reloadPhotoLibraryFirstPage,
+  ]);
 
   return (
     <View style={hubStyles.outer}>
@@ -545,7 +904,17 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
             </Pressable>
             <Pressable
               style={[hubStyles.toggleButtonEqual, mediaTab === 'photos' && hubStyles.toggleButtonActive]}
-              onPress={() => setMediaTab('photos')}
+              onPress={() => {
+                setMediaTab('photos');
+                if (
+                  albumOwnerId &&
+                  !photoLibraryStarted &&
+                  !photosLibraryBooting &&
+                  !photosFetchInFlightRef.current
+                ) {
+                  void appendPhotoLibraryPage(true);
+                }
+              }}
             >
               <MaterialCommunityIcons
                 name="image-multiple-outline"
@@ -605,15 +974,17 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
                 {hasActiveFilters ? <View style={hubStyles.filterBadge} /> : null}
               </View>
             </Pressable>
-            <Pressable
-              onPress={() => photoLibraryRef.current?.openAddPhoto()}
-              style={hubStyles.iconBtn}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Add photo"
-            >
-              <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
-            </Pressable>
+            {!isPeerAlbum ? (
+              <Pressable
+                onPress={() => photoLibraryRef.current?.openAddPhoto()}
+                style={hubStyles.iconBtn}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Add photo"
+              >
+                <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
+              </Pressable>
+            ) : null}
           </View>
         </View>
       </View>
@@ -625,7 +996,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={hubStyles.loadingText}>Loading trips…</Text>
             </View>
-          ) : filteredAlbumTrips.length === 0 ? (
+          ) : tripsForHub.length === 0 ? (
             <View style={hubStyles.empty}>
               <MaterialIcons name="route" size={40} color={colors.textTertiary} />
               <Text style={hubStyles.emptyTitle}>No trips match</Text>
@@ -633,17 +1004,26 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
             </View>
           ) : (
             <View style={hubStyles.tripsGridInner}>
-              {filteredAlbumTrips.map((item) => (
+              {tripsForHub.map((item) => (
                 <JournalTripGridCard
                   key={item.id}
                   trip={item}
                   imageUrls={tripPhotoUrlsMap[item.id] ?? []}
                   cardWidth={cardWidth}
-                  onPress={() => router.push(journalHrefFromProfile(item.id))}
+                  onPress={() => router.push(journalHrefFromHub(item.id, peerUserId))}
                   colors={colors}
                   styles={tripGridStyles}
                 />
               ))}
+              {tripsHasMore ? (
+                <View style={hubStyles.tripsGridFooter}>
+                  {tripsLoadingMore ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Text style={hubStyles.tripsGridFooterHint}>Scroll for more trips</Text>
+                  )}
+                </View>
+              ) : null}
             </View>
           )}
         </View>
@@ -719,7 +1099,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
                           style={hubStyles.selectedTripCard}
                           onPress={() => {
                             setSelectedGroup(null);
-                            router.push(journalHrefFromProfile(item.id));
+                            router.push(journalHrefFromHub(item.id, peerUserId));
                           }}
                         >
                           <View style={hubStyles.selectedTripRow}>
@@ -846,7 +1226,7 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
                       onPress={() => {
                         const id = selectedFishCatch.trip_id;
                         setSelectedFishCatch(null);
-                        router.push(journalHrefFromProfile(id));
+                        router.push(journalHrefFromHub(id, peerUserId));
                       }}
                     >
                       <Text style={hubStyles.fishOpenJournalBtnText}>Open trip</Text>
@@ -863,13 +1243,15 @@ export function ProfileTripsPhotosHub({ refreshSignal }: ProfileTripsPhotosHubPr
       <ProfilePhotoLibrarySection
         ref={photoLibraryRef}
         embedded
+        peerUserId={peerUserId ?? null}
         contentHidden={!(mediaTab === 'photos' && layoutTab === 'grid')}
         refreshSignal={refreshSignal}
         sharedAlbumFilters={sharedAlbumFilters}
+        profileHubAlbum={profileHubAlbumPagination}
       />
     </View>
   );
-}
+});
 
 function createHubStyles(colors: ThemeColors, scheme: ResolvedScheme) {
   return StyleSheet.create({
@@ -968,6 +1350,13 @@ function createHubStyles(colors: ThemeColors, scheme: ResolvedScheme) {
       justifyContent: 'space-between',
       rowGap: Spacing.sm,
     },
+    tripsGridFooter: {
+      width: '100%',
+      alignItems: 'center',
+      paddingTop: Spacing.md,
+      paddingBottom: Spacing.sm,
+    },
+    tripsGridFooterHint: { fontSize: FontSize.xs, color: colors.textTertiary },
     empty: { alignItems: 'center', paddingVertical: Spacing.lg },
     emptyTitle: { fontSize: FontSize.lg, fontWeight: '600', color: colors.text, marginTop: Spacing.sm },
     emptyText: { fontSize: FontSize.sm, color: colors.textSecondary, textAlign: 'center', marginTop: Spacing.xs },

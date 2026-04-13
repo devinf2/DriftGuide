@@ -426,6 +426,262 @@ export async function fetchTripsFromCloud(userId: string): Promise<Trip[]> {
   }
 }
 
+/** Profile hub / album: server-side filter pagination (migration 073 RPC). */
+export type ProfileAlbumHubRpcFilters = {
+  locationIds: string[];
+  species: string[];
+  flyPatterns: string[];
+  dateFrom: string | null;
+  dateTo: string | null;
+};
+
+/** Pass only `YYYY-MM-DD` (profile date inputs); other shapes return null (no bound). */
+export function parseProfileAlbumDateForRpc(s: string | null | undefined): string | null {
+  const t = (s ?? '').trim();
+  if (!t) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+}
+
+/** Full-album filter dropdowns (RPC `profile_album_filter_options`); not paginated. */
+export type ProfileAlbumFilterOptionsSnapshot = {
+  locations: { id: string; name: string }[];
+  flyPatterns: string[];
+  species: string[];
+};
+
+export async function fetchProfileAlbumFilterOptions(
+  albumUserId: string,
+): Promise<ProfileAlbumFilterOptionsSnapshot> {
+  try {
+    const { data, error } = await supabase.rpc('profile_album_filter_options', {
+      p_album_user_id: albumUserId,
+    });
+    if (error) throw error;
+    const raw = data as {
+      locations?: { id: string; name: string }[];
+      fly_patterns?: string[];
+      species?: string[];
+    } | null;
+    if (!raw || typeof raw !== 'object') {
+      return { locations: [], flyPatterns: [], species: [] };
+    }
+    return {
+      locations: Array.isArray(raw.locations) ? raw.locations.filter((x) => x?.id && x?.name) : [],
+      flyPatterns: Array.isArray(raw.fly_patterns)
+        ? raw.fly_patterns.map((s) => String(s)).filter(Boolean)
+        : [],
+      species: Array.isArray(raw.species) ? raw.species.map((s) => String(s)).filter(Boolean) : [],
+    };
+  } catch (e) {
+    console.warn('[fetchProfileAlbumFilterOptions]', e);
+    return { locations: [], flyPatterns: [], species: [] };
+  }
+}
+
+async function hydrateTripsWithLocations(idsInOrder: string[]): Promise<Trip[]> {
+  if (idsInOrder.length === 0) return [];
+  try {
+    const { data, error } = await supabase
+      .from('trips')
+      .select('*, location:locations(*)')
+      .in('id', idsInOrder);
+    if (error) throw error;
+    const rows = (data as Trip[]) || [];
+    const pos = new Map(idsInOrder.map((id, i) => [id, i] as const));
+    return [...rows].sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
+  } catch (e) {
+    console.warn('[hydrateTripsWithLocations]', e);
+    return [];
+  }
+}
+
+function albumTripFiltersUseRpc(f: ProfileAlbumHubRpcFilters): boolean {
+  return (
+    f.locationIds.length > 0 ||
+    f.species.length > 0 ||
+    f.flyPatterns.length > 0 ||
+    parseProfileAlbumDateForRpc(f.dateFrom) != null ||
+    parseProfileAlbumDateForRpc(f.dateTo) != null
+  );
+}
+
+/** Completed trips only, newest `start_time` first (profile hub pagination). */
+export async function fetchCompletedTripsPage(
+  userId: string,
+  options: { limit: number; offset: number; filters?: ProfileAlbumHubRpcFilters | null },
+): Promise<Trip[]> {
+  const { limit, offset, filters } = options;
+  if (limit <= 0) return [];
+  try {
+    if (filters && albumTripFiltersUseRpc(filters)) {
+      const { data, error } = await supabase.rpc('profile_album_completed_trips_page', {
+        p_album_user_id: userId,
+        p_limit: limit,
+        p_offset: offset,
+        p_location_ids: filters.locationIds.length ? filters.locationIds : null,
+        p_date_from: parseProfileAlbumDateForRpc(filters.dateFrom),
+        p_date_to: parseProfileAlbumDateForRpc(filters.dateTo),
+        p_species: filters.species.length ? filters.species.map((s) => s.trim()) : null,
+        p_fly_patterns: filters.flyPatterns.length ? filters.flyPatterns.map((s) => s.trim()) : null,
+      });
+      if (error) throw error;
+      const bare = (data as Trip[]) || [];
+      const ids = bare.map((t) => t.id);
+      return hydrateTripsWithLocations(ids);
+    }
+
+    const to = offset + limit - 1;
+    const { data, error } = await supabase
+      .from('trips')
+      .select('*, location:locations(*)')
+      .eq('user_id', userId)
+      .eq('status', 'completed')
+      .order('start_time', { ascending: false })
+      .range(offset, to);
+
+    if (error) throw error;
+    return (data as Trip[]) || [];
+  } catch (error) {
+    console.error('Error fetching completed trips page:', error);
+    return [];
+  }
+}
+
+/**
+ * Catches for the given trips only (profile hub pagination). Same catch/event merge as full fetch.
+ */
+export async function fetchUserCatchesForTripIds(userId: string, tripIds: string[]): Promise<CatchRow[]> {
+  if (tripIds.length === 0) return [];
+  try {
+    const { data: catchRows, error: catchesError } = await supabase
+      .from('catches')
+      .select('*')
+      .eq('user_id', userId)
+      .in('trip_id', tripIds);
+
+    if (catchesError) throw catchesError;
+
+    const byId = new Map<string, CatchRow>();
+    for (const c of (catchRows as CatchRow[]) || []) {
+      byId.set(c.id, { ...c });
+    }
+
+    const { data: trips, error: tripsError } = await supabase
+      .from('trips')
+      .select('id, location_id')
+      .eq('user_id', userId)
+      .in('id', tripIds);
+
+    if (tripsError) {
+      console.warn('[fetchUserCatchesForTripIds] trips', tripsError);
+      return Array.from(byId.values()).sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+    }
+
+    const tripLocationById = new Map((trips ?? []).map((t) => [t.id, t.location_id] as const));
+
+    const { data: events, error: evError } = await supabase
+      .from('trip_events')
+      .select('id, trip_id, latitude, longitude, timestamp, data')
+      .in('trip_id', tripIds)
+      .eq('event_type', 'catch');
+
+    if (evError) {
+      console.warn('[fetchUserCatchesForTripIds] trip_events', evError);
+      return Array.from(byId.values()).sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+    }
+
+    for (const ev of events ?? []) {
+      const evLat = ev.latitude as number | null | undefined;
+      const evLng = ev.longitude as number | null | undefined;
+      const hasEvCoords =
+        typeof evLat === 'number' &&
+        typeof evLng === 'number' &&
+        Number.isFinite(evLat) &&
+        Number.isFinite(evLng);
+
+      const existing = byId.get(ev.id);
+      const data = ev.data as CatchData;
+
+      if (existing) {
+        const la = existing.latitude;
+        const lo = existing.longitude;
+        const needsCoords =
+          la == null ||
+          lo == null ||
+          !Number.isFinite(Number(la)) ||
+          !Number.isFinite(Number(lo));
+        const urlsFromEvent = normalizeCatchPhotoUrls(data as CatchData);
+        const photoPatch =
+          urlsFromEvent.length > 0
+            ? {
+                photo_url: urlsFromEvent[0]!,
+                photo_urls: urlsFromEvent,
+              }
+            : {};
+        if (needsCoords && hasEvCoords) {
+          byId.set(ev.id, {
+            ...existing,
+            latitude: evLat!,
+            longitude: evLng!,
+            ...photoPatch,
+          });
+        } else if (Object.keys(photoPatch).length > 0) {
+          byId.set(ev.id, {
+            ...existing,
+            ...photoPatch,
+          });
+        }
+        continue;
+      }
+
+      if (!hasEvCoords) continue;
+
+      byId.set(ev.id, {
+        id: ev.id,
+        user_id: userId,
+        trip_id: ev.trip_id,
+        event_id: ev.id,
+        location_id: tripLocationById.get(ev.trip_id) ?? null,
+        latitude: evLat!,
+        longitude: evLng!,
+        timestamp: ev.timestamp,
+        species: data?.species ?? null,
+        size_inches: data?.size_inches ?? null,
+        weight_lb: (data as CatchData)?.weight_lb ?? null,
+        weight_oz: (data as CatchData)?.weight_oz ?? null,
+        quantity: Math.max(1, data?.quantity ?? 1),
+        released: data?.released ?? null,
+        depth_ft: data?.depth_ft ?? null,
+        structure: data?.structure ?? null,
+        caught_on_fly: data?.caught_on_fly ?? null,
+        active_fly_event_id: data?.active_fly_event_id ?? null,
+        presentation_method: data?.presentation_method ?? null,
+        note: data?.note ?? null,
+        photo_url: getCatchHeroPhotoUrl(data as CatchData),
+        photo_urls: (() => {
+          const u = normalizeCatchPhotoUrls(data as CatchData);
+          return u.length > 0 ? u : null;
+        })(),
+        conditions_snapshot_id: null,
+        fly_pattern: null,
+        fly_size: null,
+        fly_color: null,
+      });
+    }
+
+    return Array.from(byId.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+  } catch (error) {
+    console.error('Error fetching catches for trip ids:', error);
+    return [];
+  }
+}
+
 /**
  * All catches for the user (journal map, fish layer, modals).
  * Merges `catches` with `trip_events` so pins work when coords exist only on the event

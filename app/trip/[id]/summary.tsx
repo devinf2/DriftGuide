@@ -24,7 +24,7 @@ import {
 } from '@/src/components/journal/TripEndpointPinModal';
 import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
 import { effectiveTripPhotoVisibility } from '@/src/constants/tripPhotoVisibility';
-import { fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
+import { fetchTripById, fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
 import {
   Trip,
@@ -87,10 +87,16 @@ type TripPinPlacementState = {
 function exitTripSummary(
   router: ReturnType<typeof useRouter>,
   returnTo: string | string[] | undefined,
+  friendId: string | string[] | undefined,
 ) {
   const target = Array.isArray(returnTo) ? returnTo[0] : returnTo;
+  const fid = Array.isArray(friendId) ? friendId[0] : friendId;
   if (target === 'profile') {
     router.replace('/profile');
+    return;
+  }
+  if (target === 'friend' && typeof fid === 'string' && fid.length > 0) {
+    router.replace({ pathname: '/friends/friend/[id]', params: { id: fid } });
     return;
   }
   if (router.canGoBack()) {
@@ -103,7 +109,11 @@ function exitTripSummary(
 const TRIP_PHOTOS_DEBUG = typeof __DEV__ !== 'undefined' && __DEV__;
 
 export default function TripSummaryScreen() {
-  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>();
+  const { id, returnTo, friendId } = useLocalSearchParams<{
+    id: string;
+    returnTo?: string;
+    friendId?: string;
+  }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
@@ -148,6 +158,15 @@ export default function TripSummaryScreen() {
   const friendships = useFriendsStore((s) => s.friendships);
   const refreshFriends = useFriendsStore((s) => s.refresh);
 
+  const isOwnTrip = useMemo(
+    () => Boolean(trip && user?.id && trip.user_id === user.id),
+    [trip, user?.id],
+  );
+
+  useEffect(() => {
+    if (!isOwnTrip) setJournalEditMode(false);
+  }, [isOwnTrip]);
+
   useEffect(() => {
     setJournalEditMode(false);
     setTripPinPlacement(null);
@@ -185,6 +204,10 @@ export default function TripSummaryScreen() {
           const trips = await fetchTripsFromCloud(uid);
           if (cancelled) return;
           cloudTrip = trips.find((t) => t.id === id) ?? null;
+          if (!cloudTrip) {
+            cloudTrip = await fetchTripById(id);
+            if (cancelled) return;
+          }
           apiEvents = await fetchTripEvents(id);
           if (cancelled) return;
         } catch {
@@ -251,8 +274,9 @@ export default function TripSummaryScreen() {
 
   const refreshTripPhotos = useCallback(
     async (showLoading: boolean) => {
-      if (!user || !id) {
-        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:skip (no user/id)');
+      const albumUid = trip?.user_id;
+      if (!user || !id || !albumUid) {
+        if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:skip (no user/id/album owner)');
         return;
       }
       if (showLoading) {
@@ -265,25 +289,25 @@ export default function TripSummaryScreen() {
         console.log('[TripPhotos:summary] refresh:start', {
           showLoading,
           seq,
-          cacheKey: `${user.id}:${id}`,
+          cacheKey: `${albumUid}:${id}`,
         });
       }
       try {
-        const photos = await fetchPhotos(user.id, { tripId: id });
+        const photos = await fetchPhotos(albumUid, { tripId: id });
         if (seq !== tripPhotosFetchSeqRef.current) {
           if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:stale after fetch', { seq });
           return;
         }
         setTripPhotos(photos);
-        setSessionTripPhotos(user.id, id, photos);
-        warmTripPhotosKeyRef.current = `${user.id}:${id}`;
+        setSessionTripPhotos(albumUid, id, photos);
+        warmTripPhotosKeyRef.current = `${albumUid}:${id}`;
         if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:ok', { seq, count: photos.length });
       } catch (e) {
         if (seq !== tripPhotosFetchSeqRef.current) return;
         if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] refresh:error', { seq, showLoading, e });
         if (showLoading) {
           setTripPhotos([]);
-          setSessionTripPhotos(user.id, id, []);
+          setSessionTripPhotos(albumUid, id, []);
         }
       } finally {
         if (showLoading && seq === tripPhotosFetchSeqRef.current) {
@@ -291,24 +315,25 @@ export default function TripSummaryScreen() {
         }
       }
     },
-    [user?.id, id],
+    [user?.id, id, trip?.user_id],
   );
 
   useEffect(() => {
-    if (!user?.id || !id) {
-      if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] identity:clear (no user/id)');
+    if (!user?.id || !id || !trip?.user_id) {
+      if (TRIP_PHOTOS_DEBUG) console.log('[TripPhotos:summary] identity:clear (no user/id/album owner)');
       setTripPhotos([]);
       lastTripPhotosIdentityRef.current = null;
       warmTripPhotosKeyRef.current = null;
       return;
     }
-    const identity = `${user.id}:${id}`;
+    const albumUid = trip.user_id;
+    const identity = `${albumUid}:${id}`;
     if (lastTripPhotosIdentityRef.current === identity) {
       return;
     }
     lastTripPhotosIdentityRef.current = identity;
     warmTripPhotosKeyRef.current = null;
-    const cached = getSessionTripPhotos(user.id, id);
+    const cached = getSessionTripPhotos(albumUid, id);
     if (TRIP_PHOTOS_DEBUG) {
       console.log('[TripPhotos:summary] identity:hydrate', {
         identity,
@@ -318,13 +343,14 @@ export default function TripSummaryScreen() {
       });
     }
     setTripPhotos(cached !== undefined ? cached : []);
-  }, [id, user?.id]);
+  }, [id, user?.id, trip?.user_id]);
 
   useEffect(() => {
-    if (!id || !user?.id) return;
-    const key = `${user.id}:${id}`;
+    if (!id || !user?.id || !trip?.user_id) return;
+    const albumUid = trip.user_id;
+    const key = `${albumUid}:${id}`;
     /** Read Map directly — identity effect’s setState may not be committed before this effect runs. */
-    const cachedList = getSessionTripPhotos(user.id, id);
+    const cachedList = getSessionTripPhotos(albumUid, id);
     if (cachedList !== undefined) {
       setTripPhotos(cachedList);
     }
@@ -345,7 +371,7 @@ export default function TripSummaryScreen() {
       });
     }
     void refreshTripPhotos(showBlocking);
-  }, [id, user?.id, refreshTripPhotos]);
+  }, [id, user?.id, trip?.user_id, refreshTripPhotos]);
 
   useEffect(() => {
     if (tripPhotoViewerIndex == null) return;
@@ -432,6 +458,9 @@ export default function TripSummaryScreen() {
 
   const persistTripPins = useCallback(
     async (nextTrip: Trip, nextEvents: TripEvent[]): Promise<boolean> => {
+      if (nextTrip.user_id !== user?.id) {
+        return false;
+      }
       if (!isConnected) {
         Alert.alert('Offline', 'Connect to the internet to save changes.');
         return false;
@@ -442,8 +471,7 @@ export default function TripSummaryScreen() {
       const ok = await syncTripToCloud(nextTrip, nextEvents);
       if (!ok) {
         Alert.alert('Could not save', 'Try again.');
-        const trips = await fetchTripsFromCloud(user.id);
-        const found = trips.find((t) => t.id === id);
+        const found = await fetchTripById(id);
         if (found) setTrip(found);
         const ev = await fetchTripEvents(id);
         setEvents(ev);
@@ -557,7 +585,7 @@ export default function TripSummaryScreen() {
       user_reported_clarity: WaterClarity | null;
       notes: string | null;
     }): Promise<boolean> => {
-      if (!trip || !user || !id) return false;
+      if (!trip || !user || !id || trip.user_id !== user.id) return false;
       if (!isConnected) {
         Alert.alert('Offline', 'Connect to the internet to save changes.');
         return false;
@@ -574,8 +602,7 @@ export default function TripSummaryScreen() {
       setRatingNoteSaving(false);
       if (!ok) {
         Alert.alert('Could not save', 'Try again when you have a stable connection.');
-        const trips = await fetchTripsFromCloud(user.id);
-        const found = trips.find((t) => t.id === id);
+        const found = await fetchTripById(id);
         if (found) setTrip(found);
         return false;
       }
@@ -590,7 +617,7 @@ export default function TripSummaryScreen() {
   };
 
   const openReviewModal = useCallback(() => {
-    if (!trip) return;
+    if (!trip || !isOwnTrip) return;
     if (!isConnected) {
       Alert.alert('Offline', 'Connect to the internet to save changes.');
       return;
@@ -600,7 +627,7 @@ export default function TripSummaryScreen() {
     setReviewClarity(c && c !== 'unknown' ? c : null);
     setReviewNotes(trip.notes ?? '');
     setReviewModalVisible(true);
-  }, [trip, isConnected]);
+  }, [trip, isConnected, isOwnTrip]);
 
   const closeReviewModal = useCallback(() => {
     setReviewModalVisible(false);
@@ -638,7 +665,7 @@ export default function TripSummaryScreen() {
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Trip not found</Text>
-          <Pressable style={styles.backButton} onPress={() => exitTripSummary(router, returnTo)}>
+          <Pressable style={styles.backButton} onPress={() => exitTripSummary(router, returnTo, friendId)}>
             <Text style={styles.backButtonText}>Go Back</Text>
           </Pressable>
         </View>
@@ -647,7 +674,7 @@ export default function TripSummaryScreen() {
   }
 
   const handleDeleteTrip = () => {
-    if (!id) return;
+    if (!id || !isOwnTrip) return;
     const photoCount = tripPhotos.length;
     const photoWarning = photoCount > 0
       ? `\n\n${photoCount} photo${photoCount === 1 ? '' : 's'} associated with this trip will be permanently deleted.`
@@ -664,7 +691,7 @@ export default function TripSummaryScreen() {
             setDeleting(true);
             try {
               await deleteTrip(id);
-              exitTripSummary(router, returnTo);
+              exitTripSummary(router, returnTo, friendId);
             } catch {
               Alert.alert('Error', 'Could not delete trip. Try again.');
             } finally {
@@ -769,7 +796,7 @@ export default function TripSummaryScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
-        <Pressable onPress={() => exitTripSummary(router, returnTo)}>
+        <Pressable onPress={() => exitTripSummary(router, returnTo, friendId)}>
           <MaterialIcons name="arrow-back" size={22} color={themeColors.textInverse} />
         </Pressable>
         <View style={styles.headerCenter}>
@@ -778,78 +805,85 @@ export default function TripSummaryScreen() {
           </Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable
-            onPress={() => setPeopleSheetVisible(true)}
-            style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
-            hitSlop={8}
-            accessibilityLabel="Fishing group"
-          >
-            <MaterialIcons name="group" size={22} color={themeColors.textInverse} />
-          </Pressable>
-          <Pressable
-            onPress={() => setJournalEditMode((v) => !v)}
-            style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
-            hitSlop={8}
-          >
-            <MaterialIcons
-              name={journalEditMode ? 'check' : 'edit'}
-              size={22}
-              color={themeColors.textInverse}
-            />
-          </Pressable>
-          <Pressable
-            onPress={handleDeleteTrip}
-            disabled={deleting}
-            style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
-            hitSlop={8}
-          >
-            <MaterialIcons name="delete-outline" size={22} color={themeColors.textInverse} />
-          </Pressable>
+          {isOwnTrip && trip.shared_session_id ? (
+            <Pressable
+              onPress={() => setPeopleSheetVisible(true)}
+              style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+              hitSlop={8}
+              accessibilityLabel="Fishing group"
+            >
+              <MaterialIcons name="group" size={22} color={themeColors.textInverse} />
+            </Pressable>
+          ) : null}
+          {isOwnTrip ? (
+            <>
+              <Pressable
+                onPress={() => setJournalEditMode((v) => !v)}
+                style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+                hitSlop={8}
+              >
+                <MaterialIcons
+                  name={journalEditMode ? 'check' : 'edit'}
+                  size={22}
+                  color={themeColors.textInverse}
+                />
+              </Pressable>
+              <Pressable
+                onPress={handleDeleteTrip}
+                disabled={deleting}
+                style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
+                hitSlop={8}
+              >
+                <MaterialIcons name="delete-outline" size={22} color={themeColors.textInverse} />
+              </Pressable>
+            </>
+          ) : null}
         </View>
       </View>
 
-      <View style={styles.topBarRow}>
-        <View style={styles.offlineLeft}>
-          <Text style={styles.keepOfflineLabel} numberOfLines={1}>
-            Save offline
-          </Text>
-          <Switch
-            value={keepOfflinePinned}
-            onValueChange={handleKeepOfflineChange}
-            trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
-            thumbColor={themeColors.textInverse}
-            ios_backgroundColor={themeColors.textSecondary}
-            style={styles.keepOfflineSwitch}
+      {isOwnTrip ? (
+        <View style={styles.topBarRow}>
+          <View style={styles.offlineLeft}>
+            <Text style={styles.keepOfflineLabel} numberOfLines={1}>
+              Save offline
+            </Text>
+            <Switch
+              value={keepOfflinePinned}
+              onValueChange={handleKeepOfflineChange}
+              trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
+              thumbColor={themeColors.textInverse}
+              ios_backgroundColor={themeColors.textSecondary}
+              style={styles.keepOfflineSwitch}
+            />
+          </View>
+          <TripPhotoVisibilityDropdown
+            colorTokens={themeColors}
+            label="Visibility"
+            value={effectivePhotoVisibility}
+            onChange={(v: TripPhotoVisibility) => {
+              void (async () => {
+                if (!trip || !user) return;
+                if (!isConnected) {
+                  Alert.alert('Offline', 'Connect to the internet to update this.');
+                  return;
+                }
+                setPhotoVisSaving(true);
+                const updated: Trip = { ...trip, trip_photo_visibility: v };
+                setTrip(updated);
+                const ok = await syncTripToCloud(updated, events);
+                setPhotoVisSaving(false);
+                if (!ok) {
+                  Alert.alert('Could not save', 'Try again when you have a stable connection.');
+                  const found = await fetchTripById(id);
+                  if (found) setTrip(found);
+                }
+              })();
+            }}
+            disabled={!user || !isConnected}
+            saving={photoVisSaving}
           />
         </View>
-        <TripPhotoVisibilityDropdown
-          colorTokens={themeColors}
-          label="Visibility"
-          value={effectivePhotoVisibility}
-          onChange={(v: TripPhotoVisibility) => {
-            void (async () => {
-              if (!trip || !user) return;
-              if (!isConnected) {
-                Alert.alert('Offline', 'Connect to the internet to update this.');
-                return;
-              }
-              setPhotoVisSaving(true);
-              const updated: Trip = { ...trip, trip_photo_visibility: v };
-              setTrip(updated);
-              const ok = await syncTripToCloud(updated, events);
-              setPhotoVisSaving(false);
-              if (!ok) {
-                Alert.alert('Could not save', 'Try again when you have a stable connection.');
-                const trips = await fetchTripsFromCloud(user.id);
-                const found = trips.find((t) => t.id === id);
-                if (found) setTrip(found);
-              }
-            })();
-          }}
-          disabled={!user || !isConnected}
-          saving={photoVisSaving}
-        />
-      </View>
+      ) : null}
 
       {/* Date & Location */}
       <View style={styles.dateLocationRow}>
@@ -882,49 +916,64 @@ export default function TripSummaryScreen() {
         </View>
         <View style={styles.statItem}>
           <View style={[styles.statValueSlot, styles.statValueSlotRating]}>
-            <Pressable
-              onPress={() => openReviewModal()}
-              hitSlop={12}
-              style={({ pressed }) => [styles.statRatingPencil, { opacity: pressed ? 0.6 : 1 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Edit trip review"
-            >
-              <MaterialIcons
-                name="edit"
-                size={15}
-                color={
-                  trip.rating != null ||
-                  (trip.user_reported_clarity != null && trip.user_reported_clarity !== 'unknown') ||
-                  normalizeTripNote(trip.notes) != null
-                    ? themeColors.primary
-                    : themeColors.textSecondary
-                }
-              />
-            </Pressable>
-            <Pressable
-              onPress={() => openReviewModal()}
-              style={styles.statRatingTap}
-              disabled={ratingNoteSaving}
-              accessibilityRole="button"
-              accessibilityLabel={
-                trip.rating != null ? `Trip rating ${trip.rating} out of 5` : 'Set trip rating'
-              }
-            >
-              {ratingNoteSaving ? (
-                <ActivityIndicator size="small" color={themeColors.primary} />
-              ) : (
-                <>
-                  <Text style={styles.statValue}>
-                    {trip.rating != null ? String(trip.rating) : '—'}
-                  </Text>
+            {isOwnTrip ? (
+              <>
+                <Pressable
+                  onPress={() => openReviewModal()}
+                  hitSlop={12}
+                  style={({ pressed }) => [styles.statRatingPencil, { opacity: pressed ? 0.6 : 1 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit trip review"
+                >
                   <MaterialIcons
-                    name={trip.rating != null ? 'star' : 'star-border'}
-                    size={26}
-                    color={trip.rating != null ? themeColors.warning : themeColors.border}
+                    name="edit"
+                    size={15}
+                    color={
+                      trip.rating != null ||
+                      (trip.user_reported_clarity != null && trip.user_reported_clarity !== 'unknown') ||
+                      normalizeTripNote(trip.notes) != null
+                        ? themeColors.primary
+                        : themeColors.textSecondary
+                    }
                   />
-                </>
-              )}
-            </Pressable>
+                </Pressable>
+                <Pressable
+                  onPress={() => openReviewModal()}
+                  style={styles.statRatingTap}
+                  disabled={ratingNoteSaving}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    trip.rating != null ? `Trip rating ${trip.rating} out of 5` : 'Set trip rating'
+                  }
+                >
+                  {ratingNoteSaving ? (
+                    <ActivityIndicator size="small" color={themeColors.primary} />
+                  ) : (
+                    <>
+                      <Text style={styles.statValue}>
+                        {trip.rating != null ? String(trip.rating) : '—'}
+                      </Text>
+                      <MaterialIcons
+                        name={trip.rating != null ? 'star' : 'star-border'}
+                        size={26}
+                        color={trip.rating != null ? themeColors.warning : themeColors.border}
+                      />
+                    </>
+                  )}
+                </Pressable>
+              </>
+            ) : (
+              <View style={styles.statRatingTap}>
+                <Text style={styles.statValue}>
+                  {trip.rating != null ? String(trip.rating) : '—'}
+                </Text>
+                <MaterialIcons
+                  name={trip.rating != null ? 'star' : 'star-border'}
+                  size={26}
+                  color={trip.rating != null ? themeColors.warning : themeColors.border}
+                />
+              </View>
+            )}
           </View>
           <Text style={styles.statLabel}>Rating</Text>
         </View>
@@ -1058,11 +1107,11 @@ export default function TripSummaryScreen() {
           userId={user.id}
           isConnected={isConnected}
           events={events}
-          editMode={journalEditMode}
+          editMode={isOwnTrip && journalEditMode}
           onEventsChange={setEvents}
           onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
           onCatchPhotoPress={handleCatchPhotoPress}
-          onRequestEditTripPin={openTripPinPlacement}
+          onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
         />
       )}
       {activeTab === 'photos' && trip && (
@@ -1161,9 +1210,9 @@ export default function TripSummaryScreen() {
         <SummaryMapTab
           trip={trip}
           events={events}
-          editMode={journalEditMode}
+          editMode={isOwnTrip && journalEditMode}
           tripPinPlacement={tripPinPlacement}
-          onRequestEditTripPin={openTripPinPlacement}
+          onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
           onPlacementMove={handleTripPinPlacementMove}
           onCancelPlacement={cancelTripPinPlacement}
           onSavePlacement={() => void saveTripPinPlacement()}
@@ -1183,7 +1232,7 @@ export default function TripSummaryScreen() {
         <MaterialIcons name="chat" size={26} color={themeColors.textInverse} />
       </Pressable>
 
-      {user && trip && id ? (
+      {user && trip && id && isOwnTrip ? (
         <TripSessionPeopleSheet
           visible={peopleSheetVisible}
           onClose={() => setPeopleSheetVisible(false)}

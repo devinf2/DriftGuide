@@ -76,6 +76,8 @@ interface TripState {
   isSyncingPending: boolean;
   plannedTrips: Trip[];
   plannedTripsLoading: boolean;
+  /** Incremented after a cloud trip delete; profile album hub subscribes to refetch. Not persisted. */
+  albumHubInvalidateVersion: number;
 
   planTrip: (
     userId: string,
@@ -227,6 +229,7 @@ export const useTripStore = create<TripState>()(
       isOnline: true,
       plannedTrips: [],
       plannedTripsLoading: false,
+      albumHubInvalidateVersion: 0,
 
       planTrip: async (userId, locationId, fishingType, location, plannedDate, sessionType, accessPointId) => {
         const tripId = uuidv4();
@@ -337,7 +340,9 @@ export const useTripStore = create<TripState>()(
       },
 
       deleteTrip: async (tripId) => {
-        await deleteTripFromCloud(tripId);
+        const ok = await deleteTripFromCloud(tripId);
+        if (!ok) throw new Error('deleteTripFromCloud failed');
+        set((s) => ({ albumHubInvalidateVersion: s.albumHubInvalidateVersion + 1 }));
       },
 
       fetchPlannedTrips: async (userId) => {

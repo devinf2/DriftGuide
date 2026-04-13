@@ -178,6 +178,20 @@ export default function FriendsScreen() {
   );
   const pendingRequestCount = pendingIncoming.length + pendingOutgoing.length;
 
+  /** When opening Friends without a segment param, land on Requests if someone needs accepting. */
+  const defaultedToRequestsForNoParamRef = useRef(false);
+  useEffect(() => {
+    const fromParam = parseSegParam(segParam);
+    if (fromParam) {
+      defaultedToRequestsForNoParamRef.current = true;
+      return;
+    }
+    if (!myId || loading) return;
+    if (defaultedToRequestsForNoParamRef.current) return;
+    defaultedToRequestsForNoParamRef.current = true;
+    if (pendingIncoming.length > 0) setSeg('requests');
+  }, [segParam, myId, loading, pendingIncoming.length]);
+
   const profileByFriend = useFriendsStore((s) => s.profileByUserId);
 
   const renderRequestAvatar = (oid: string) => {

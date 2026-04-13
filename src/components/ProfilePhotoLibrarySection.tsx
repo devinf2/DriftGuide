@@ -6,7 +6,7 @@ import {
   PhotoQueuedOfflineError,
   type PhotoWithTrip,
 } from '@/src/services/photoService';
-import { fetchTripsFromCloud } from '@/src/services/sync';
+import { fetchCompletedTripsPage } from '@/src/services/sync';
 import { useAuthStore } from '@/src/stores/authStore';
 import type { Trip } from '@/src/types';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -31,6 +31,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   Modal,
   NativeSyntheticEvent,
   NativeScrollEvent,
@@ -40,6 +41,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -66,6 +68,17 @@ function formatPhotoThumbDate(iso: string | null | undefined): string | null {
   }
 }
 
+/** Profile hub paginates the album; section skips its own fetch and uses these callbacks for mutations. */
+export type ProfileHubAlbumPagination = {
+  photos: PhotoWithTrip[];
+  loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  onLoadMore: () => void;
+  onPhotoDeleted: (photoId: string) => void;
+  onReloadAfterMutation: () => void;
+};
+
 /** Parent-owned filters (e.g. profile hub applies the same rules to trips and photos). */
 export type SharedAlbumFilters = {
   selectedLocationIds: string[];
@@ -81,6 +94,8 @@ export type SharedAlbumFilters = {
   toggleSpecies: (species: string) => void;
   setDateFrom: (v: string) => void;
   setDateTo: (v: string) => void;
+  /** Reset locations, flies, species, and date range to “all”. */
+  clearAll: () => void;
 };
 
 export type ProfilePhotoLibraryHandle = {
@@ -99,6 +114,8 @@ type ProfilePhotoLibrarySectionProps = {
   sharedAlbumFilters?: SharedAlbumFilters | null;
   /** Hide the grid / empty / loading block (modals still work — e.g. profile hub map mode). */
   contentHidden?: boolean;
+  /** When set (embedded profile hub), album rows + pagination come from the parent. */
+  profileHubAlbum?: ProfileHubAlbumPagination | null;
 };
 
 export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, ProfilePhotoLibrarySectionProps>(
@@ -109,6 +126,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
       embedded = false,
       sharedAlbumFilters = null,
       contentHidden = false,
+      profileHubAlbum = null,
     },
     ref,
   ) {
@@ -157,6 +175,11 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
 
   /** Prevents parallel loadPhotos() runs (useFocusEffect + effects) from clearing loading too early. */
   const loadPhotosSeqRef = useRef(0);
+
+  const hubOwnsAlbum = profileHubAlbum != null;
+
+  const albumPhotos = hubOwnsAlbum ? profileHubAlbum.photos : photos;
+  const albumLoading = hubOwnsAlbum ? profileHubAlbum.loading : loading;
 
   const loadPhotos = useCallback(async () => {
     if (!albumOwnerId) return;
@@ -210,6 +233,10 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
 
   /** Hydrate from session cache before paint when owner changes; avoids empty / spinner flash on revisit. */
   useLayoutEffect(() => {
+    if (hubOwnsAlbum) {
+      setLoading(false);
+      return;
+    }
     if (!albumOwnerId) {
       setPhotos([]);
       setLoading(false);
@@ -222,25 +249,26 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
     } else {
       setLoading(true);
     }
-  }, [albumOwnerId]);
+  }, [albumOwnerId, hubOwnsAlbum]);
 
   const isFocused = useIsFocused();
   /** Refetch on focus / pull-to-refresh; blocking UI only when no session cache for this owner. */
   useEffect(() => {
-    if (!isFocused) return;
+    if (hubOwnsAlbum || !isFocused) return;
     void loadPhotos();
-  }, [isFocused, loadPhotos]);
+  }, [hubOwnsAlbum, isFocused, loadPhotos]);
 
   useEffect(() => {
     if (refreshSignal === 0) return;
+    if (hubOwnsAlbum) return;
     void loadPhotos();
-  }, [refreshSignal, loadPhotos]);
+  }, [refreshSignal, loadPhotos, hubOwnsAlbum]);
 
   useEffect(() => {
     if (!addPhotoUri || !user?.id || readOnlyAlbum) return;
     let cancelled = false;
     setAddPhotoTripsLoading(true);
-    fetchTripsFromCloud(user.id)
+    fetchCompletedTripsPage(user.id, { limit: 100, offset: 0 })
       .then((trips) => {
         if (!cancelled) setAddPhotoTrips(trips);
       })
@@ -254,28 +282,28 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
 
   const locationsFromPhotos = useMemo(() => {
     const map = new Map<string, string>();
-    photos.forEach((p) => {
+    albumPhotos.forEach((p) => {
       const loc = p.trip?.location;
       if (loc?.id && loc?.name) map.set(loc.id, loc.name);
     });
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [photos]);
+  }, [albumPhotos]);
 
   const flyOptionsFromPhotos = useMemo(() => {
     const set = new Set<string>();
-    photos.forEach((p) => {
+    albumPhotos.forEach((p) => {
       if (p.fly_pattern?.trim()) set.add(p.fly_pattern.trim());
     });
     return Array.from(set).sort();
-  }, [photos]);
+  }, [albumPhotos]);
 
   const speciesOptionsFromPhotos = useMemo(() => {
     const set = new Set<string>();
-    photos.forEach((p) => {
+    albumPhotos.forEach((p) => {
       if (p.species?.trim()) set.add(p.species.trim());
     });
     return Array.from(set).sort();
-  }, [photos]);
+  }, [albumPhotos]);
 
   const locations = sharedAlbumFilters?.locations ?? locationsFromPhotos;
   const flyOptions = sharedAlbumFilters?.flyOptions ?? flyOptionsFromPhotos;
@@ -290,7 +318,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
   const setDateToValue = sharedAlbumFilters?.setDateTo ?? setInternalDateTo;
 
   const filteredPhotos = useMemo(() => {
-    return photos.filter((p) => {
+    return albumPhotos.filter((p) => {
       if (selectedLocationIds.length > 0) {
         const tripLocId = p.trip?.location?.id;
         if (!tripLocId || !selectedLocationIds.includes(tripLocId)) return false;
@@ -314,7 +342,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
       }
       return true;
     });
-  }, [photos, selectedLocationIds, selectedFlyPatterns, selectedSpecies, dateFrom, dateTo]);
+  }, [albumPhotos, selectedLocationIds, selectedFlyPatterns, selectedSpecies, dateFrom, dateTo]);
 
   const hasActiveFilters =
     selectedLocationIds.length > 0 ||
@@ -441,11 +469,18 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
         { isOnline: isConnected },
       );
       setAddPhotoUri(null);
-      await loadPhotos();
+      if (hubOwnsAlbum && profileHubAlbum) {
+        profileHubAlbum.onReloadAfterMutation();
+      } else {
+        await loadPhotos();
+      }
     } catch (e) {
       if (e instanceof PhotoQueuedOfflineError) {
         Alert.alert('Saved on device', "Photo will upload when you're back online.");
         setAddPhotoUri(null);
+        if (hubOwnsAlbum && profileHubAlbum) {
+          profileHubAlbum.onReloadAfterMutation();
+        }
       } else {
         Alert.alert('Upload failed', (e as Error).message);
       }
@@ -463,6 +498,8 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
     addPhotoFlyColor,
     loadPhotos,
     isConnected,
+    hubOwnsAlbum,
+    profileHubAlbum,
   ]);
 
   const handleCancelAddPhoto = useCallback(() => {
@@ -503,11 +540,15 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
                 try {
                   await deletePhoto(photo.id, user.id);
                   setPhotoViewerIndex(null);
-                  setPhotos((prev) => {
-                    const next = prev.filter((p) => p.id !== photo.id);
-                    if (albumOwnerId) setSessionProfilePhotos(albumOwnerId, next);
-                    return next;
-                  });
+                  if (hubOwnsAlbum && profileHubAlbum) {
+                    profileHubAlbum.onPhotoDeleted(photo.id);
+                  } else {
+                    setPhotos((prev) => {
+                      const next = prev.filter((p) => p.id !== photo.id);
+                      if (albumOwnerId) setSessionProfilePhotos(albumOwnerId, next);
+                      return next;
+                    });
+                  }
                 } catch (e) {
                   Alert.alert('Could not delete', (e as Error).message);
                 } finally {
@@ -519,7 +560,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
         ],
       );
     },
-    [user?.id, isConnected, albumOwnerId],
+    [user?.id, isConnected, albumOwnerId, hubOwnsAlbum, profileHubAlbum],
   );
 
   return (
@@ -568,7 +609,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
       ) : null}
 
       {!contentHidden ? (
-        loading ? (
+        albumLoading ? (
           <View
             style={styles.empty}
             pointerEvents="none"
@@ -583,11 +624,11 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
           <View style={styles.empty} pointerEvents="none">
             <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
             <Text style={styles.emptyText}>
-              {!isConnected && photos.length === 0
+                {!isConnected && albumPhotos.length === 0
                 ? hasTripsSavedForOffline
                   ? "You're offline. Open a trip from your journal to view photos saved for offline."
                   : 'No photos downloaded for offline use.'
-                : photos.length === 0
+                : albumPhotos.length === 0
                   ? 'No photos yet.'
                   : 'No photos match the filters.'}
             </Text>
@@ -741,6 +782,7 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
         animationType="slide"
         transparent
         onRequestClose={() => {
+          Keyboard.dismiss();
           setFilterModalVisible(false);
           setOpenDropdown(null);
         }}
@@ -748,15 +790,17 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
         <Pressable
           style={styles.modalOverlay}
           onPress={() => {
+            Keyboard.dismiss();
             setFilterModalVisible(false);
             setOpenDropdown(null);
           }}
         >
-          <Pressable style={styles.filterModalCard} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.filterModalCard} onStartShouldSetResponder={() => true}>
             <View style={styles.filterModalHeader}>
               <Text style={styles.filterModalTitle}>Filters</Text>
               <Pressable
                 onPress={() => {
+                  Keyboard.dismiss();
                   setFilterModalVisible(false);
                   setOpenDropdown(null);
                 }}
@@ -891,17 +935,44 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
               </View>
             </ScrollView>
             <View style={styles.filterModalFooter}>
-              <Pressable
-                style={styles.applyButton}
-                onPress={() => {
-                  setFilterModalVisible(false);
-                  setOpenDropdown(null);
-                }}
-              >
-                <Text style={styles.applyButtonText}>Apply</Text>
-              </Pressable>
+              <View style={styles.filterModalFooterButtons}>
+                <TouchableOpacity
+                  style={styles.clearFiltersButton}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear filters"
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setOpenDropdown(null);
+                    if (sharedAlbumFilters) {
+                      sharedAlbumFilters.clearAll();
+                    } else {
+                      setInternalSelectedLocationIds([]);
+                      setInternalSelectedFlyPatterns([]);
+                      setInternalSelectedSpecies([]);
+                      setInternalDateFrom('');
+                      setInternalDateTo('');
+                    }
+                  }}
+                >
+                  <Text style={styles.clearFiltersButtonText}>Clear</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.applyButton}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Apply filters"
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setOpenDropdown(null);
+                    setFilterModalVisible(false);
+                  }}
+                >
+                  <Text style={styles.applyButtonText}>Apply</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </Pressable>
+          </View>
         </Pressable>
       </Modal>
 
@@ -1317,11 +1388,35 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
   },
+  filterModalFooterButtons: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: Spacing.md,
+  },
+  clearFiltersButton: {
+    flex: 1,
+    backgroundColor: colors.background,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  clearFiltersButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: colors.text,
+  },
   applyButton: {
+    flex: 1,
     backgroundColor: colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.sm,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
   },
   applyButtonText: {
     fontSize: FontSize.md,

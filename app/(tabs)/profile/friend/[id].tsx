@@ -1,4 +1,7 @@
-import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrarySection';
+import {
+  ProfileTripsPhotosHub,
+  type ProfileTripsPhotosHubRef,
+} from '@/src/components/profile/ProfileTripsPhotosHub';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { Spacing } from '@/src/constants/theme';
 import { fetchMyFriendships, fetchProfile, otherUserIdFromFriendship } from '@/src/services/friendsService';
@@ -9,7 +12,15 @@ import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createProfileStyles, QuickTile } from '../index';
 import type { Profile } from '@/src/types';
@@ -30,6 +41,7 @@ export default function FriendProfileScreen() {
   const friendId = useMemo(() => parseIdParam(idParam), [idParam]);
   const { user } = useAuthStore();
   const userId = user?.id ?? null;
+  const profileHubRef = useRef<ProfileTripsPhotosHubRef>(null);
 
   const [friendProfile, setFriendProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,11 +108,21 @@ export default function FriendProfileScreen() {
     navigation.setOptions({ title: nextTitle });
   }, [navigation, displayName]);
 
+  const onFriendProfileScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    const threshold = 280;
+    if (layoutMeasurement.height + contentOffset.y >= contentSize.height - threshold) {
+      profileHubRef.current?.loadMoreFromScroll();
+    }
+  }, []);
+
   const uname = friendProfile?.username?.trim();
 
   return (
     <ScrollView
       style={styles.container}
+      onScroll={onFriendProfileScroll}
+      scrollEventThrottle={400}
       contentContainerStyle={{
         paddingHorizontal: Spacing.md,
         paddingTop: Spacing.md,
@@ -169,7 +191,14 @@ export default function FriendProfileScreen() {
             />
           </View>
 
-          {friendId ? <ProfilePhotoLibrarySection peerUserId={friendId} /> : null}
+          {friendId ? (
+            <ProfileTripsPhotosHub
+              key={friendId}
+              ref={profileHubRef}
+              refreshSignal={0}
+              peerUserId={friendId}
+            />
+          ) : null}
         </>
       ) : null}
     </ScrollView>

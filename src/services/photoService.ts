@@ -1,5 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { readAsStringAsync } from 'expo-file-system/legacy';
+import {
+  parseProfileAlbumDateForRpc,
+  type ProfileAlbumHubRpcFilters,
+} from '@/src/services/sync';
 import { supabase } from './supabase';
 import { Photo } from '@/src/types';
 
@@ -106,6 +110,96 @@ export async function fetchPhotosWithTrip(userId: string): Promise<PhotoWithTrip
   const list = (data as PhotoWithTrip[]) || [];
   console.log('[fetchPhotosWithTrip] photos table', { userId, count: list.length });
   return list;
+}
+
+function albumPhotoFiltersUseRpc(f: ProfileAlbumHubRpcFilters): boolean {
+  return (
+    f.locationIds.length > 0 ||
+    f.species.length > 0 ||
+    f.flyPatterns.length > 0 ||
+    parseProfileAlbumDateForRpc(f.dateFrom) != null ||
+    parseProfileAlbumDateForRpc(f.dateTo) != null
+  );
+}
+
+async function hydratePhotosWithTrip(idsInOrder: string[]): Promise<PhotoWithTrip[]> {
+  if (idsInOrder.length === 0) return [];
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .in('id', idsInOrder);
+  if (error) {
+    console.warn('[hydratePhotosWithTrip] query failed', { count: idsInOrder.length, error });
+    throw error;
+  }
+  const rows = (data as PhotoWithTrip[]) || [];
+  const pos = new Map(idsInOrder.map((id, i) => [id, i] as const));
+  return [...rows].sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
+}
+
+/** Paginated profile album (newest first). Uses inclusive `range` — request `limit` rows. */
+export async function fetchPhotosWithTripPage(
+  userId: string,
+  options: { limit: number; offset: number; filters?: ProfileAlbumHubRpcFilters | null },
+): Promise<PhotoWithTrip[]> {
+  const { limit, offset, filters } = options;
+  if (limit <= 0) return [];
+
+  if (filters && albumPhotoFiltersUseRpc(filters)) {
+    const { data, error } = await supabase.rpc('profile_album_photos_page', {
+      p_album_user_id: userId,
+      p_limit: limit,
+      p_offset: offset,
+      p_location_ids: filters.locationIds.length ? filters.locationIds : null,
+      p_date_from: parseProfileAlbumDateForRpc(filters.dateFrom),
+      p_date_to: parseProfileAlbumDateForRpc(filters.dateTo),
+      p_species: filters.species.length ? filters.species.map((s) => s.trim()) : null,
+      p_fly_patterns: filters.flyPatterns.length ? filters.flyPatterns.map((s) => s.trim()) : null,
+    });
+    if (error) {
+      console.warn('[fetchPhotosWithTripPage] rpc failed', { userId, offset, limit, error });
+      throw error;
+    }
+    const bare = (data as Photo[]) || [];
+    const ids = bare.map((p) => p.id);
+    return hydratePhotosWithTrip(ids);
+  }
+
+  const to = offset + limit - 1;
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .range(offset, to);
+
+  if (error) {
+    console.warn('[fetchPhotosWithTripPage] query failed', { userId, offset, limit, error });
+    throw error;
+  }
+  const list = (data as PhotoWithTrip[]) || [];
+  return list;
+}
+
+/** Album rows for the given trips (with trip join), scoped to `userId` (your uploads on those trips). */
+export async function fetchPhotosWithTripForTripIds(
+  userId: string,
+  tripIds: string[],
+): Promise<PhotoWithTrip[]> {
+  if (tripIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('photos')
+    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .eq('user_id', userId)
+    .in('trip_id', tripIds)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.warn('[fetchPhotosWithTripForTripIds] query failed', { userId, tripIds: tripIds.length, error });
+    throw error;
+  }
+  return (data as PhotoWithTrip[]) || [];
 }
 
 export interface AddPhotoOptions {

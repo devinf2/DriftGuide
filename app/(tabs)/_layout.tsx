@@ -1,9 +1,11 @@
 import { FishActionsTabButton } from '@/src/components/FishActionsTabButton';
 import { PlanTripFab } from '@/src/components/PlanTripFab';
+import { useAuthStore } from '@/src/stores/authStore';
+import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -14,6 +16,18 @@ export const unstable_settings = {
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+  const friendships = useFriendsStore((s) => s.friendships);
+  const refreshFriends = useFriendsStore((s) => s.refresh);
+
+  useEffect(() => {
+    if (userId) void refreshFriends(userId);
+  }, [userId, refreshFriends]);
+
+  const incomingFriendRequestCount = useMemo(() => {
+    if (!userId) return 0;
+    return friendships.filter((f) => f.status === 'pending' && f.requested_by !== userId).length;
+  }, [friendships, userId]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -63,6 +77,7 @@ export default function TabLayout() {
           name="friends"
           options={{
             title: 'Friends',
+            tabBarBadge: incomingFriendRequestCount > 0 ? Math.min(incomingFriendRequestCount, 99) : undefined,
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="account-multiple" color={color} size={size} />
             ),
