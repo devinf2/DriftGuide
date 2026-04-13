@@ -36,18 +36,34 @@ export function JournalTripCarousel({
   height: number;
   colors: ThemeColors;
   styles: ReturnType<typeof createJournalTripGridStyles>;
-  /** When set, tapping a photo opens the trip (same as the card body). */
+  /** When set, tapping a photo or the empty “No photos” area opens the trip (same as the card body). */
   onImagePress?: (() => void) | null;
 }) {
   const [index, setIndex] = useState(0);
 
   if (urls.length === 0) {
-    return (
+    const empty = (
       <View style={[styles.tripCarouselEmpty, { width, height }]}>
         <MaterialIcons name="photo-library" size={28} color={colors.textTertiary} />
         <Text style={styles.tripCarouselEmptyText}>No photos</Text>
       </View>
     );
+    if (onImagePress) {
+      return (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open trip"
+          onPress={onImagePress}
+          style={({ pressed }) => [
+            { width, height },
+            pressed && styles.tripCarouselEmptyPressed,
+          ]}
+        >
+          {empty}
+        </Pressable>
+      );
+    }
+    return empty;
   }
 
   return (
@@ -192,6 +208,9 @@ export function createJournalTripGridStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.borderLight,
       gap: Spacing.xs,
+    },
+    tripCarouselEmptyPressed: {
+      opacity: 0.75,
     },
     tripCarouselEmptyText: {
       fontSize: FontSize.xs,

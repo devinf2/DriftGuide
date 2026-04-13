@@ -235,6 +235,21 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
   const loadMoreCooldownRef = useRef(0);
   /** Bumped when album owner or filters change — drop stale append results. */
   const hubAlbumDataGenRef = useRef(0);
+  /** User hit “load more” while a trips page fetch was already in flight — fetch the next page when the current one finishes. */
+  const tripsLoadMorePendingRef = useRef(false);
+  const tripsHasMoreRef = useRef(true);
+  const tripsLoadingMoreRef = useRef(false);
+  tripsHasMoreRef.current = tripsHasMore;
+  tripsLoadingMoreRef.current = tripsLoadingMore;
+  const photosHasMoreRef = useRef(true);
+  const photosLoadingMoreRef = useRef(false);
+  photosHasMoreRef.current = photosHasMore;
+  photosLoadingMoreRef.current = photosLoadingMore;
+
+  const appendTripsPageRef = useRef<(isInitial: boolean) => Promise<void>>(async () => {});
+  const appendPhotoLibraryPageRef = useRef<
+    (isInitial: boolean, opts?: { replace?: boolean }) => Promise<void>
+  >(async () => {});
 
   const photosForOptions = useMemo(
     () => mergePhotoWithTripById(tripScopedPhotos, libraryPagedPhotos),
@@ -264,6 +279,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     setPhotosLoadingMore(false);
     tripsFetchInFlightRef.current = false;
     photosFetchInFlightRef.current = false;
+    tripsLoadMorePendingRef.current = false;
   }, []);
 
   const resetTripsPagingForFilterChange = useCallback(() => {
@@ -276,6 +292,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     setTripsDataLoading(false);
     setTripsLoadingMore(false);
     tripsFetchInFlightRef.current = false;
+    tripsLoadMorePendingRef.current = false;
   }, []);
 
   const resetPhotosPagingForFilterChange = useCallback(() => {
@@ -303,11 +320,12 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
   const appendTripsPage = useCallback(
     async (isInitial: boolean) => {
       if (!user?.id || !albumOwnerId || tripsFetchInFlightRef.current) return;
-      if (!isInitial && (!tripsHasMore || tripsLoadingMore)) return;
+      if (!isInitial && (!tripsHasMoreRef.current || tripsLoadingMoreRef.current)) return;
       const generation = hubAlbumDataGenRef.current;
       tripsFetchInFlightRef.current = true;
       if (isInitial) setTripsDataLoading(true);
       else setTripsLoadingMore(true);
+      let didCommit = false;
       try {
         const offset = nextTripOffsetRef.current;
         const hasFilters =
@@ -321,7 +339,10 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
           offset,
           filters: hasFilters ? albumRpcFilters : undefined,
         });
-        if (generation !== hubAlbumDataGenRef.current) return;
+        if (generation !== hubAlbumDataGenRef.current) {
+          tripsLoadMorePendingRef.current = false;
+          return;
+        }
         const hasMore = page.length > TRIPS_PAGE;
         const slice = hasMore ? page.slice(0, TRIPS_PAGE) : page;
         const ids = slice.map((t) => t.id);
@@ -331,7 +352,10 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
           ids.length ? fetchUserCatchesForTripIds(albumOwnerId, ids) : Promise.resolve([] as CatchRow[]),
         ]);
 
-        if (generation !== hubAlbumDataGenRef.current) return;
+        if (generation !== hubAlbumDataGenRef.current) {
+          tripsLoadMorePendingRef.current = false;
+          return;
+        }
 
         setAllTrips((prev) => {
           const seen = new Set(prev.map((t) => t.id));
@@ -343,17 +367,24 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
         nextTripOffsetRef.current += slice.length;
         setTripsHasMore(hasMore && slice.length > 0);
         setTripsDataLoaded(true);
+        didCommit = true;
       } finally {
         tripsFetchInFlightRef.current = false;
         if (isInitial) setTripsDataLoading(false);
         else setTripsLoadingMore(false);
+        if (!isInitial && didCommit && tripsLoadMorePendingRef.current) {
+          tripsLoadMorePendingRef.current = false;
+          if (tripsHasMoreRef.current) {
+            queueMicrotask(() => {
+              void appendTripsPageRef.current(false);
+            });
+          }
+        }
       }
     },
     [
       user?.id,
       albumOwnerId,
-      tripsHasMore,
-      tripsLoadingMore,
       albumRpcFilters,
       selectedLocationIds.length,
       selectedFlyPatterns.length,
@@ -363,10 +394,12 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     ],
   );
 
+  appendTripsPageRef.current = appendTripsPage;
+
   const appendPhotoLibraryPage = useCallback(
     async (isInitial: boolean, opts?: { replace?: boolean }) => {
       if (!user?.id || !albumOwnerId || photosFetchInFlightRef.current) return;
-      if (!isInitial && (!photosHasMore || photosLoadingMore)) return;
+      if (!isInitial && (!photosHasMoreRef.current || photosLoadingMoreRef.current)) return;
       const generation = hubAlbumDataGenRef.current;
       photosFetchInFlightRef.current = true;
       if (isInitial) setPhotosLibraryBooting(true);
@@ -413,8 +446,6 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     [
       user?.id,
       albumOwnerId,
-      photosHasMore,
-      photosLoadingMore,
       albumRpcFilters,
       selectedLocationIds.length,
       selectedFlyPatterns.length,
@@ -424,10 +455,12 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     ],
   );
 
+  appendPhotoLibraryPageRef.current = appendPhotoLibraryPage;
+
   const reloadPhotoLibraryFirstPage = useCallback(async () => {
     if (!user?.id || !albumOwnerId) return;
-    await appendPhotoLibraryPage(true, { replace: true });
-  }, [user?.id, albumOwnerId, appendPhotoLibraryPage]);
+    await appendPhotoLibraryPageRef.current(true, { replace: true });
+  }, [user?.id, albumOwnerId]);
 
   useEffect(() => {
     resetPagedHubState();
@@ -456,15 +489,15 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
 
   useEffect(() => {
     if (mediaTab !== 'trips' || !user?.id || !albumOwnerId || tripsDataLoaded || tripsDataLoading) return;
-    void appendTripsPage(true);
-  }, [mediaTab, user?.id, albumOwnerId, tripsDataLoaded, tripsDataLoading, appendTripsPage]);
+    void appendTripsPageRef.current(true);
+  }, [mediaTab, user?.id, albumOwnerId, tripsDataLoaded, tripsDataLoading]);
 
   /** After filter reset or first visit to Photos, load page 1 (server-filtered when filters are on). */
   useEffect(() => {
     if (mediaTab !== 'photos' || !user?.id || !albumOwnerId) return;
     if (photosLibraryBooting || photosLoadingMore || photosFetchInFlightRef.current) return;
     if (!photoLibraryStarted) {
-      void appendPhotoLibraryPage(true, { replace: true });
+      void appendPhotoLibraryPageRef.current(true, { replace: true });
     }
   }, [
     mediaTab,
@@ -474,7 +507,6 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     photosLibraryBooting,
     photosLoadingMore,
     albumFilterKey,
-    appendPhotoLibraryPage,
   ]);
 
   useEffect(() => {
@@ -491,23 +523,27 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     if (refreshSignal === 0) return;
     resetPagedHubState();
     void (async () => {
-      await appendTripsPage(true);
+      await appendTripsPageRef.current(true);
       if (mediaTabRef.current === 'photos') {
-        await appendPhotoLibraryPage(true, { replace: true });
+        await appendPhotoLibraryPageRef.current(true, { replace: true });
       }
     })();
-  }, [refreshSignal, resetPagedHubState, appendTripsPage, appendPhotoLibraryPage]);
+  }, [refreshSignal, resetPagedHubState]);
 
   const loadMoreFromScroll = useCallback(() => {
     const now = Date.now();
     if (now - loadMoreCooldownRef.current < 600) return;
     loadMoreCooldownRef.current = now;
     if (layoutTab !== 'grid') return;
-    if (mediaTab === 'trips' && tripsHasMore && !tripsDataLoading && !tripsLoadingMore) {
-      void appendTripsPage(false);
+    if (mediaTab === 'trips' && tripsHasMore && !tripsDataLoading) {
+      if (tripsLoadingMore || tripsFetchInFlightRef.current) {
+        tripsLoadMorePendingRef.current = true;
+      } else {
+        void appendTripsPageRef.current(false);
+      }
     }
     if (mediaTab === 'photos' && photosHasMore && !photosLibraryBooting && !photosLoadingMore) {
-      void appendPhotoLibraryPage(false);
+      void appendPhotoLibraryPageRef.current(false);
     }
   }, [
     layoutTab,
@@ -518,8 +554,6 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     photosHasMore,
     photosLibraryBooting,
     photosLoadingMore,
-    appendTripsPage,
-    appendPhotoLibraryPage,
   ]);
 
   useImperativeHandle(ref, () => ({ loadMoreFromScroll }), [loadMoreFromScroll]);
@@ -635,9 +669,9 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
   }, [mediaTab, tripsForHub, fishMapPins]);
 
   const mapDataBlocking = useMemo(() => {
-    if (mediaTab === 'trips') return tripsDataLoading && !tripsDataLoaded;
+    if (mediaTab === 'trips') return tripsDataLoading && !tripsDataLoaded && allTrips.length === 0;
     return photosLibraryBooting && libraryPagedPhotos.length === 0;
-  }, [mediaTab, tripsDataLoading, tripsDataLoaded, photosLibraryBooting, libraryPagedPhotos.length]);
+  }, [mediaTab, tripsDataLoading, tripsDataLoaded, allTrips.length, photosLibraryBooting, libraryPagedPhotos.length]);
 
   useEffect(() => {
     if (mapDataBlocking) return;
@@ -912,7 +946,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
                   !photosLibraryBooting &&
                   !photosFetchInFlightRef.current
                 ) {
-                  void appendPhotoLibraryPage(true);
+                  void appendPhotoLibraryPageRef.current(true);
                 }
               }}
             >
@@ -991,7 +1025,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
 
       {layoutTab === 'grid' && mediaTab === 'trips' && (
         <View style={hubStyles.tripsGridWrap}>
-          {tripsDataLoading && !tripsDataLoaded ? (
+          {tripsDataLoading && !tripsDataLoaded && allTrips.length === 0 ? (
             <View style={hubStyles.loadingBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={hubStyles.loadingText}>Loading trips…</Text>
@@ -1050,7 +1084,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
             />
           )}
 
-          {mediaTab === 'trips' && tripsDataLoading && !tripsDataLoaded ? (
+          {mediaTab === 'trips' && tripsDataLoading && !tripsDataLoaded && allTrips.length === 0 ? (
             <View style={hubStyles.mapEmptyOverlay} pointerEvents="none">
               <View style={hubStyles.mapEmptyBubble}>
                 <Text style={hubStyles.mapEmptyText}>Loading trips…</Text>

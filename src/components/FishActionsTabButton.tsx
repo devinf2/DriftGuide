@@ -7,7 +7,7 @@ import { PlatformPressable } from '@react-navigation/elements';
 import { StyleSheet, View } from 'react-native';
 
 const CIRCLE = 52;
-const FISH_ICON = 28;
+const CENTER_ICON = 28;
 
 export function FishActionsTabButton(props: BottomTabBarButtonProps) {
   const { colors } = useAppTheme();
@@ -16,13 +16,13 @@ export function FishActionsTabButton(props: BottomTabBarButtonProps) {
   return (
     <PlatformPressable
       {...rest}
-      accessibilityLabel="Fishing actions"
+      accessibilityLabel="Plan or start fishing"
       accessibilityHint="Opens plan a trip, fish now, or log past trips"
       style={[styles.slot, style]}
       onPress={() => requestOpenPlanTripMenuFromTabBar()}
     >
       <View style={[styles.circle, { backgroundColor: colors.primary }]}>
-        <MaterialCommunityIcons name="fish" size={FISH_ICON} color={colors.textInverse} />
+        <MaterialCommunityIcons name="hook" size={CENTER_ICON} color={colors.textInverse} />
       </View>
     </PlatformPressable>
   );
