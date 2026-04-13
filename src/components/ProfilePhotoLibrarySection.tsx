@@ -15,7 +15,16 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { getPinnedTripIds } from '@/src/services/tripPhotoOfflineCache';
 import {
@@ -57,14 +66,52 @@ function formatPhotoThumbDate(iso: string | null | undefined): string | null {
   }
 }
 
+/** Parent-owned filters (e.g. profile hub applies the same rules to trips and photos). */
+export type SharedAlbumFilters = {
+  selectedLocationIds: string[];
+  selectedFlyPatterns: string[];
+  selectedSpecies: string[];
+  dateFrom: string;
+  dateTo: string;
+  locations: { id: string; name: string }[];
+  flyOptions: string[];
+  speciesOptions: string[];
+  toggleLocation: (id: string) => void;
+  toggleFly: (fly: string) => void;
+  toggleSpecies: (species: string) => void;
+  setDateFrom: (v: string) => void;
+  setDateTo: (v: string) => void;
+};
+
+export type ProfilePhotoLibraryHandle = {
+  openFilters: () => void;
+  openAddPhoto: () => void;
+};
+
 type ProfilePhotoLibrarySectionProps = {
   /** Increment to reload the grid (e.g. parent pull-to-refresh). */
   refreshSignal?: number;
   /** When set, loads that user’s album (RLS). Read-only: no add/delete. */
   peerUserId?: string | null;
+  /** Hide title row; parent supplies chrome (filter / add). */
+  embedded?: boolean;
+  /** When set, filter UI and `filteredPhotos` use these values instead of internal state. */
+  sharedAlbumFilters?: SharedAlbumFilters | null;
+  /** Hide the grid / empty / loading block (modals still work — e.g. profile hub map mode). */
+  contentHidden?: boolean;
 };
 
-export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = null }: ProfilePhotoLibrarySectionProps) {
+export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, ProfilePhotoLibrarySectionProps>(
+  function ProfilePhotoLibrarySection(
+    {
+      refreshSignal = 0,
+      peerUserId = null,
+      embedded = false,
+      sharedAlbumFilters = null,
+      contentHidden = false,
+    },
+    ref,
+  ) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProfilePhotoLibraryStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
@@ -86,11 +133,11 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   /** Full-screen spinner only when this session has no cached grid yet for `albumOwnerId`. */
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
-  const [selectedFlyPatterns, setSelectedFlyPatterns] = useState<string[]>([]);
-  const [selectedSpecies, setSelectedSpecies] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [internalSelectedLocationIds, setInternalSelectedLocationIds] = useState<string[]>([]);
+  const [internalSelectedFlyPatterns, setInternalSelectedFlyPatterns] = useState<string[]>([]);
+  const [internalSelectedSpecies, setInternalSelectedSpecies] = useState<string[]>([]);
+  const [internalDateFrom, setInternalDateFrom] = useState('');
+  const [internalDateTo, setInternalDateTo] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<'location' | 'fly' | 'species' | null>(null);
   /** Index into `filteredPhotos` while the full-screen viewer is open; `null` = closed. */
@@ -205,7 +252,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     };
   }, [addPhotoUri, user?.id, readOnlyAlbum]);
 
-  const locations = useMemo(() => {
+  const locationsFromPhotos = useMemo(() => {
     const map = new Map<string, string>();
     photos.forEach((p) => {
       const loc = p.trip?.location;
@@ -214,7 +261,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [photos]);
 
-  const flyOptions = useMemo(() => {
+  const flyOptionsFromPhotos = useMemo(() => {
     const set = new Set<string>();
     photos.forEach((p) => {
       if (p.fly_pattern?.trim()) set.add(p.fly_pattern.trim());
@@ -222,13 +269,25 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     return Array.from(set).sort();
   }, [photos]);
 
-  const speciesOptions = useMemo(() => {
+  const speciesOptionsFromPhotos = useMemo(() => {
     const set = new Set<string>();
     photos.forEach((p) => {
       if (p.species?.trim()) set.add(p.species.trim());
     });
     return Array.from(set).sort();
   }, [photos]);
+
+  const locations = sharedAlbumFilters?.locations ?? locationsFromPhotos;
+  const flyOptions = sharedAlbumFilters?.flyOptions ?? flyOptionsFromPhotos;
+  const speciesOptions = sharedAlbumFilters?.speciesOptions ?? speciesOptionsFromPhotos;
+
+  const selectedLocationIds = sharedAlbumFilters?.selectedLocationIds ?? internalSelectedLocationIds;
+  const selectedFlyPatterns = sharedAlbumFilters?.selectedFlyPatterns ?? internalSelectedFlyPatterns;
+  const selectedSpecies = sharedAlbumFilters?.selectedSpecies ?? internalSelectedSpecies;
+  const dateFrom = sharedAlbumFilters?.dateFrom ?? internalDateFrom;
+  const dateTo = sharedAlbumFilters?.dateTo ?? internalDateTo;
+  const setDateFromValue = sharedAlbumFilters?.setDateFrom ?? setInternalDateFrom;
+  const setDateToValue = sharedAlbumFilters?.setDateTo ?? setInternalDateTo;
 
   const filteredPhotos = useMemo(() => {
     return photos.filter((p) => {
@@ -311,21 +370,36 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     [winWidth, filteredPhotos.length],
   );
 
-  const toggleLocation = useCallback((id: string) => {
-    setSelectedLocationIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  }, []);
-  const toggleFly = useCallback((fly: string) => {
-    setSelectedFlyPatterns((prev) =>
-      prev.includes(fly) ? prev.filter((x) => x !== fly) : [...prev, fly],
-    );
-  }, []);
-  const toggleSpecies = useCallback((species: string) => {
-    setSelectedSpecies((prev) =>
-      prev.includes(species) ? prev.filter((x) => x !== species) : [...prev, species],
-    );
-  }, []);
+  const toggleLocation = useCallback(
+    (id: string) => {
+      if (sharedAlbumFilters) sharedAlbumFilters.toggleLocation(id);
+      else
+        setInternalSelectedLocationIds((prev) =>
+          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+        );
+    },
+    [sharedAlbumFilters],
+  );
+  const toggleFly = useCallback(
+    (fly: string) => {
+      if (sharedAlbumFilters) sharedAlbumFilters.toggleFly(fly);
+      else
+        setInternalSelectedFlyPatterns((prev) =>
+          prev.includes(fly) ? prev.filter((x) => x !== fly) : [...prev, fly],
+        );
+    },
+    [sharedAlbumFilters],
+  );
+  const toggleSpecies = useCallback(
+    (species: string) => {
+      if (sharedAlbumFilters) sharedAlbumFilters.toggleSpecies(species);
+      else
+        setInternalSelectedSpecies((prev) =>
+          prev.includes(species) ? prev.filter((x) => x !== species) : [...prev, species],
+        );
+    },
+    [sharedAlbumFilters],
+  );
 
   const handlePickAddPhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -396,6 +470,18 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
     setAddPhotoDropdownOpen(false);
   }, []);
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      openFilters: () => {
+        setFilterModalVisible(true);
+        setOpenDropdown(null);
+      },
+      openAddPhoto: () => void handlePickAddPhoto(),
+    }),
+    [handlePickAddPhoto],
+  );
+
   const handleConfirmDeletePhoto = useCallback(
     (photo: PhotoWithTrip) => {
       if (!user?.id) return;
@@ -437,102 +523,106 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
   );
 
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Photos</Text>
-        <View style={styles.sectionHeaderActions}>
-          <Pressable
-            onPress={() => setFilterModalVisible(true)}
-            style={styles.headerIconBtn}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel="Filter photos"
-          >
-            <View style={styles.filterIconWrap}>
-              <MaterialCommunityIcons
-                name={hasActiveFilters ? 'filter' : 'filter-outline'}
-                size={20}
-                color={colors.primary}
-              />
-              {hasActiveFilters ? <View style={styles.filterBadge} /> : null}
-            </View>
-          </Pressable>
-          {!readOnlyAlbum ? (
+    <View style={[styles.wrap, embedded && styles.wrapEmbedded]} pointerEvents="box-none">
+      {!embedded ? (
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Photos</Text>
+          <View style={styles.sectionHeaderActions}>
             <Pressable
-              onPress={handlePickAddPhoto}
+              onPress={() => setFilterModalVisible(true)}
               style={styles.headerIconBtn}
               hitSlop={12}
-              disabled={uploading}
               accessibilityRole="button"
-              accessibilityLabel="Add photo"
+              accessibilityLabel="Filter photos"
             >
-              {uploading ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
-              )}
+              <View style={styles.filterIconWrap}>
+                <MaterialCommunityIcons
+                  name={hasActiveFilters ? 'filter' : 'filter-outline'}
+                  size={20}
+                  color={colors.primary}
+                />
+                {hasActiveFilters ? <View style={styles.filterBadge} /> : null}
+              </View>
             </Pressable>
-          ) : null}
+            {!readOnlyAlbum ? (
+              <Pressable
+                onPress={handlePickAddPhoto}
+                style={styles.headerIconBtn}
+                hitSlop={12}
+                disabled={uploading}
+                accessibilityRole="button"
+                accessibilityLabel="Add photo"
+              >
+                {uploading ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <MaterialCommunityIcons name="plus-circle-outline" size={22} color={colors.primary} />
+                )}
+              </Pressable>
+            ) : null}
+          </View>
         </View>
-      </View>
+      ) : null}
       {readOnlyAlbum ? (
         <Text style={styles.peerAlbumHint}>Trip photos they chose to show on their profile.</Text>
       ) : null}
 
-      {loading ? (
-        <View
-          style={styles.empty}
-          pointerEvents="none"
-          accessibilityRole="progressbar"
-          accessibilityState={{ busy: true }}
-          accessibilityLabel="Loading photos"
-        >
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.emptyText}>Loading photos…</Text>
-        </View>
-      ) : filteredPhotos.length === 0 ? (
-        <View style={styles.empty} pointerEvents="none">
-          <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
-          <Text style={styles.emptyText}>
-            {!isConnected && photos.length === 0
-              ? hasTripsSavedForOffline
-                ? "You're offline. Open a trip from your journal to view photos saved for offline."
-                : 'No photos downloaded for offline use.'
-              : photos.length === 0
-                ? 'No photos yet.'
-                : 'No photos match the filters.'}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.grid}>
-          {filteredPhotos.map((photo) => {
-            const dateLabel = formatPhotoThumbDate(photo.captured_at ?? photo.created_at);
-            return (
-              <Pressable
-                key={photo.id}
-                style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
-                onPress={() => {
-                  const i = filteredPhotos.findIndex((p) => p.id === photo.id);
-                  if (i >= 0) setPhotoViewerIndex(i);
-                }}
-              >
-                <OfflineTripPhotoImage
-                  remoteUri={photo.url}
-                  style={StyleSheet.absoluteFill}
-                  contentFit="cover"
-                />
-                {dateLabel ? (
-                  <View style={styles.dateBanner} pointerEvents="none">
-                    <Text style={styles.dateBannerText} numberOfLines={1}>
-                      {dateLabel}
-                    </Text>
-                  </View>
-                ) : null}
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
+      {!contentHidden ? (
+        loading ? (
+          <View
+            style={styles.empty}
+            pointerEvents="none"
+            accessibilityRole="progressbar"
+            accessibilityState={{ busy: true }}
+            accessibilityLabel="Loading photos"
+          >
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.emptyText}>Loading photos…</Text>
+          </View>
+        ) : filteredPhotos.length === 0 ? (
+          <View style={styles.empty} pointerEvents="none">
+            <MaterialCommunityIcons name="image-multiple-outline" size={48} color={colors.textTertiary} />
+            <Text style={styles.emptyText}>
+              {!isConnected && photos.length === 0
+                ? hasTripsSavedForOffline
+                  ? "You're offline. Open a trip from your journal to view photos saved for offline."
+                  : 'No photos downloaded for offline use.'
+                : photos.length === 0
+                  ? 'No photos yet.'
+                  : 'No photos match the filters.'}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.grid}>
+            {filteredPhotos.map((photo) => {
+              const dateLabel = formatPhotoThumbDate(photo.captured_at ?? photo.created_at);
+              return (
+                <Pressable
+                  key={photo.id}
+                  style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
+                  onPress={() => {
+                    const i = filteredPhotos.findIndex((p) => p.id === photo.id);
+                    if (i >= 0) setPhotoViewerIndex(i);
+                  }}
+                >
+                  <OfflineTripPhotoImage
+                    remoteUri={photo.url}
+                    style={StyleSheet.absoluteFill}
+                    contentFit="cover"
+                  />
+                  {dateLabel ? (
+                    <View style={styles.dateBanner} pointerEvents="none">
+                      <Text style={styles.dateBannerText} numberOfLines={1}>
+                        {dateLabel}
+                      </Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        )
+      ) : null}
 
       <Modal visible={!!addPhotoUri} transparent animationType="fade">
         <Pressable style={styles.addPhotoModalOverlay} onPress={() => setAddPhotoDropdownOpen(false)}>
@@ -788,7 +878,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
                   placeholder="From (YYYY-MM-DD)"
                   placeholderTextColor={colors.textTertiary}
                   value={dateFrom}
-                  onChangeText={setDateFrom}
+                  onChangeText={setDateFromValue}
                 />
                 <Text style={styles.dateSep}>–</Text>
                 <TextInput
@@ -796,7 +886,7 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
                   placeholder="To (YYYY-MM-DD)"
                   placeholderTextColor={colors.textTertiary}
                   value={dateTo}
-                  onChangeText={setDateTo}
+                  onChangeText={setDateToValue}
                 />
               </View>
             </ScrollView>
@@ -959,12 +1049,15 @@ export function ProfilePhotoLibrarySection({ refreshSignal = 0, peerUserId = nul
       </Modal>
     </View>
   );
-}
+});
 
 function createProfilePhotoLibraryStyles(colors: ThemeColors) {
   return StyleSheet.create({
   wrap: {
     marginTop: Spacing.md,
+  },
+  wrapEmbedded: {
+    marginTop: 0,
   },
   sectionHeader: {
     flexDirection: 'row',

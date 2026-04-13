@@ -1,3 +1,4 @@
-// Re-export trip summary so trips open inside the Trips tab (tab bar stays visible).
-// useLocalSearchParams() will receive { id } from the /journal/[id] route.
-export { default } from '../../trip/[id]/summary';
+// Trip summary lives under app/trip/[id]/summary; journal/[id] keeps the tab shell and passes `id`.
+import TripSummaryScreen from '../../trip/[id]/summary';
+
+export default TripSummaryScreen;

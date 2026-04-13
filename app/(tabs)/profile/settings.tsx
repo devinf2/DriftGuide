@@ -1,4 +1,4 @@
-import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
 import { showTripPhotoVisibilityInfoAlert } from '@/src/constants/tripPhotoVisibility';
 import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';

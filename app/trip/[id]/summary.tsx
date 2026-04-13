@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -80,19 +80,30 @@ type TripPinPlacementState = {
   focusKey: number;
 };
 
-/** After `router.replace` (e.g. survey → summary), there may be no stack entry — `back()` throws in dev. */
-function exitTripSummary(router: ReturnType<typeof useRouter>) {
+/**
+ * Leave trip summary. When opened from Profile (`?returnTo=profile`), `router.back()` often lands on Home
+ * because the journal tab is not the tab that was active — replace to Profile instead.
+ */
+function exitTripSummary(
+  router: ReturnType<typeof useRouter>,
+  returnTo: string | string[] | undefined,
+) {
+  const target = Array.isArray(returnTo) ? returnTo[0] : returnTo;
+  if (target === 'profile') {
+    router.replace('/profile');
+    return;
+  }
   if (router.canGoBack()) {
     router.back();
-  } else {
-    router.replace('/journal');
+    return;
   }
+  router.replace('/profile');
 }
 
 const TRIP_PHOTOS_DEBUG = typeof __DEV__ !== 'undefined' && __DEV__;
 
 export default function TripSummaryScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
@@ -162,7 +173,6 @@ export default function TripSummaryScreen() {
     async function load() {
       const uid = user?.id;
       if (!uid || !id) return;
-      setLoading(true);
       const pendingMap = await getPendingTrips();
       if (cancelled) return;
       const pendingPayload = pendingMap[id] ?? null;
@@ -218,6 +228,26 @@ export default function TripSummaryScreen() {
   const tripPhotosFetchSeqRef = useRef(0);
   const warmTripPhotosKeyRef = useRef<string | null>(null);
   const lastTripPhotosIdentityRef = useRef<string | null>(null);
+
+  /** Same screen instance is reused when opening another trip — clear before paint to avoid flashing the prior trip. */
+  useLayoutEffect(() => {
+    if (!id) return;
+    tripPhotosFetchSeqRef.current += 1;
+    setTripPhotosLoading(false);
+    setLoading(true);
+    setTrip(null);
+    setEvents([]);
+    setTripPhotos([]);
+    lastTripPhotosIdentityRef.current = null;
+    warmTripPhotosKeyRef.current = null;
+    setActiveTab('fishing');
+    setFullScreenPhoto(null);
+    setTripPhotoViewerIndex(null);
+    setMapCatchDetailEvent(null);
+    setTripAiSummaryModalVisible(false);
+    setPeopleSheetVisible(false);
+    setReviewModalVisible(false);
+  }, [id]);
 
   const refreshTripPhotos = useCallback(
     async (showLoading: boolean) => {
@@ -586,7 +616,13 @@ export default function TripSummaryScreen() {
     if (ok) setReviewModalVisible(false);
   }, [reviewRating, reviewClarity, reviewNotes, persistTripReview]);
 
-  if (loading) {
+  /**
+   * Route `id` updates on the same component instance before `useLayoutEffect` / `load()` commit —
+   * without this, one frame can still render the previous trip.
+   */
+  const tripStaleVsRoute = Boolean(id && trip && trip.id !== id);
+
+  if (loading || tripStaleVsRoute) {
     return (
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
@@ -602,7 +638,7 @@ export default function TripSummaryScreen() {
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Trip not found</Text>
-          <Pressable style={styles.backButton} onPress={() => exitTripSummary(router)}>
+          <Pressable style={styles.backButton} onPress={() => exitTripSummary(router, returnTo)}>
             <Text style={styles.backButtonText}>Go Back</Text>
           </Pressable>
         </View>
@@ -628,7 +664,7 @@ export default function TripSummaryScreen() {
             setDeleting(true);
             try {
               await deleteTrip(id);
-              exitTripSummary(router);
+              exitTripSummary(router, returnTo);
             } catch {
               Alert.alert('Error', 'Could not delete trip. Try again.');
             } finally {
@@ -733,7 +769,7 @@ export default function TripSummaryScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: effectiveTop + Spacing.md }]}>
-        <Pressable onPress={() => exitTripSummary(router)}>
+        <Pressable onPress={() => exitTripSummary(router, returnTo)}>
           <MaterialIcons name="arrow-back" size={22} color={themeColors.textInverse} />
         </Pressable>
         <View style={styles.headerCenter}>

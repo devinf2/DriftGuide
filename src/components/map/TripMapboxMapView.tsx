@@ -1,6 +1,6 @@
 import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
-import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
 import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';

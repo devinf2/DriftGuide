@@ -1,3 +1,4 @@
+import { FishActionsTabButton } from '@/src/components/FishActionsTabButton';
 import { PlanTripFab } from '@/src/components/PlanTripFab';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -50,10 +51,29 @@ export default function TabLayout() {
           }}
         />
         <Tabs.Screen
+          name="fish-actions"
+          options={{
+            title: 'Go fishing',
+            tabBarShowLabel: false,
+            tabBarIcon: () => null,
+            tabBarButton: (props) => <FishActionsTabButton {...props} />,
+          }}
+        />
+        <Tabs.Screen
+          name="friends"
+          options={{
+            title: 'Friends',
+            tabBarIcon: ({ color, size }) => (
+              <MaterialCommunityIcons name="account-multiple" color={color} size={size} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="journal"
           options={{
             title: 'Trips',
             tabBarLabel: 'Trips',
+            href: null,
             tabBarIcon: ({ color, size }) => (
               <MaterialIcons name="route" color={color} size={size} />
             ),
@@ -79,7 +99,7 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      <PlanTripFab />
+      <PlanTripFab placement="tabBar" />
     </View>
   );
 }

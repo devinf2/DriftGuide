@@ -1,5 +1,5 @@
-import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
-import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrarySection';
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
+import { ProfileTripsPhotosHub } from '@/src/components/profile/ProfileTripsPhotosHub';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { uploadProfileAvatar } from '@/src/services/photoService';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -275,8 +275,8 @@ export default function ProfileScreen() {
             label="Friends"
             onPress={() =>
               pendingIncomingFriendRequests > 0
-                ? router.push({ pathname: '/profile/friends', params: { seg: 'requests' } })
-                : router.push('/profile/friends')
+                ? router.push({ pathname: '/friends', params: { seg: 'requests' } })
+                : router.push('/friends')
             }
             colors={colors}
             styles={styles}
@@ -286,7 +286,7 @@ export default function ProfileScreen() {
           <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
         </View>
 
-        <ProfilePhotoLibrarySection refreshSignal={photoLibraryRefreshSignal} />
+        <ProfileTripsPhotosHub refreshSignal={photoLibraryRefreshSignal} />
       </ScrollView>
 
       <Modal

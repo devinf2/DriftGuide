@@ -508,7 +508,7 @@ export default function FriendsScreen() {
                 return (
                   <Pressable
                     key={`${f.profile_min}-${f.profile_max}`}
-                    onPress={() => router.push({ pathname: '/profile/friend/[id]', params: { id: oid } })}
+                    onPress={() => router.push({ pathname: '/friends/friend/[id]', params: { id: oid } })}
                     style={({ pressed }) => [pressed && { opacity: 0.88 }]}
                     accessibilityRole="button"
                     accessibilityLabel={`${label} profile`}

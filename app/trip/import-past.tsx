@@ -747,7 +747,7 @@ export default function ImportPastTripsScreen() {
         }
       }
       reset();
-      router.replace('/journal');
+      router.replace('/profile');
     } catch (e) {
       Alert.alert('Import', (e as Error).message);
     } finally {

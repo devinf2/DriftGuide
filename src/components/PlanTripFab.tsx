@@ -1,3 +1,4 @@
+import { TAB_BAR_EXTRA } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -16,19 +17,15 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/** Approximate tab bar content height (icons + label); padding is in tabBarStyle. */
-const TAB_BAR_EXTRA = 52;
 const FAB_GAP_ABOVE_TAB = 12;
 const FAB_SIZE = 64;
 const ICON_SIZE = 36;
 
-/** Space the map zoom / add controls need above the bottom of the map to clear this FAB. */
-export const PLAN_TRIP_FAB_MAP_CLEARANCE = FAB_SIZE + FAB_GAP_ABOVE_TAB + Spacing.sm;
-
-/** AI Guide: lift FAB above the message composer (input row + padding). */
+/** AI Guide: lift FAB above the message composer (input row + padding). — legacy; tab-bar mode ignores floating position. */
 const GUIDE_COMPOSER_LIFT = 72;
 
 type MenuAnchor = { x: number; y: number; width: number; height: number };
+type MenuAnchorKind = 'fab' | 'tab';
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
@@ -59,9 +56,15 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       backgroundColor: 'rgba(0,0,0,0.25)',
     },
-    menuAnchor: {
+    menuAnchorFab: {
       position: 'absolute',
       alignItems: 'flex-end',
+    },
+    menuAnchorTab: {
+      position: 'absolute',
+      left: Spacing.md,
+      right: Spacing.md,
+      alignItems: 'center',
     },
     menuCard: {
       backgroundColor: colors.surface,
@@ -99,17 +102,34 @@ function createStyles(colors: ThemeColors) {
   });
 }
 
-export function PlanTripFab() {
+let openPlanTripMenuFromTabBarImpl: (() => void) | null = null;
+
+/** Middle tab “fish” — opens the same Go fishing menu without navigating. */
+export function requestOpenPlanTripMenuFromTabBar() {
+  openPlanTripMenuFromTabBarImpl?.();
+}
+
+type PlanTripFabProps = {
+  /**
+   * `floating` — legacy FAB above the tab bar (deprecated; not used from tabs layout).
+   * `tabBar` — menu only, opened via middle tab (`requestOpenPlanTripMenuFromTabBar`).
+   */
+  placement?: 'floating' | 'tabBar';
+};
+
+export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
+  const [menuAnchorKind, setMenuAnchorKind] = useState<MenuAnchorKind>('fab');
   const fabWrapRef = useRef<View>(null);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const mapAddLocationOpen = useAddLocationFlowStore((s) => s.mapSheetActive);
+  const tabBarMode = placement === 'tabBar';
 
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -125,23 +145,45 @@ export function PlanTripFab() {
   const hideDuringAddLocation =
     mapAddLocationOpen || pathname.includes('/trip/add-location');
 
-  /** Trip summary (journal tab detail or stack) — keep the fish FAB off read-only journal views. */
   const hideOnTripSummary =
     /^\/journal\/[^/]+$/.test(pathname) || /\/trip\/[^/]+\/summary$/.test(pathname);
 
-  /** Profile settings — avoid overlapping the scroll / actions with the fish FAB. */
   const hideOnProfileSettings = pathname.includes('/profile/settings');
 
   const homeWithChatComposer = pathname === '/home' || pathname === '/guide';
 
-  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    setMenuAnchor(null);
+  }, []);
+
+  useEffect(() => {
+    closeMenu();
+  }, [pathname, closeMenu]);
 
   const openFabMenu = useCallback(() => {
+    setMenuAnchorKind('fab');
     fabWrapRef.current?.measureInWindow((x, y, width, height) => {
       setMenuAnchor({ x, y, width, height });
       setMenuOpen(true);
     });
   }, []);
+
+  const openMenuFromTabBar = useCallback(() => {
+    if (hideDuringAddLocation) return;
+    if (tabBarMode && homeWithChatComposer && keyboardOpen) return;
+    setMenuAnchorKind('tab');
+    setMenuAnchor(null);
+    setMenuOpen(true);
+  }, [hideDuringAddLocation, homeWithChatComposer, keyboardOpen, tabBarMode]);
+
+  useEffect(() => {
+    if (!tabBarMode) return;
+    openPlanTripMenuFromTabBarImpl = openMenuFromTabBar;
+    return () => {
+      openPlanTripMenuFromTabBarImpl = null;
+    };
+  }, [tabBarMode, openMenuFromTabBar]);
 
   const onPlanTrip = useCallback(() => {
     closeMenu();
@@ -162,83 +204,74 @@ export function PlanTripFab() {
     return null;
   }
 
-  if (hideOnTripSummary) {
-    return null;
-  }
-
-  if (hideOnProfileSettings) {
-    return null;
-  }
-
-  if (homeWithChatComposer && keyboardOpen) {
-    return null;
+  if (!tabBarMode) {
+    if (hideOnTripSummary) return null;
+    if (hideOnProfileSettings) return null;
+    if (homeWithChatComposer && keyboardOpen) return null;
   }
 
   const tabBarBottomPad = Math.max(insets.bottom, 8);
-  let bottom = tabBarBottomPad + TAB_BAR_EXTRA + FAB_GAP_ABOVE_TAB;
-  if (homeWithChatComposer) {
-    bottom += GUIDE_COMPOSER_LIFT;
+  let floatingBottom = tabBarBottomPad + TAB_BAR_EXTRA + FAB_GAP_ABOVE_TAB;
+  if (!tabBarMode && homeWithChatComposer) {
+    floatingBottom += GUIDE_COMPOSER_LIFT;
   }
 
   const { width: winW, height: winH } = Dimensions.get('window');
-  /** Align menu bottom edge just above the FAB (measureInWindow y is from top). */
-  const menuBottom = menuAnchor != null ? winH - menuAnchor.y + 8 : 0;
-  const menuRight =
+  const menuBottomFab = menuAnchor != null ? winH - menuAnchor.y + 8 : 0;
+  const menuRightFab =
     menuAnchor != null ? Math.max(Spacing.sm, winW - (menuAnchor.x + menuAnchor.width)) : Spacing.lg;
+
+  const menuBottomTab = tabBarBottomPad + TAB_BAR_EXTRA + Spacing.sm;
+
+  const menuCard = (
+    <View style={styles.menuCard}>
+      <Text style={styles.menuTitle}>Go fishing</Text>
+      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onPlanTrip}>
+        <Text style={styles.menuRowText}>Plan a Trip</Text>
+      </Pressable>
+      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onFishNow}>
+        <Text style={styles.menuRowText}>Fish Now</Text>
+      </Pressable>
+      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onLogPastTrips}>
+        <Text style={styles.menuRowText}>Log Past Trips</Text>
+      </Pressable>
+    </View>
+  );
 
   return (
     <>
-      <View
-        ref={fabWrapRef}
-        collapsable={false}
-        style={[styles.wrap, { bottom }]}
-        pointerEvents="box-none"
-      >
-        <Pressable
-          style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-          onPress={openFabMenu}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel="Fishing actions"
-          accessibilityHint="Opens plan a trip, fish now, or trips"
+      {!tabBarMode ? (
+        <View
+          ref={fabWrapRef}
+          collapsable={false}
+          style={[styles.wrap, { bottom: floatingBottom }]}
+          pointerEvents="box-none"
         >
-          <MaterialCommunityIcons name="fish" size={ICON_SIZE} color={colors.textInverse} />
-        </Pressable>
-      </View>
+          <Pressable
+            style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+            onPress={openFabMenu}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Fishing actions"
+            accessibilityHint="Opens plan a trip, fish now, or trips"
+          >
+            <MaterialCommunityIcons name="fish" size={ICON_SIZE} color={colors.textInverse} />
+          </Pressable>
+        </View>
+      ) : null}
 
-      <Modal
-        visible={menuOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={closeMenu}
-      >
+      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={closeMenu}>
         <Pressable style={styles.menuOverlay} onPress={closeMenu}>
-          {menuAnchor != null ? (
+          {menuAnchorKind === 'fab' && menuAnchor != null ? (
             <View
-              style={[styles.menuAnchor, { bottom: menuBottom, right: menuRight }]}
+              style={[styles.menuAnchorFab, { bottom: menuBottomFab, right: menuRightFab }]}
               onStartShouldSetResponder={() => true}
             >
-              <View style={styles.menuCard}>
-                <Text style={styles.menuTitle}>Go fishing</Text>
-                <Pressable
-                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                  onPress={onPlanTrip}
-                >
-                  <Text style={styles.menuRowText}>Plan a Trip</Text>
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                  onPress={onFishNow}
-                >
-                  <Text style={styles.menuRowText}>Fish Now</Text>
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
-                  onPress={onLogPastTrips}
-                >
-                  <Text style={styles.menuRowText}>Log Past Trips</Text>
-                </Pressable>
-              </View>
+              {menuCard}
+            </View>
+          ) : menuAnchorKind === 'tab' ? (
+            <View style={[styles.menuAnchorTab, { bottom: menuBottomTab }]} onStartShouldSetResponder={() => true}>
+              {menuCard}
             </View>
           ) : null}
         </Pressable>

@@ -1,5 +1,5 @@
 import { ProfilePhotoLibrarySection } from '@/src/components/ProfilePhotoLibrarySection';
-import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/components/PlanTripFab';
+import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { Spacing } from '@/src/constants/theme';
 import { fetchMyFriendships, fetchProfile, otherUserIdFromFriendship } from '@/src/services/friendsService';
 import { useAuthStore } from '@/src/stores/authStore';
