@@ -1,7 +1,7 @@
 import { BorderRadius, FontSize, LocationTypeColors, Spacing, type ThemeColors } from '@/src/constants/theme';
 import type { LocationType, Photo, Trip } from '@/src/types';
-import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
-import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { formatFishCount, formatTripDate } from '@/src/utils/formatters';
+import { MaterialIcons } from '@expo/vector-icons';
 import { memo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 

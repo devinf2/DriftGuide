@@ -197,6 +197,7 @@ export default function FriendProfileScreen() {
               ref={profileHubRef}
               refreshSignal={0}
               peerUserId={friendId}
+              peerAlbumProfile={friendProfile}
             />
           ) : null}
         </>

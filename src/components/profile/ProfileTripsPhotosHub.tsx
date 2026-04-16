@@ -12,6 +12,7 @@ import {
   JournalTripGridCard,
 } from '@/src/components/journal/journalTripGrid';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
+import { effectiveTripPhotoVisibility } from '@/src/constants/tripPhotoVisibility';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import {
   fetchPhotosWithTripForTripIds,
@@ -27,7 +28,7 @@ import {
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
-import type { CatchRow, LocationType, Photo, Trip } from '@/src/types';
+import type { CatchRow, LocationType, Photo, Profile, Trip } from '@/src/types';
 import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
 import { formatCatchWeightLabel } from '@/src/utils/journalTimeline';
 import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
@@ -131,6 +132,8 @@ type ProfileTripsPhotosHubProps = {
   refreshSignal: number;
   /** When set, load this user’s completed trips / album (RLS: e.g. accepted friend + photo visibility). */
   peerUserId?: string | null;
+  /** Peer’s profile (for trip photo visibility defaults on friend profile previews). */
+  peerAlbumProfile?: Profile | null;
 };
 
 export type ProfileTripsPhotosHubRef = {
@@ -180,7 +183,7 @@ function mergeCatchesById(prev: CatchRow[], next: CatchRow[]): CatchRow[] {
 }
 
 export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, ProfileTripsPhotosHubProps>(
-  function ProfileTripsPhotosHub({ refreshSignal, peerUserId = null }, ref) {
+  function ProfileTripsPhotosHub({ refreshSignal, peerUserId = null, peerAlbumProfile = null }, ref) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
@@ -560,11 +563,30 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
 
   const tripPhotoUrlsMap = useMemo(() => {
     const map: Record<string, string[]> = {};
+    const visibilityProfile = isPeerAlbum ? peerAlbumProfile : null;
     for (const trip of allTrips) {
-      map[trip.id] = imageUrlsForTrip(trip.id, allPhotos);
+      const fromPhotos = imageUrlsForTrip(trip.id, allPhotos);
+      const vis = effectiveTripPhotoVisibility(trip, visibilityProfile);
+      const allowCatchPreview = !isPeerAlbum || vis !== 'private';
+      if (!allowCatchPreview) {
+        map[trip.id] = fromPhotos;
+        continue;
+      }
+      const seen = new Set(fromPhotos);
+      const merged = [...fromPhotos];
+      for (const c of allCatches) {
+        if (c.trip_id !== trip.id) continue;
+        for (const u of catchRowGalleryUrls(c)) {
+          const t = u.trim();
+          if (!t || seen.has(t)) continue;
+          seen.add(t);
+          merged.push(t);
+        }
+      }
+      map[trip.id] = merged;
     }
     return map;
-  }, [allTrips, allPhotos]);
+  }, [allTrips, allPhotos, allCatches, isPeerAlbum, peerAlbumProfile]);
 
   const filterBundle = useMemo(
     () => ({
