@@ -12,7 +12,9 @@ import {
   Linking,
   Switch,
   TextInput,
+  Share,
 } from 'react-native';
+import { cacheDirectory, downloadAsync } from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
@@ -70,6 +72,9 @@ import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
+import { buildShareTripUrl, getShareTripPageBaseUrl } from '@/src/constants/shareLinks';
+
+const SHARE_TRIP_MAX_PHOTO_URLS = 6;
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
 
@@ -149,6 +154,7 @@ export default function TripSummaryScreen() {
   const [keepOfflinePinned, setKeepOfflinePinned] = useState(false);
   const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
+  const [summaryHeaderMenuVisible, setSummaryHeaderMenuVisible] = useState(false);
   const [photoVisSaving, setPhotoVisSaving] = useState(false);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [reviewRating, setReviewRating] = useState<number | null>(null);
@@ -269,6 +275,7 @@ export default function TripSummaryScreen() {
     setMapCatchDetailEvent(null);
     setTripAiSummaryModalVisible(false);
     setPeopleSheetVisible(false);
+    setSummaryHeaderMenuVisible(false);
     setReviewModalVisible(false);
   }, [id]);
 
@@ -562,6 +569,85 @@ export default function TripSummaryScreen() {
     [trip, profile],
   );
 
+  const handleShareTripLink = useCallback(async () => {
+    if (!trip?.id) return;
+    if (!getShareTripPageBaseUrl()) {
+      Alert.alert(
+        'Share link unavailable',
+        'Set EXPO_PUBLIC_SHARE_TRIP_BASE_URL to your deployed share-trip function URL (see .env.example).',
+      );
+      return;
+    }
+    const webPageUrl = buildShareTripUrl(trip.id);
+    if (!webPageUrl) return;
+
+    const appLink = `driftguide://trip/${trip.id}`;
+    const place = trip.location?.name?.trim();
+    const httpsPhotos = tripPhotos
+      .map((p) => p.url)
+      .filter((u): u is string => typeof u === 'string' && /^https:\/\//i.test(u))
+      .slice(0, SHARE_TRIP_MAX_PHOTO_URLS);
+
+    const buildMessageTextOnly = (): string => {
+      const lines: string[] = [
+        webPageUrl,
+        '',
+        `Open in DriftGuide: ${appLink}`,
+        '',
+        place ? `Trip: ${place}` : 'DriftGuide trip',
+      ];
+      if (effectivePhotoVisibility === 'public' && httpsPhotos.length > 0) {
+        lines.push('', 'Photos:', ...httpsPhotos);
+      }
+      return lines.join('\n');
+    };
+
+    /**
+     * iOS + `Share.share({ url: localImage, message })`: if the HTML preview URL is the first line,
+     * the sheet often unfurls that link and replaces the photo tile with a web snapshot (looks like
+     * raw OG/HTML). Put the preview link last and omit the attached photo from the text list.
+     */
+    const buildMessageIosWithAttachedPhoto = (): string => {
+      const lines: string[] = [
+        place ? `Trip: ${place}` : 'DriftGuide trip',
+        '',
+        'Open in DriftGuide:',
+        appLink,
+      ];
+      if (effectivePhotoVisibility === 'public' && httpsPhotos.length > 1) {
+        const more = httpsPhotos.slice(1, 4);
+        lines.push('', 'More photos:', ...more);
+      }
+      lines.push('', 'Trip preview (opens in browser):', webPageUrl);
+      return lines.join('\n');
+    };
+
+    try {
+      if (
+        Platform.OS === 'ios' &&
+        effectivePhotoVisibility === 'public' &&
+        httpsPhotos.length > 0 &&
+        cacheDirectory
+      ) {
+        const remote = httpsPhotos[0];
+        const ext = remote.toLowerCase().includes('.png') ? 'png' : 'jpg';
+        const dest = `${cacheDirectory}driftguide-trip-share-${trip.id.replace(/-/g, '').slice(0, 12)}.${ext}`;
+        try {
+          const { uri, status } = await downloadAsync(remote, dest);
+          if (status === 200 && uri.startsWith('file')) {
+            await Share.share({ url: uri, message: buildMessageIosWithAttachedPhoto() });
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      await Share.share({ message: buildMessageTextOnly() });
+    } catch {
+      /* dismissed */
+    }
+  }, [trip?.id, trip?.location?.name, effectivePhotoVisibility, tripPhotos]);
+
   const tripDurationLabel = useMemo(() => {
     if (!trip) return '';
     let ms: number | null | undefined = trip.active_fishing_ms;
@@ -805,83 +891,127 @@ export default function TripSummaryScreen() {
           </Text>
         </View>
         <View style={styles.headerActions}>
-          {isOwnTrip && trip.shared_session_id ? (
-            <Pressable
-              onPress={() => setPeopleSheetVisible(true)}
-              style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
-              hitSlop={8}
-              accessibilityLabel="Fishing group"
-            >
-              <MaterialIcons name="group" size={22} color={themeColors.textInverse} />
-            </Pressable>
-          ) : null}
           {isOwnTrip ? (
-            <>
-              <Pressable
-                onPress={() => setJournalEditMode((v) => !v)}
-                style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
-                hitSlop={8}
-              >
-                <MaterialIcons
-                  name={journalEditMode ? 'check' : 'edit'}
-                  size={22}
-                  color={themeColors.textInverse}
-                />
-              </Pressable>
-              <Pressable
-                onPress={handleDeleteTrip}
-                disabled={deleting}
-                style={({ pressed }) => [{ opacity: (pressed || deleting) ? 0.6 : 1 }]}
-                hitSlop={8}
-              >
-                <MaterialIcons name="delete-outline" size={22} color={themeColors.textInverse} />
-              </Pressable>
-            </>
+            <Pressable
+              onPress={() => setSummaryHeaderMenuVisible(true)}
+              style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Trip options"
+            >
+              <MaterialIcons name="more-vert" size={24} color={themeColors.textInverse} />
+            </Pressable>
           ) : null}
         </View>
       </View>
 
+      <Modal
+        visible={summaryHeaderMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSummaryHeaderMenuVisible(false)}
+      >
+        <View style={styles.summaryHeaderMenuOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSummaryHeaderMenuVisible(false)} />
+          <View style={[styles.summaryHeaderMenuSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
+            <Pressable
+              style={styles.summaryHeaderMenuRow}
+              onPress={() => {
+                setSummaryHeaderMenuVisible(false);
+                setPeopleSheetVisible(true);
+              }}
+            >
+              <Text style={styles.summaryHeaderMenuLabel}>Invite friends</Text>
+            </Pressable>
+            <Pressable
+              style={styles.summaryHeaderMenuRow}
+              onPress={() => {
+                setSummaryHeaderMenuVisible(false);
+                void handleShareTripLink();
+              }}
+            >
+              <Text style={styles.summaryHeaderMenuLabel}>Share trip link</Text>
+            </Pressable>
+            <Pressable
+              style={styles.summaryHeaderMenuRow}
+              onPress={() => {
+                setSummaryHeaderMenuVisible(false);
+                setJournalEditMode((v) => !v);
+              }}
+            >
+              <Text style={styles.summaryHeaderMenuLabel}>
+                {journalEditMode ? 'Done editing journal' : 'Edit journal'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.summaryHeaderMenuRow}
+              disabled={deleting}
+              onPress={() => {
+                setSummaryHeaderMenuVisible(false);
+                handleDeleteTrip();
+              }}
+            >
+              <Text style={[styles.summaryHeaderMenuLabel, styles.summaryHeaderMenuDestructive]}>Delete trip</Text>
+            </Pressable>
+            <Pressable
+              style={styles.summaryHeaderMenuRow}
+              onPress={() => setSummaryHeaderMenuVisible(false)}
+            >
+              <Text style={styles.summaryHeaderMenuCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       {isOwnTrip ? (
-        <View style={styles.topBarRow}>
-          <View style={styles.offlineLeft}>
-            <Text style={styles.keepOfflineLabel} numberOfLines={1}>
-              Save offline
-            </Text>
-            <Switch
-              value={keepOfflinePinned}
-              onValueChange={handleKeepOfflineChange}
-              trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
-              thumbColor={themeColors.textInverse}
-              ios_backgroundColor={themeColors.textSecondary}
-              style={styles.keepOfflineSwitch}
+        <View>
+          <View style={styles.topBarRow}>
+            <View style={styles.offlineLeft}>
+              <Text style={styles.keepOfflineLabel} numberOfLines={1}>
+                Save offline
+              </Text>
+              <Switch
+                value={keepOfflinePinned}
+                onValueChange={handleKeepOfflineChange}
+                trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
+                thumbColor={themeColors.textInverse}
+                ios_backgroundColor={themeColors.textSecondary}
+                style={styles.keepOfflineSwitch}
+              />
+            </View>
+            <TripPhotoVisibilityDropdown
+              colorTokens={themeColors}
+              label="Visibility"
+              value={effectivePhotoVisibility}
+              onChange={(v: TripPhotoVisibility) => {
+                void (async () => {
+                  if (!trip || !user) return;
+                  if (!isConnected) {
+                    Alert.alert('Offline', 'Connect to the internet to update this.');
+                    return;
+                  }
+                  setPhotoVisSaving(true);
+                  const updated: Trip = { ...trip, trip_photo_visibility: v };
+                  setTrip(updated);
+                  const ok = await syncTripToCloud(updated, events);
+                  setPhotoVisSaving(false);
+                  if (!ok) {
+                    Alert.alert('Could not save', 'Try again when you have a stable connection.');
+                    const found = await fetchTripById(id);
+                    if (found) setTrip(found);
+                  }
+                })();
+              }}
+              disabled={!user || !isConnected}
+              saving={photoVisSaving}
             />
           </View>
-          <TripPhotoVisibilityDropdown
-            colorTokens={themeColors}
-            label="Visibility"
-            value={effectivePhotoVisibility}
-            onChange={(v: TripPhotoVisibility) => {
-              void (async () => {
-                if (!trip || !user) return;
-                if (!isConnected) {
-                  Alert.alert('Offline', 'Connect to the internet to update this.');
-                  return;
-                }
-                setPhotoVisSaving(true);
-                const updated: Trip = { ...trip, trip_photo_visibility: v };
-                setTrip(updated);
-                const ok = await syncTripToCloud(updated, events);
-                setPhotoVisSaving(false);
-                if (!ok) {
-                  Alert.alert('Could not save', 'Try again when you have a stable connection.');
-                  const found = await fetchTripById(id);
-                  if (found) setTrip(found);
-                }
-              })();
-            }}
-            disabled={!user || !isConnected}
-            saving={photoVisSaving}
-          />
+          {effectivePhotoVisibility !== 'public' ? (
+            <Text style={styles.sharePreviewHint}>
+              Set trip photos to Public to include images in the share (iOS attaches the first photo;
+              link previews use your public album).
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -1638,6 +1768,36 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.textInverse,
   },
 
+  summaryHeaderMenuOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  summaryHeaderMenuSheet: {
+    backgroundColor: c.surface,
+    borderTopLeftRadius: BorderRadius.lg,
+    borderTopRightRadius: BorderRadius.lg,
+  },
+  summaryHeaderMenuRow: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border,
+  },
+  summaryHeaderMenuLabel: {
+    fontSize: FontSize.md,
+    color: c.text,
+  },
+  summaryHeaderMenuDestructive: {
+    color: c.error,
+  },
+  summaryHeaderMenuCancel: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: c.primary,
+    textAlign: 'center',
+  },
+
   dateLocationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1753,6 +1913,13 @@ function createTripSummaryStyles(c: ThemeColors) {
   },
   keepOfflineSwitch: {
     transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
+  },
+  sharePreviewHint: {
+    fontSize: FontSize.xs,
+    color: c.textSecondary,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.sm,
+    lineHeight: 16,
   },
 
   tabBar: {

@@ -1352,12 +1352,16 @@ export type RegionalHatchWaterInput = {
   conditions: LocationConditions;
 };
 
+const HATCH_BRIEF_DETAIL_MAX_LEN = 720;
+
 export type HatchBriefRow = {
   insect: string;
   sizes: string;
   status: string;
   /** Drives status dot color: active=teal/green, starting=orange, waning=muted */
   tier: 'active' | 'starting' | 'waning' | 'other';
+  /** 2–4 sentence hatch notes for the detail modal; optional when older API responses omit it */
+  detail?: string;
 };
 
 export type RegionalHatchBriefingResult = {
@@ -1372,28 +1376,97 @@ function normalizeHatchTier(raw: unknown): HatchBriefRow['tier'] {
   return 'other';
 }
 
+function parseHatchBriefDetail(o: Record<string, unknown>): string | undefined {
+  const raw =
+    typeof o.detail === 'string'
+      ? o.detail
+      : typeof o.notes === 'string'
+        ? o.notes
+        : '';
+  const t = raw.trim();
+  if (!t) return undefined;
+  if (t.length <= HATCH_BRIEF_DETAIL_MAX_LEN) return t;
+  return `${t.slice(0, HATCH_BRIEF_DETAIL_MAX_LEN).trimEnd()}…`;
+}
+
 function staticHatchRows(season: string): HatchBriefRow[] {
   if (season === 'spring') {
     return [
-      { insect: 'Blue-Winged Olive', sizes: '#18–20', status: 'Active', tier: 'active' },
-      { insect: 'Midge', sizes: '#20–22', status: 'Starting', tier: 'starting' },
+      {
+        insect: 'Blue-Winged Olive',
+        sizes: '#18–20',
+        status: 'Active',
+        tier: 'active',
+        detail:
+          'Spring afternoons often bring the strongest BWO activity, especially on cloudy or drizzly days. Focus seams and soft edges with emergers or small parachute dries; a light nymph dropper covers refusals.',
+      },
+      {
+        insect: 'Midge',
+        sizes: '#20–22',
+        status: 'Starting',
+        tier: 'starting',
+        detail:
+          'Midges hatch year-round; look for clusters in back eddies and tailouts. A zebra midge or pupa under an indicator works early; switch to a sparse dry or dry-dropper when you see steady rises.',
+      },
     ];
   }
   if (season === 'summer') {
     return [
-      { insect: 'Pale Morning Dun', sizes: '#16–18', status: 'Active', tier: 'active' },
-      { insect: 'Caddis', sizes: '#14–16', status: 'Starting', tier: 'starting' },
+      {
+        insect: 'Pale Morning Dun',
+        sizes: '#16–18',
+        status: 'Active',
+        tier: 'active',
+        detail:
+          'PMDs like steady, clear water and often show late morning through afternoon. Match the stage—cripples and spinners over slicks, nymphs in riffles—and dead-drift small mayfly patterns with minimal drag.',
+      },
+      {
+        insect: 'Caddis',
+        sizes: '#14–16',
+        status: 'Starting',
+        tier: 'starting',
+        detail:
+          'Summer caddis can pop along banks and faster riffles, especially toward evening. Elk-hair or X-Caddis skittered slightly can outfish a static drift; keep an emerger ready if you see splashy rises.',
+      },
     ];
   }
   if (season === 'fall') {
     return [
-      { insect: 'Blue-Winged Olive', sizes: '#18–20', status: 'Active', tier: 'active' },
-      { insect: 'October Caddis', sizes: '#8–10', status: 'Waning', tier: 'waning' },
+      {
+        insect: 'Blue-Winged Olive',
+        sizes: '#18–20',
+        status: 'Active',
+        tier: 'active',
+        detail:
+          'Fall BWOs often favor mid-day windows when temps bump. Overcast days can turn the whole river on—work slow water with emergers and small comparaduns, and lengthen drifts through foam lines.',
+      },
+      {
+        insect: 'October Caddis',
+        sizes: '#8–10',
+        status: 'Waning',
+        tier: 'waning',
+        detail:
+          'Late-season October caddis can still move fish along undercut banks and pocket water. Big orange stimulators or elk-hair skated at dusk can draw explosive takes; dead-drift a pupa if they refuse the surface.',
+      },
     ];
   }
   return [
-    { insect: 'Midge', sizes: '#18–22', status: 'Active', tier: 'active' },
-    { insect: 'Small BWO', sizes: '#20–22', status: 'Starting', tier: 'starting' },
+    {
+      insect: 'Midge',
+      sizes: '#18–22',
+      status: 'Active',
+      tier: 'active',
+      detail:
+        'Winter fishing leans on midges in slow, deep runs. Zebra midges and small thread midges dead-drifted deep; add a tiny dry as a sighter when risers appear in soft foam.',
+    },
+    {
+      insect: 'Small BWO',
+      sizes: '#20–22',
+      status: 'Starting',
+      tier: 'starting',
+      detail:
+        'Mild winter days can still produce small olive mayflies. Target the warmest part of the day and the softest currents; sparse dries and light tippet help on wary fish.',
+    },
   ];
 }
 
@@ -1448,6 +1521,7 @@ export async function getRegionalHatchBriefing(
             sizes: sizes || '—',
             status: status || '—',
             tier: normalizeHatchTier(o.tier),
+            detail: parseHatchBriefDetail(o),
           });
         }
         if (rows.length >= 1) return { rows };
@@ -1469,8 +1543,9 @@ export async function getRegionalHatchBriefing(
     ...lines,
     '',
     'Respond with ONLY valid JSON in this exact format, no other text:',
-    '{"rows":[{"insect":"Blue-Winged Olive","sizes":"#18-20","status":"Active","tier":"active"},{"insect":"Pale Morning Dun","sizes":"#16-18","status":"Starting","tier":"starting"}]}',
+    '{"rows":[{"insect":"Blue-Winged Olive","sizes":"#18-20","status":"Active","tier":"active","detail":"2-4 sentences: typical timing for this date, water-type hints, dry/emerger/nymph presentation. Use your own words; do not copy text verbatim from third-party publications."},{"insect":"Pale Morning Dun","sizes":"#16-18","status":"Starting","tier":"starting","detail":"..."}]}',
     'Provide 2 to 4 rows. insect = common hatch name (not Latin). sizes = fly sizes like #18-20. status = short label: Active, Starting, or Waning. tier must be exactly one of: active, starting, waning, other — match status (Active->active, Starting->starting, Waning->waning).',
+    'Each row MUST include "detail": 2-4 sentences as in the example.',
   ].join('\n');
 
   try {
@@ -1483,10 +1558,14 @@ export async function getRegionalHatchBriefing(
       body: JSON.stringify({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'You are an expert fly fishing guide. Respond with ONLY valid JSON.' },
+          {
+            role: 'system',
+            content:
+              'You are an expert fly fishing guide. Respond with ONLY valid JSON. Summarize in your own words; do not reproduce long quotations from copyrighted sources.',
+          },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 320,
+        max_tokens: 640,
         temperature: 0.55,
       }),
     });
@@ -1513,6 +1592,7 @@ export async function getRegionalHatchBriefing(
         sizes: sizes || '—',
         status: status || '—',
         tier: normalizeHatchTier(o.tier),
+        detail: parseHatchBriefDetail(o),
       });
     }
     return rows.length >= 1 ? { rows } : { rows: staticHatchRows(season) };

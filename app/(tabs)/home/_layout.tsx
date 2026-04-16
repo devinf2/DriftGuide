@@ -14,6 +14,7 @@ export default function HomeTabLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ headerShown: false, title: 'Home' }} />
+      <Stack.Screen name="hatch-chart" options={{ title: 'Hatch calendar', headerShown: true }} />
     </Stack>
   );
 }

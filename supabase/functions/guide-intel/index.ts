@@ -509,13 +509,15 @@ Deno.serve(async (req: Request) => {
         "Waters:",
         ...lines,
         "",
-        'Respond ONLY JSON: {"rows":[{"insect":"...","sizes":"#18-20","status":"Active","tier":"active"}]}',
-        "2-4 rows. tier: active|starting|waning|other",
+        'Respond ONLY JSON: {"rows":[{"insect":"...","sizes":"#18-20","status":"Active","tier":"active","detail":"2-4 sentences: typical timing for this date, water-type hints, dry/emerger/nymph presentation. Summarize in your own words; do not copy text verbatim from third-party publications."}]}',
+        "2-4 rows. tier: active|starting|waning|other. Each row MUST include detail (string).",
       ].join("\n");
       const raw = await openaiChat(
-        guideSystem("Respond with ONLY valid JSON."),
+        guideSystem(
+          "Respond with ONLY valid JSON. Summarize in your own words; do not reproduce long quotations from copyrighted sources.",
+        ),
         userMsg,
-        360,
+        620,
         0.55,
       );
       return jsonResponse({ raw });

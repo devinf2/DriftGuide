@@ -1,5 +1,5 @@
 import 'react-native-get-random-values';
-import { useEffect, useRef, type ComponentType } from 'react';
+import { useCallback, useEffect, useRef, type ComponentType } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import { useFonts } from 'expo-font';
 import * as Linking from 'expo-linking';
@@ -21,6 +21,40 @@ import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import { needsProfileOnboarding } from '@/src/utils/profileOnboarding';
 
 export { ErrorBoundary } from 'expo-router';
+
+/** Set by `driftguide://trip/:id` (or https trip path); cleared when navigation runs. */
+let pendingTripIdFromShareLink: string | null = null;
+
+function parseTripDeepLink(url: string | null | undefined): string | null {
+  if (!url?.trim()) return null;
+  const trimmed = url.trim();
+  const schemeMatch = trimmed.match(/^driftguide:\/\/trip\/([^/?#]+)/i);
+  if (schemeMatch?.[1]) {
+    const id = decodeURIComponent(schemeMatch[1]);
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+    ) {
+      return id;
+    }
+    return null;
+  }
+  try {
+    const u = new URL(trimmed);
+    const parts = u.pathname.split('/').filter(Boolean);
+    const idx = parts.indexOf('trip');
+    if (idx >= 0 && parts[idx + 1]) {
+      const id = parts[idx + 1];
+      if (
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+      ) {
+        return id;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 export const unstable_settings = {
   initialRouteName: '(tabs)',
@@ -59,6 +93,18 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const closedAccountHandledRef = useRef(false);
 
+  const flushPendingTripDeepLink = useCallback(() => {
+    const tid = pendingTripIdFromShareLink;
+    if (!tid) return;
+    const { session, isLoading, isProfileLoading, profile } = useAuthStore.getState();
+    if (!session || isLoading || isProfileLoading) return;
+    if (needsProfileOnboarding(profile)) return;
+    const top = segments[0];
+    if (top === 'auth' || top === 'onboarding') return;
+    pendingTripIdFromShareLink = null;
+    router.push(`/trip/${tid}/summary`);
+  }, [router, segments]);
+
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
@@ -79,8 +125,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, [user?.id]);
 
   useEffect(() => {
-    const consumeOAuthUrl = (url: string | null) => {
+    const handleIncomingUrl = (url: string | null) => {
       if (!url) return;
+      const tripId = parseTripDeepLink(url);
+      if (tripId) {
+        pendingTripIdFromShareLink = tripId;
+        queueMicrotask(() => {
+          flushPendingTripDeepLink();
+        });
+        return;
+      }
       void (async () => {
         try {
           await applyOAuthReturnUrl(url);
@@ -91,11 +145,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     };
 
     const sub = Linking.addEventListener('url', ({ url }) => {
-      consumeOAuthUrl(url);
+      handleIncomingUrl(url);
     });
-    void Linking.getInitialURL().then(consumeOAuthUrl);
+    void Linking.getInitialURL().then(handleIncomingUrl);
     return () => sub.remove();
-  }, []);
+  }, [flushPendingTripDeepLink]);
 
   useEffect(() => {
     if (session && profile?.account_deleted_at) {
@@ -135,7 +189,18 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     if (!needOnboarding && inOnboarding) {
       router.replace('/');
     }
-  }, [session, profile, segments, isLoading, isProfileLoading, router, signOut]);
+
+    flushPendingTripDeepLink();
+  }, [
+    session,
+    profile,
+    segments,
+    isLoading,
+    isProfileLoading,
+    router,
+    signOut,
+    flushPendingTripDeepLink,
+  ]);
 
   return (
     <View style={styles.authGateRoot}>
