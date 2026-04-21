@@ -41,7 +41,7 @@ export async function processPendingPhotos(): Promise<void> {
   for (const p of sorted) {
     try {
       const options = pendingToAddPhotoOptions(p);
-      const photo = await addPhoto(options);
+      const photo = await addPhoto(options, { skipEnqueueOnFailure: true });
       const url = photo.url;
 
       if (p.type === 'catch' && p.eventId) {

@@ -38,6 +38,20 @@ export function getCatchHeroPhotoUrl(data: CatchData): string | null {
   return urls[0] ?? null;
 }
 
+/** Only http(s) URLs — safe for Supabase `catches` / map rows; omit file:// until upload completes. */
+export function filterRemoteHttpPhotoUrls(urls: string[]): string[] {
+  return urls.filter((u) => {
+    const t = u.trim();
+    return t.startsWith('http://') || t.startsWith('https://');
+  });
+}
+
+/** Hero URL to persist on `catches` when syncing from local events (null while photos are still local files). */
+export function remoteCatchHeroForCloudSync(data: CatchData): string | null {
+  const urls = filterRemoteHttpPhotoUrls(normalizeCatchPhotoUrls(data));
+  return urls[0] ?? null;
+}
+
 export function catchDataWithAppendedPhotoUrl(data: CatchData, url: string): CatchData {
   const trimmed = url.trim();
   if (!trimmed) return data;

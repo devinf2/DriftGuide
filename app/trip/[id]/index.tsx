@@ -59,8 +59,8 @@ import {
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import { buildConditionsFromWeatherAndFlow } from '@/src/services/conditions';
 import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
-import { buildPendingFromAddPhotoOptions, savePendingPhoto } from '@/src/services/pendingPhotoStorage';
-import { addPhoto, fetchPhotos, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import { buildPendingFromAddPhotoOptions, enqueuePendingPhotoDurable } from '@/src/services/pendingPhotoStorage';
+import { addPhoto, fetchPhotos, PhotoPendingRetryError, PhotoQueuedOfflineError } from '@/src/services/photoService';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -714,6 +714,12 @@ export default function TripDashboardScreen() {
       if (e instanceof PhotoQueuedOfflineError) {
         Alert.alert('Saved on device', 'Photo will upload when you\'re back online.');
         setTripPhotoUri(null);
+      } else if (e instanceof PhotoPendingRetryError) {
+        Alert.alert('Saved on device', e.message);
+        setTripPhotoUri(null);
+        void import('@/src/services/processPendingPhotos').then(({ processPendingPhotos }) =>
+          processPendingPhotos().catch((err) => console.warn('[handleSaveTripPhoto] processPendingPhotos', err)),
+        );
       } else {
         Alert.alert('Upload failed', (e as Error).message);
       }
@@ -841,13 +847,27 @@ export default function TripDashboardScreen() {
         conditionsSnapshot !== undefined ? { conditionsSnapshot } : undefined;
 
       const hasPhotos = photoUris.length > 0;
+      let durablePhotoUris: string[] = [];
+      if (hasPhotos) {
+        try {
+          const { copyUriToPendingPhotoSandbox } = await import('@/src/services/persistentPhotoUri');
+          for (const uri of photoUris) {
+            durablePhotoUris.push(await copyUriToPendingPhotoSandbox(uri));
+          }
+        } catch (e) {
+          console.warn('[handleCatchSubmitAdd] copy photos to sandbox failed', e);
+          Alert.alert('Photos', 'Could not save photos on this device. Try again.');
+          return;
+        }
+      }
+
       const eventId = addCatch(
         {
           ...catchFields,
-          ...(hasPhotos && !isConnected
+          ...(hasPhotos
             ? {
-                photo_urls: [...photoUris],
-                photo_url: photoUris[0] ?? null,
+                photo_urls: durablePhotoUris,
+                photo_url: durablePhotoUris[0] ?? null,
               }
             : { photo_url: null, photo_urls: null }),
         },
@@ -857,54 +877,46 @@ export default function TripDashboardScreen() {
         catchOptions,
       );
 
-      if (!eventId || !hasPhotos) return;
+      if (!eventId) return;
 
-      const catchEvent = useTripStore.getState().events.find((e) => e.id === eventId && e.event_type === 'catch');
-      if (!catchEvent) return;
-
-      if (isConnected) {
-        const allEvents = useTripStore.getState().events;
-        const ok = await upsertCatchEventToCloud(activeTrip, catchEvent, allEvents);
-        if (!ok) {
-          Alert.alert('Sync failed', 'Could not save the catch before uploading photos. Try again when online.');
-          return;
-        }
-        const appendCatchEventPhotoUrl = useTripStore.getState().appendCatchEventPhotoUrl;
-        for (let i = 0; i < photoUris.length; i++) {
-          try {
-            const photo = await addPhoto(
-              {
-                ...photoOptionsBase,
-                uri: photoUris[i],
-                catchId: eventId,
-                displayOrder: i,
-              },
-              { isOnline: true },
-            );
-            appendCatchEventPhotoUrl(activeTrip.id, eventId, photo.url);
-          } catch (e) {
-            Alert.alert('Upload failed', (e as Error).message);
-            throw e;
-          }
-        }
-      } else {
-        for (let i = 0; i < photoUris.length; i++) {
-          try {
-            await savePendingPhoto({
+      if (hasPhotos) {
+        try {
+          for (let i = 0; i < durablePhotoUris.length; i++) {
+            await enqueuePendingPhotoDurable({
               ...buildPendingFromAddPhotoOptions(
                 {
                   ...photoOptionsBase,
-                  uri: photoUris[i],
+                  uri: durablePhotoUris[i],
                   displayOrder: i,
                 },
                 'catch',
                 eventId,
               ),
             });
-          } catch {
-            // non-blocking
           }
+        } catch (e) {
+          console.warn('[handleCatchSubmitAdd] enqueue pending photos failed', e);
+          Alert.alert('Photos', 'Could not queue photo uploads. They are saved on this device; try opening the trip again.');
         }
+      }
+
+      if (!hasPhotos) return;
+
+      if (isConnected) {
+        const catchEvent = useTripStore.getState().events.find((e) => e.id === eventId && e.event_type === 'catch');
+        if (!catchEvent) return;
+        const allEvents = useTripStore.getState().events;
+        const ok = await upsertCatchEventToCloud(activeTrip, catchEvent, allEvents);
+        if (!ok) {
+          Alert.alert(
+            'Sync pending',
+            'Catch is saved on this device. It will sync when the connection is stable; photos upload in the background.',
+          );
+        }
+        const { processPendingPhotos } = await import('@/src/services/processPendingPhotos');
+        void processPendingPhotos().catch((err) =>
+          console.warn('[handleCatchSubmitAdd] processPendingPhotos', err),
+        );
       }
     },
     [addCatch, changeFly, activeTrip, currentFly, currentFly2, isConnected],
@@ -1171,6 +1183,11 @@ export default function TripDashboardScreen() {
         onRequestClose={() => setTripAiModalVisible(false)}
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top', 'bottom']}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={0}
+          >
           <View style={styles.tripAiModalHeader}>
             <Text style={styles.tripAiModalTitle}>Trip guide</Text>
             <Pressable onPress={() => setTripAiModalVisible(false)} hitSlop={12}>
@@ -1255,6 +1272,7 @@ export default function TripDashboardScreen() {
             offlineLoading={offlineGuideLoading}
             strategyLoading={strategyLoading}
           />
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
 
@@ -2375,11 +2393,7 @@ function AIGuideTab({
 
   if (isOffline) {
     return (
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={180}
-      >
+      <View style={{ flex: 1 }}>
         <ScrollView
           ref={scrollRef}
           style={styles.aiScrollView}
@@ -2404,16 +2418,12 @@ function AIGuideTab({
             strategyLoading={strategyLoading}
           />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </View>
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={180}
-    >
+    <View style={{ flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={styles.aiScrollView}
@@ -2452,7 +2462,7 @@ function AIGuideTab({
           <Text style={styles.aiSendButtonText}>Ask</Text>
         </Pressable>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

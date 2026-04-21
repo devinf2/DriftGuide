@@ -3,6 +3,7 @@ import {
   addPhoto,
   deletePhoto,
   fetchPhotosWithTrip,
+  PhotoPendingRetryError,
   PhotoQueuedOfflineError,
   type PhotoWithTrip,
 } from '@/src/services/photoService';
@@ -477,6 +478,12 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
     } catch (e) {
       if (e instanceof PhotoQueuedOfflineError) {
         Alert.alert('Saved on device', "Photo will upload when you're back online.");
+        setAddPhotoUri(null);
+        if (hubOwnsAlbum && profileHubAlbum) {
+          profileHubAlbum.onReloadAfterMutation();
+        }
+      } else if (e instanceof PhotoPendingRetryError) {
+        Alert.alert('Saved on device', e.message);
         setAddPhotoUri(null);
         if (hubOwnsAlbum && profileHubAlbum) {
           profileHubAlbum.onReloadAfterMutation();

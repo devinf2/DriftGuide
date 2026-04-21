@@ -228,9 +228,34 @@ export class PhotoQueuedOfflineError extends Error {
   }
 }
 
+/** After a failed upload/insert we queued the file for retry — use for friendlier UI than raw network errors. */
+export class PhotoPendingRetryError extends Error {
+  constructor(readonly causeError?: unknown) {
+    super('Photo saved on device; upload will retry automatically.');
+    this.name = 'PhotoPendingRetryError';
+  }
+}
+
+async function tryEnqueuePhotoAfterUploadFailure(options: AddPhotoOptions): Promise<boolean> {
+  const { catchId, tripId, userId, uri } = options;
+  if (!userId?.trim() || !uri?.trim()) return false;
+  const pendingType = catchId ? 'catch' : 'trip';
+  if (pendingType === 'catch' && (!catchId || !tripId)) return false;
+  try {
+    const { savePendingPhoto, buildPendingFromAddPhotoOptions } = await import('./pendingPhotoStorage');
+    await savePendingPhoto({
+      ...buildPendingFromAddPhotoOptions(options, pendingType, catchId ?? undefined),
+    });
+    return true;
+  } catch (e) {
+    console.warn('[addPhoto] enqueue-after-failure skipped', e);
+    return false;
+  }
+}
+
 export async function addPhoto(
   options: AddPhotoOptions,
-  opts?: { isOnline?: boolean },
+  opts?: { isOnline?: boolean; skipEnqueueOnFailure?: boolean },
 ): Promise<Photo> {
   const {
     userId,
@@ -247,6 +272,7 @@ export async function addPhoto(
     displayOrder,
   } = options;
   const isOnline = opts?.isOnline !== false;
+  const skipEnqueueOnFailure = opts?.skipEnqueueOnFailure === true;
 
   if (!isOnline) {
     const { savePendingPhoto, buildPendingFromAddPhotoOptions } = await import('./pendingPhotoStorage');
@@ -262,52 +288,66 @@ export async function addPhoto(
 
   console.log('[addPhoto] start', { userId, tripId, path });
 
-  const body = await readFileAsArrayBuffer(uri);
-  const { data: uploadData, error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(path, body, {
-      contentType: getMimeType(ext),
-      upsert: false,
-    });
+  try {
+    const body = await readFileAsArrayBuffer(uri);
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, body, {
+        contentType: getMimeType(ext),
+        upsert: false,
+      });
 
-  if (uploadError) {
-    console.warn('[addPhoto] storage upload failed', { path, error: uploadError });
-    throw uploadError;
+    if (uploadError) {
+      console.warn('[addPhoto] storage upload failed', { path, error: uploadError });
+      throw uploadError;
+    }
+
+    const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(uploadData.path);
+    const url = publicUrlData.publicUrl;
+    console.log('[addPhoto] storage upload ok', { path, url });
+
+    const flySizeStr = fly_size != null ? String(fly_size) : null;
+    const insertPayload = {
+      user_id: userId,
+      trip_id: tripId ?? null,
+      catch_id: catchId ?? null,
+      display_order: displayOrder ?? 0,
+      url,
+      caption: caption ?? null,
+      species: species ?? null,
+      fly_pattern: fly_pattern ?? null,
+      fly_size: flySizeStr,
+      fly_color: fly_color ?? null,
+      fly_id: fly_id ?? null,
+      captured_at: captured_at ?? null,
+    };
+    console.log('[addPhoto] inserting into photos table', insertPayload);
+
+    const { data: row, error: insertError } = await supabase
+      .from('photos')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insertError) {
+      console.warn('[addPhoto] photos table insert failed', {
+        error: insertError,
+        code: insertError.code,
+        message: insertError.message,
+      });
+      throw insertError;
+    }
+    console.log('[addPhoto] photos row created', { id: (row as Photo)?.id });
+    return row as Photo;
+  } catch (err) {
+    if (!skipEnqueueOnFailure) {
+      const ok = await tryEnqueuePhotoAfterUploadFailure(options);
+      if (ok) {
+        throw new PhotoPendingRetryError(err);
+      }
+    }
+    throw err;
   }
-
-  const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(uploadData.path);
-  const url = publicUrlData.publicUrl;
-  console.log('[addPhoto] storage upload ok', { path, url });
-
-  const flySizeStr = fly_size != null ? String(fly_size) : null;
-  const insertPayload = {
-    user_id: userId,
-    trip_id: tripId ?? null,
-    catch_id: catchId ?? null,
-    display_order: displayOrder ?? 0,
-    url,
-    caption: caption ?? null,
-    species: species ?? null,
-    fly_pattern: fly_pattern ?? null,
-    fly_size: flySizeStr,
-    fly_color: fly_color ?? null,
-    fly_id: fly_id ?? null,
-    captured_at: captured_at ?? null,
-  };
-  console.log('[addPhoto] inserting into photos table', insertPayload);
-
-  const { data: row, error: insertError } = await supabase
-    .from('photos')
-    .insert(insertPayload)
-    .select()
-    .single();
-
-  if (insertError) {
-    console.warn('[addPhoto] photos table insert failed', { error: insertError, code: insertError.code, message: insertError.message });
-    throw insertError;
-  }
-  console.log('[addPhoto] photos row created', { id: (row as Photo)?.id });
-  return row as Photo;
 }
 
 export async function deletePhoto(photoId: string, userId: string): Promise<void> {

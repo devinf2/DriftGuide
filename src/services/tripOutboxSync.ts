@@ -60,7 +60,10 @@ export async function processPendingPhotosForTripId(tripId: string): Promise<voi
 
   for (const p of sorted) {
     try {
-      const photo = await addPhoto(pendingToAddPhotoOptions(p), { isOnline: true });
+      const photo = await addPhoto(pendingToAddPhotoOptions(p), {
+        isOnline: true,
+        skipEnqueueOnFailure: true,
+      });
       const url = photo.url;
 
       if (p.type === 'catch' && p.eventId) {

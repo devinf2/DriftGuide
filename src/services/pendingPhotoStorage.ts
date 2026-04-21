@@ -67,13 +67,29 @@ export function buildPendingFromAddPhotoOptions(
 
 export async function savePendingPhoto(
   payload: Omit<PendingPhoto, 'id' | 'createdAt'>,
-): Promise<string> {
+): Promise<{ id: string; durableUri: string }> {
   const { copyUriToPendingPhotoSandbox } = await import('./persistentPhotoUri');
   const durableUri = await copyUriToPendingPhotoSandbox(payload.uri);
   const id = uuidv4();
   const item: PendingPhoto = {
     ...payload,
     uri: durableUri,
+    id,
+    createdAt: new Date().toISOString(),
+  };
+  const list = await getStored();
+  list.push(item);
+  await setStored(list);
+  return { id, durableUri };
+}
+
+/** Queue a photo that is already copied to the pending sandbox (avoids double-copy). */
+export async function enqueuePendingPhotoDurable(
+  payload: Omit<PendingPhoto, 'id' | 'createdAt'>,
+): Promise<string> {
+  const id = uuidv4();
+  const item: PendingPhoto = {
+    ...payload,
     id,
     createdAt: new Date().toISOString(),
   };

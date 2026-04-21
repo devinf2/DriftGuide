@@ -13,7 +13,11 @@ import type {
   WaterClarity,
 } from '@/src/types';
 import { normalizeTripEventForClient, totalFishFromEvents } from '@/src/utils/journalTimeline';
-import { getCatchHeroPhotoUrl, normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
+import {
+  filterRemoteHttpPhotoUrls,
+  normalizeCatchPhotoUrls,
+  remoteCatchHeroForCloudSync,
+} from '@/src/utils/catchPhotos';
 import { getFlyForCatch } from '@/src/utils/getFlyForCatch';
 
 export interface PendingSyncData {
@@ -285,7 +289,7 @@ export async function upsertCatchEventToCloud(
       active_fly_event_id: catchData.active_fly_event_id ?? null,
       presentation_method: catchData.presentation_method ?? null,
       note: catchData.note ?? null,
-      photo_url: getCatchHeroPhotoUrl(catchData),
+      photo_url: remoteCatchHeroForCloudSync(catchData),
       conditions_snapshot_id: conditionsSnapshotId,
       fly_pattern,
       fly_size,
@@ -614,7 +618,7 @@ export async function fetchUserCatchesForTripIds(userId: string, tripIds: string
           lo == null ||
           !Number.isFinite(Number(la)) ||
           !Number.isFinite(Number(lo));
-        const urlsFromEvent = normalizeCatchPhotoUrls(data as CatchData);
+        const urlsFromEvent = filterRemoteHttpPhotoUrls(normalizeCatchPhotoUrls(data as CatchData));
         const photoPatch =
           urlsFromEvent.length > 0
             ? {
@@ -640,6 +644,7 @@ export async function fetchUserCatchesForTripIds(userId: string, tripIds: string
 
       if (!hasEvCoords) continue;
 
+      const remoteUrlsNew = filterRemoteHttpPhotoUrls(normalizeCatchPhotoUrls(data as CatchData));
       byId.set(ev.id, {
         id: ev.id,
         user_id: userId,
@@ -661,11 +666,8 @@ export async function fetchUserCatchesForTripIds(userId: string, tripIds: string
         active_fly_event_id: data?.active_fly_event_id ?? null,
         presentation_method: data?.presentation_method ?? null,
         note: data?.note ?? null,
-        photo_url: getCatchHeroPhotoUrl(data as CatchData),
-        photo_urls: (() => {
-          const u = normalizeCatchPhotoUrls(data as CatchData);
-          return u.length > 0 ? u : null;
-        })(),
+        photo_url: remoteUrlsNew[0] ?? null,
+        photo_urls: remoteUrlsNew.length > 0 ? remoteUrlsNew : null,
         conditions_snapshot_id: null,
         fly_pattern: null,
         fly_size: null,
@@ -756,7 +758,7 @@ export async function fetchUserCatchesFromCloud(userId: string): Promise<CatchRo
           lo == null ||
           !Number.isFinite(Number(la)) ||
           !Number.isFinite(Number(lo));
-        const urlsFromEvent = normalizeCatchPhotoUrls(data as CatchData);
+        const urlsFromEvent = filterRemoteHttpPhotoUrls(normalizeCatchPhotoUrls(data as CatchData));
         const photoPatch =
           urlsFromEvent.length > 0
             ? {
@@ -782,6 +784,7 @@ export async function fetchUserCatchesFromCloud(userId: string): Promise<CatchRo
 
       if (!hasEvCoords) continue;
 
+      const remoteUrlsCloud = filterRemoteHttpPhotoUrls(normalizeCatchPhotoUrls(data as CatchData));
       byId.set(ev.id, {
         id: ev.id,
         user_id: userId,
@@ -803,11 +806,8 @@ export async function fetchUserCatchesFromCloud(userId: string): Promise<CatchRo
         active_fly_event_id: data?.active_fly_event_id ?? null,
         presentation_method: data?.presentation_method ?? null,
         note: data?.note ?? null,
-        photo_url: getCatchHeroPhotoUrl(data as CatchData),
-        photo_urls: (() => {
-          const u = normalizeCatchPhotoUrls(data as CatchData);
-          return u.length > 0 ? u : null;
-        })(),
+        photo_url: remoteUrlsCloud[0] ?? null,
+        photo_urls: remoteUrlsCloud.length > 0 ? remoteUrlsCloud : null,
         conditions_snapshot_id: null,
         fly_pattern: null,
         fly_size: null,

@@ -24,7 +24,12 @@ import { COMMON_SPECIES as SPECIES_OPTIONS, FLY_COLORS, FLY_NAMES, FLY_SIZES } f
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
-import { addPhoto, deleteCatchPhotoByUrl, PhotoQueuedOfflineError } from '@/src/services/photoService';
+import {
+  addPhoto,
+  deleteCatchPhotoByUrl,
+  PhotoPendingRetryError,
+  PhotoQueuedOfflineError,
+} from '@/src/services/photoService';
 import { upsertCatchEventToCloud } from '@/src/services/sync';
 import { fetchHistoricalWeather } from '@/src/services/historicalWeather';
 import { tripMapDefaultCenterCoordinate, tripSeedLatLng } from '@/src/utils/mapViewport';
@@ -1666,6 +1671,7 @@ export function CatchDetailsModal({
             }
           } catch (e) {
             if (e instanceof PhotoQueuedOfflineError) Alert.alert('Offline', e.message);
+            else if (e instanceof PhotoPendingRetryError) Alert.alert('Photo', e.message);
             else Alert.alert('Photo', (e as Error).message);
             setSubmitting(false);
             return;
