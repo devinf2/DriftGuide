@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
@@ -13,16 +13,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 
 type ScreenPointPayload = { screenPointX: number; screenPointY: number };
 type PointFeature = Feature<Point, ScreenPointPayload>;
-
-const ZOOM_BUTTON_WIDTH = 44;
-
-function roundZoom(z: number): number {
-  return Math.round(z * 10) / 10;
-}
-
-function clampZoom(z: number): number {
-  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
-}
 
 const MARKER_PRESS_LOCK_MS = 450;
 const MARKER_COORD_LOCK_EPS = 1e-5;
@@ -50,16 +40,6 @@ export type CatchPinCatalogMarker = {
   name?: string;
   isFavorite?: boolean;
 };
-
-function mapAttributionBesideZoomControls(
-  showZoomControls: boolean,
-): { bottom: number; right: number } | undefined {
-  if (!showZoomControls) return undefined;
-  return {
-    bottom: Spacing.lg,
-    right: Spacing.md + ZOOM_BUTTON_WIDTH + Spacing.sm,
-  };
-}
 
 function loadMapbox(): Record<string, unknown> | null {
   if (!isRnMapboxNativeLinked()) return null;
@@ -95,9 +75,6 @@ export type CatchPinPickerMapProps = {
   focusRequestKey?: string | number;
   /** [lng, lat] for initial camera when pin coordinates are missing */
   mapFallbackCenter?: [number, number];
-  /** Mapbox-style +/- zoom (uses camera ref); good for pan-center pin picking. */
-  showZoomControls?: boolean;
-  zoomStep?: number;
   /** Fixed style; when set, hides the basemap switcher. */
   mapStyle?: string;
   showBasemapSwitcher?: boolean;
@@ -181,36 +158,6 @@ function createCatchPinPickerStyles(colors: ThemeColors) {
       textAlign: 'center',
       marginTop: Spacing.sm,
     },
-    zoomCluster: {
-      position: 'absolute',
-      bottom: Spacing.lg,
-      right: Spacing.md,
-      borderRadius: 10,
-      overflow: 'hidden',
-      backgroundColor: colors.surface,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      elevation: 3,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.15,
-      shadowRadius: 2,
-    },
-    zoomButton: {
-      width: ZOOM_BUTTON_WIDTH,
-      height: ZOOM_BUTTON_WIDTH,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-    },
-    zoomButtonPressed: {
-      opacity: 0.85,
-      backgroundColor: colors.surfaceElevated,
-    },
-    zoomDivider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: colors.border,
-    },
   });
 }
 
@@ -225,8 +172,6 @@ export function CatchPinPickerMap({
   interactionMode = 'tap_or_drag_pin',
   focusRequestKey = '0',
   mapFallbackCenter,
-  showZoomControls = false,
-  zoomStep = 1,
   mapStyle: mapStyleProp,
   showBasemapSwitcher = true,
   showHint = true,
@@ -238,7 +183,6 @@ export function CatchPinPickerMap({
   const styles = useMemo(() => createCatchPinPickerStyles(colors), [colors]);
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const tokenApplied = useRef(false);
-  const cameraRef = useRef<{ zoomTo?: (z: number, duration?: number) => void } | null>(null);
   const rawMod = useMemo(() => loadMapbox(), []);
 
   const mod = useMemo(() => {
@@ -271,21 +215,13 @@ export function CatchPinPickerMap({
   const isPanCenter = interactionMode === 'pan_center';
   const cameraKey = isPanCenter ? `pan-${focusRequestKey}` : `${resolvedCenter[0]},${resolvedCenter[1]},${zoom}`;
 
-  const [liveZoom, setLiveZoom] = useState(() => roundZoom(zoom));
-  useEffect(() => {
-    setLiveZoom(roundZoom(zoom));
-  }, [zoom, cameraKey]);
-
   const resolvedHint =
     hintText ?? (isPanCenter ? DEFAULT_PAN_HINT : DEFAULT_PIN_HINT);
 
   const handleCameraChanged = useCallback(
     (state: unknown) => {
-      const s = state as MapCameraStatePayload;
-      if (showZoomControls && typeof s.properties?.zoom === 'number') {
-        setLiveZoom(roundZoom(s.properties.zoom));
-      }
       if (!isPanCenter) return;
+      const s = state as MapCameraStatePayload;
       const c = s.properties?.center;
       if (!Array.isArray(c) || c.length < 2) return;
       const lng = c[0];
@@ -294,16 +230,7 @@ export function CatchPinPickerMap({
         onCoordinateChange(lat, lng);
       }
     },
-    [isPanCenter, onCoordinateChange, showZoomControls],
-  );
-
-  const zoomBy = useCallback(
-    (delta: number) => {
-      const next = clampZoom(roundZoom(liveZoom + delta));
-      cameraRef.current?.zoomTo?.(next, 220);
-      setLiveZoom(next);
-    },
-    [liveZoom],
+    [isPanCenter, onCoordinateChange],
   );
 
   const fallbackSize =
@@ -362,14 +289,10 @@ export function CatchPinPickerMap({
         scaleBarEnabled={false}
         logoEnabled
         attributionEnabled
-        attributionPosition={mapAttributionBesideZoomControls(showZoomControls)}
         onPress={isPanCenter ? undefined : onMapPress}
-        onCameraChanged={
-          isPanCenter || showZoomControls ? (e: unknown) => handleCameraChanged(e) : undefined
-        }
+        onCameraChanged={isPanCenter ? (e: unknown) => handleCameraChanged(e) : undefined}
       >
         <Camera
-          ref={cameraRef}
           key={cameraKey}
           defaultSettings={{ centerCoordinate: resolvedCenter, zoomLevel: zoom }}
           minZoomLevel={MAP_MIN_ZOOM}
@@ -425,29 +348,6 @@ export function CatchPinPickerMap({
         </View>
       ) : null}
       {showBasemap ? <MapBasemapSwitcher compact /> : null}
-      {showZoomControls ? (
-        <View style={styles.zoomCluster} pointerEvents="box-none">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Zoom in"
-            style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-            onPress={() => zoomBy(zoomStep)}
-            disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
-          >
-            <MaterialIcons name="add" size={22} color={colors.text} />
-          </Pressable>
-          <View style={styles.zoomDivider} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Zoom out"
-            style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-            onPress={() => zoomBy(-zoomStep)}
-            disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
-          >
-            <MaterialIcons name="remove" size={22} color={colors.text} />
-          </Pressable>
-        </View>
-      ) : null}
     </View>
   );
 

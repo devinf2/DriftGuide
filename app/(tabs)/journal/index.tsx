@@ -21,11 +21,12 @@ import {
 import { formatFishCount, formatTripDate, formatTripDuration } from '@/src/utils/formatters';
 import { COORD_STACK_EPS, displayLngLatForOverlappingItems } from '@/src/utils/mapPinDisplayOffset';
 import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
+import { pushJournalTripDetail } from '@/src/utils/journalNavigation';
 import { formatCatchWeightLabel } from '@/src/utils/journalTimeline';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format, isAfter, startOfMonth, startOfWeek, startOfYear } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -71,7 +72,6 @@ interface LocationGroup {
 }
 
 export default function JournalScreen() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
@@ -239,12 +239,12 @@ export default function JournalScreen() {
   const handleMarkerPress = useCallback(
     (group: LocationGroup) => {
       if (group.trips.length === 1) {
-        router.push(`/journal/${group.trips[0].id}`);
+        pushJournalTripDetail(`/journal/${group.trips[0].id}`);
       } else {
         setSelectedGroup(group);
       }
     },
-    [router],
+    [],
   );
 
   const handleFishMarkerPress = useCallback((c: CatchRow) => {
@@ -333,12 +333,12 @@ export default function JournalScreen() {
         trip={item}
         imageUrls={tripPhotoUrlsMap[item.id] ?? []}
         cardWidth={cardWidth}
-        onPress={() => router.push(`/journal/${item.id}`)}
+        onPress={() => pushJournalTripDetail(`/journal/${item.id}`)}
         colors={colors}
         styles={tripGridStyles}
       />
     ),
-    [tripPhotoUrlsMap, cardWidth, router, colors, tripGridStyles],
+    [tripPhotoUrlsMap, cardWidth, colors, tripGridStyles],
   );
 
   if (loading) {
@@ -600,7 +600,7 @@ export default function JournalScreen() {
                           style={styles.selectedTripCard}
                           onPress={() => {
                             setSelectedGroup(null);
-                            router.push(`/journal/${item.id}`);
+                            pushJournalTripDetail(`/journal/${item.id}`);
                           }}
                         >
                           <View style={styles.selectedTripRow}>
@@ -719,7 +719,7 @@ export default function JournalScreen() {
                       onPress={() => {
                         const id = selectedFishCatch.trip_id;
                         setSelectedFishCatch(null);
-                        router.push(`/journal/${id}`);
+                        pushJournalTripDetail(`/journal/${id}`);
                       }}
                     >
                       <Text style={styles.fishOpenJournalBtnText}>Open trip</Text>

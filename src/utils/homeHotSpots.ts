@@ -1,5 +1,11 @@
-import { getTopFishingSpots, type SpotSuggestion } from '@/src/services/ai';
+import {
+  getRegionalHatchBriefing,
+  getTopFishingSpots,
+  type RegionalHatchBriefingResult,
+  type SpotSuggestion,
+} from '@/src/services/ai';
 import { fetchCommunityFishTotalsForLocations } from '@/src/services/catchAggregates';
+import { fetchLocationPublicRatingSummaries } from '@/src/services/locationCommunityRatings';
 import { fetchAllLocationConditions } from '@/src/services/conditions';
 import { haversineDistance } from '@/src/services/locationService';
 import { Location, LocationConditions } from '@/src/types';
@@ -39,6 +45,9 @@ export type HomeHotSpotData = {
   distanceKm: number | null;
   /** Community fish-equivalent in lookback window */
   communityFishN?: number;
+  /** Mean of public 1–5 trip ratings at this location (all time); set only when count > 0 */
+  communityRatingAvg?: number;
+  communityRatingCount?: number;
 };
 
 export type WaterConditionsBrief = {
@@ -206,7 +215,70 @@ function buildWatersForRegionalBriefing(
 export type FetchHomeHotSpotsResult = {
   hotSpotList: HomeHotSpotData[];
   watersForRegionalBriefing: WaterConditionsBrief[];
+  hatchBriefing: RegionalHatchBriefingResult;
 };
+
+const EMPTY_HATCH: RegionalHatchBriefingResult = { rows: [] };
+
+function buildHomeHotSpotsRequestKey(
+  locations: Location[],
+  userCoords: { latitude: number; longitude: number } | null,
+  favoriteLocationIds: ReadonlySet<string> | undefined,
+  refreshKey: number,
+): string {
+  const topLevel = activeLocationsOnly(locations).filter((l) => !l.parent_location_id);
+  const locPart = topLevel
+    .map((l) => l.id)
+    .sort()
+    .join(',');
+  const favPart = favoriteLocationIds ? [...favoriteLocationIds].sort().join(',') : '';
+  const coordPart =
+    userCoords == null
+      ? 'nogps'
+      : `${userCoords.latitude.toFixed(4)},${userCoords.longitude.toFixed(4)}`;
+  return `${refreshKey}|${locPart}|${coordPart}|${favPart}`;
+}
+
+const HOME_HOT_SPOTS_CACHE_TTL_MS = 45_000;
+
+const homeHotSpotsInflight = new Map<string, Promise<FetchHomeHotSpotsResult | null>>();
+let homeHotSpotsServed: { key: string; bundle: FetchHomeHotSpotsResult; at: number } | null = null;
+
+/**
+ * Loads the same bundle as {@link fetchHomeHotSpotsData} with in-flight dedupe and a short TTL cache
+ * so tab-level prefetch and the home hook can share one network round-trip.
+ */
+export async function loadHomeHotSpotsBundle(
+  locations: Location[],
+  userCoords: { latitude: number; longitude: number } | null,
+  favoriteLocationIds: ReadonlySet<string> | undefined,
+  refreshKey: number,
+): Promise<FetchHomeHotSpotsResult | null> {
+  const key = buildHomeHotSpotsRequestKey(locations, userCoords, favoriteLocationIds, refreshKey);
+  if (
+    homeHotSpotsServed &&
+    homeHotSpotsServed.key === key &&
+    Date.now() - homeHotSpotsServed.at < HOME_HOT_SPOTS_CACHE_TTL_MS
+  ) {
+    return homeHotSpotsServed.bundle;
+  }
+  const existing = homeHotSpotsInflight.get(key);
+  if (existing) {
+    return existing;
+  }
+  const promise = fetchHomeHotSpotsData(locations, userCoords, favoriteLocationIds)
+    .then((result) => {
+      if (result) {
+        homeHotSpotsServed = { key, bundle: result, at: Date.now() };
+      }
+      return result;
+    })
+    .finally(() => {
+      homeHotSpotsInflight.delete(key);
+    });
+  homeHotSpotsInflight.set(key, promise);
+  return promise;
+}
 
 /**
  * Fetches conditions and AI-ranked hot spots for home. Used by useHomeHotSpots.
@@ -218,11 +290,11 @@ export async function fetchHomeHotSpotsData(
 ): Promise<FetchHomeHotSpotsResult | null> {
   const topLevel = activeLocationsOnly(locations).filter((l) => !l.parent_location_id);
   if (topLevel.length === 0) {
-    return { hotSpotList: [], watersForRegionalBriefing: [] };
+    return { hotSpotList: [], watersForRegionalBriefing: [], hatchBriefing: EMPTY_HATCH };
   }
   const spotsToUse = selectLocationsForHomeHotSpots(topLevel, userCoords);
   if (spotsToUse.length === 0) {
-    return { hotSpotList: [], watersForRegionalBriefing: [] };
+    return { hotSpotList: [], watersForRegionalBriefing: [], hatchBriefing: EMPTY_HATCH };
   }
   const conditionsMap = await fetchAllLocationConditions(spotsToUse);
   const communityFishByLocationId = await fetchCommunityFishTotalsForLocations(
@@ -233,12 +305,21 @@ export async function fetchHomeHotSpotsData(
     conditionsMap,
     MAX_HOME_HOTSPOT_POOL,
   );
-  const suggestions = await getTopFishingSpots(spotsToUse, conditionsMap, undefined, {
-    userLat: userCoords?.latitude ?? null,
-    userLng: userCoords?.longitude ?? null,
+  const briefingDate = new Date();
+  const userLat = userCoords?.latitude ?? null;
+  const userLng = userCoords?.longitude ?? null;
+  /** Start hatch first, then spot ranking — both run together after conditions are ready. */
+  const hatchPromise = getRegionalHatchBriefing(watersForRegionalBriefing, briefingDate, {
+    userLat,
+    userLng,
+  }).catch(() => EMPTY_HATCH);
+  const spotsPromise = getTopFishingSpots(spotsToUse, conditionsMap, undefined, {
+    userLat,
+    userLng,
     communityFishByLocationId,
     favoriteLocationIds,
   });
+  const [hatchBriefing, suggestions] = await Promise.all([hatchPromise, spotsPromise]);
   const hotSpotList = buildHotSpotListFromSuggestions(
     spotsToUse,
     conditionsMap,
@@ -247,5 +328,15 @@ export async function fetchHomeHotSpotsData(
     communityFishByLocationId,
     favoriteLocationIds,
   );
-  return { hotSpotList, watersForRegionalBriefing };
+  const ratingMap = await fetchLocationPublicRatingSummaries(hotSpotList.map((h) => h.location.id));
+  const hotSpotListWithRatings = hotSpotList.map((h) => {
+    const s = ratingMap.get(h.location.id);
+    if (!s || s.ratingCount <= 0) return h;
+    return {
+      ...h,
+      communityRatingAvg: s.ratingAvg,
+      communityRatingCount: s.ratingCount,
+    };
+  });
+  return { hotSpotList: hotSpotListWithRatings, watersForRegionalBriefing, hatchBriefing };
 }

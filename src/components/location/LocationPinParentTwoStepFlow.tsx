@@ -246,7 +246,6 @@ export function LocationPinParentTwoStepFlow({
             longitude={longitude}
             onCoordinateChange={onCoordinateChange}
             interactionMode="pan_center"
-            showZoomControls
             focusRequestKey={mapFocusKey}
             mapFallbackCenter={mapFallbackCenter}
             showBasemapSwitcher={false}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import type { Feature, Polygon } from 'geojson';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
@@ -16,16 +16,6 @@ import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
 import { MaterialIcons } from '@expo/vector-icons';
-
-const ZOOM_BUTTON_WIDTH = 44;
-
-function roundZoom(z: number): number {
-  return Math.round(z * 10) / 10;
-}
-
-function clampZoom(z: number): number {
-  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
-}
 
 function bboxToPolygonFeature(bbox: BoundingBox): Feature<Polygon> {
   const { ne, sw } = bbox;
@@ -72,7 +62,6 @@ export type OfflineRegionPickerMapProps = {
 };
 
 type CameraRef = {
-  zoomTo?: (z: number, duration?: number) => void;
   fitBounds?: (
     ne: [number, number],
     sw: [number, number],
@@ -109,8 +98,6 @@ export function OfflineRegionPickerMap({
       halfHeightKm,
     ),
   );
-  const [liveZoom, setLiveZoom] = useState(() => roundZoom(initialZoom));
-
   const mod = useMemo(() => {
     if (!rawMod) return null;
     const ns = (rawMod.default ?? rawMod) as {
@@ -170,13 +157,11 @@ export function OfflineRegionPickerMap({
   const syncBboxFromCameraState = useCallback(
     (state: MapCameraStatePayload) => {
       const center = state?.properties?.center;
-      const z = state?.properties?.zoom;
       if (!center || center.length < 2) return;
       const [lng, lat] = center;
       const bbox = boundingBoxRectAroundCenter(lng, lat, halfWidthKm, halfHeightKm);
       setLiveBbox(bbox);
       onBboxRef.current(bbox, [lng, lat]);
-      if (typeof z === 'number') setLiveZoom(roundZoom(z));
     },
     [halfWidthKm, halfHeightKm],
   );
@@ -213,15 +198,6 @@ export function OfflineRegionPickerMap({
   const handleDidFinishLoadingStyle = useCallback(() => {
     tryFrameInitialRegion();
   }, [tryFrameInitialRegion]);
-
-  const zoomBy = useCallback(
-    (delta: number) => {
-      const next = clampZoom(roundZoom(liveZoom + delta));
-      cameraRef.current?.zoomTo?.(next, 220);
-      setLiveZoom(next);
-    },
-    [liveZoom],
-  );
 
   if (!rawMod || !mod) {
     return (
@@ -263,7 +239,7 @@ export function OfflineRegionPickerMap({
         scaleBarEnabled={false}
         logoEnabled
         attributionEnabled
-        attributionPosition={{ bottom: Spacing.lg, right: Spacing.md + ZOOM_BUTTON_WIDTH + Spacing.sm }}
+        attributionPosition={{ bottom: Spacing.lg, right: Spacing.md }}
         onCameraChanged={handleCameraChanged}
         onMapIdle={handleMapIdle}
         onDidFinishLoadingStyle={handleDidFinishLoadingStyle}
@@ -297,27 +273,6 @@ export function OfflineRegionPickerMap({
         </ShapeSource>
       </MapView>
       <MapBasemapSwitcher />
-      <View style={styles.zoomCluster} pointerEvents="box-none">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Zoom in"
-          style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-          onPress={() => zoomBy(1)}
-          disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
-        >
-          <MaterialIcons name="add" size={22} color={colors.text} />
-        </Pressable>
-        <View style={styles.zoomDivider} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Zoom out"
-          style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-          onPress={() => zoomBy(-1)}
-          disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
-        >
-          <MaterialIcons name="remove" size={22} color={colors.text} />
-        </Pressable>
-      </View>
     </View>
   );
 }
@@ -339,25 +294,5 @@ function createOfflineRegionPickerMapStyles(colors: ThemeColors) {
       color: colors.textSecondary,
       textAlign: 'center',
     },
-    zoomCluster: {
-      position: 'absolute',
-      right: Spacing.md,
-      bottom: Spacing.lg + 56,
-      borderRadius: 10,
-      overflow: 'hidden',
-      backgroundColor: colors.surface,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      elevation: 3,
-    },
-    zoomButton: {
-      width: 44,
-      height: 44,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-    },
-    zoomButtonPressed: { opacity: 0.85, backgroundColor: colors.surfaceElevated },
-    zoomDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   });
 }

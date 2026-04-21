@@ -18,7 +18,6 @@ import {
     useImperativeHandle,
     useMemo,
     useRef,
-    useState,
     type ComponentType,
     type ReactElement,
     type ReactNode,
@@ -57,14 +56,15 @@ export type TripMapboxMapRef = {
    * for catch queries, offline packs, and Supabase filters (not derived from JS camera events).
    */
   getVisibleRegion: () => Promise<BoundingBox | null>;
+  /**
+   * Animate the map camera to `[lng, lat]` + zoom. Use when React `centerCoordinate` / remount
+   * alone does not move the native camera (e.g. Mapbox `Camera` only had `defaultSettings`).
+   */
+  easeToCenter: (centerCoordinate: [number, number], zoomLevel: number) => void;
 };
 
 function roundZoom(z: number): number {
   return Math.round(z * 10) / 10;
-}
-
-function clampZoom(z: number): number {
-  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
 }
 
 /**
@@ -159,13 +159,13 @@ function TripMapboxMarkerItem({
   );
 }
 
-/** Width of one zoom step button (must match `styles.zoomButton`). */
-const ZOOM_BUTTON_WIDTH = 44;
-
-/** Bottom-right FAB (e.g. add location) — matches zoom control width for layout math. */
-const TRAILING_FAB_SIZE = 44;
+/** Bottom-right FAB (e.g. add location on Map tab) — width for attribution layout math. */
+const TRAILING_FAB_SIZE = 56;
 
 const ZOOM_CLUSTER_GAP = Spacing.sm;
+
+/** Map tab: pull layers + trailing FAB closer to the tab bar (smaller `bottom` = lower on screen). */
+const MAP_TAB_RIGHT_CONTROLS_BOTTOM_NUDGE = 20;
 
 /**
  * Map tab: approximate ornament widths for centering attribution (i) left of the Mapbox wordmark.
@@ -176,30 +176,21 @@ const MAP_TAB_LOGO_BLOCK = 90;
 /** Tight space between attribution (i) and Mapbox wordmark. */
 const MAP_TAB_ORNAMENT_GAP = 6;
 /**
- * Shared bottom inset for (i) + wordmark + zoom baseline (map tab).
+ * Shared bottom inset for Mapbox (i) + wordmark on the map tab.
  * Same value for both ornaments so the info button lines up with the wordmark on native Mapbox.
  */
 const MAP_TAB_MAPBOX_ROW_BOTTOM = Spacing.xs;
 
-/**
- * Mapbox attribution (i): to the left of zoom stack, or to the left of a trailing FAB on the bottom row.
- */
+/** Mapbox attribution (i): to the left of a trailing FAB on the bottom row when present. */
 function resolveAttributionPosition(
-  showZoomControls: boolean,
   hasTrailingFab: boolean,
   planTripFabClearance: number,
 ): { bottom: number; right: number } | undefined {
-  if (!showZoomControls && !hasTrailingFab) return undefined;
+  if (!hasTrailingFab) return undefined;
   const rowBottom = Spacing.lg + planTripFabClearance;
-  if (hasTrailingFab) {
-    return {
-      bottom: rowBottom,
-      right: Spacing.md + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP,
-    };
-  }
   return {
     bottom: rowBottom,
-    right: Spacing.md + ZOOM_BUTTON_WIDTH + ZOOM_CLUSTER_GAP,
+    right: Spacing.md + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP,
   };
 }
 
@@ -227,20 +218,17 @@ type TripMapboxMapViewProps = {
   compassEnabled?: boolean;
   onCameraChanged?: (state: MapCameraStatePayload) => void;
   onMapIdle?: (state: MapCameraStatePayload) => void;
-  /** Fired when zoom changes (buttons, pinch, or programmatic) so parents can stay in sync. */
+  /** Fired when zoom changes (pinch or programmatic) so parents can stay in sync. */
   onZoomLevelChange?: (zoom: number) => void;
-  /** Step for +/- controls (one Mapbox zoom level ≈ 2× scale). */
-  zoomStep?: number;
-  showZoomControls?: boolean;
   /**
-   * Renders above the bottom safe inset: zoom sits above this control; Mapbox (i) sits to its left.
+   * Renders above the bottom safe inset; Mapbox (i) sits to its left when present.
    * Use for e.g. add-location FAB on the Map tab.
    */
   trailingFab?: ReactElement | null;
   /** Extra bottom inset so controls sit above the tab-level plan-trip FAB. */
   reservePlanTripFabSpacing?: boolean;
   /**
-   * Map tab only: zoom +/- bottom-left; (i) immediately left of centered Mapbox logo; layers above trailing (+).
+   * Map tab only: (i) immediately left of centered Mapbox logo; layers above trailing (+).
    */
   mapTabControlLayout?: boolean;
 };
@@ -264,8 +252,6 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       onCameraChanged,
       onMapIdle,
       onZoomLevelChange,
-      zoomStep = 1,
-      showZoomControls = true,
       trailingFab = null,
       reservePlanTripFabSpacing = false,
       mapTabControlLayout = false,
@@ -281,12 +267,16 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     const mapViewRef = useRef<{
       getVisibleBounds?: () => Promise<[[number, number], [number, number]]>;
     } | null>(null);
-    const cameraRef = useRef<{ zoomTo?: (z: number, duration?: number) => void } | null>(null);
-    const [liveZoom, setLiveZoom] = useState(() => roundZoom(zoomLevel));
-
-    useEffect(() => {
-      setLiveZoom(roundZoom(zoomLevel));
-    }, [zoomLevel]);
+    const cameraRef = useRef<{
+      zoomTo?: (z: number, duration?: number) => void;
+      setCamera?: (config: {
+        type: 'CameraStop';
+        centerCoordinate: [number, number];
+        zoomLevel: number;
+        animationDuration: number;
+        animationMode: 'flyTo' | 'easeTo' | 'moveTo';
+      }) => void;
+    } | null>(null);
 
     const mod = useMemo(() => {
       if (!rawMod) return null;
@@ -314,6 +304,15 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             return null;
           }
         },
+        easeToCenter: (centerCoordinate: [number, number], zoom: number) => {
+          cameraRef.current?.setCamera?.({
+            type: 'CameraStop',
+            centerCoordinate,
+            zoomLevel: zoom,
+            animationDuration: 520,
+            animationMode: 'flyTo',
+          });
+        },
       }),
       [],
     );
@@ -327,9 +326,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
 
     const reportZoom = useCallback(
       (z: number) => {
-        const r = roundZoom(z);
-        setLiveZoom(r);
-        onZoomLevelChange?.(r);
+        onZoomLevelChange?.(roundZoom(z));
       },
       [onZoomLevelChange],
     );
@@ -347,15 +344,6 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         onCameraChanged?.(state);
       },
       [onCameraChanged],
-    );
-
-    const zoomBy = useCallback(
-      (delta: number) => {
-        const next = clampZoom(roundZoom(liveZoom + delta));
-        cameraRef.current?.zoomTo?.(next, 220);
-        reportZoom(next);
-      },
-      [liveZoom, reportZoom],
     );
 
     const mapTabOrnaments = useMemo(() => {
@@ -409,11 +397,9 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
 
     const hasTrailingFab = trailingFab != null;
     const planTripFabClearance = reservePlanTripFabSpacing ? PLAN_TRIP_FAB_MAP_CLEARANCE : 0;
-    const trailingFabBottom = Spacing.lg + planTripFabClearance;
-    const zoomClusterBottom =
-      showZoomControls && hasTrailingFab
-        ? trailingFabBottom + TRAILING_FAB_SIZE + ZOOM_CLUSTER_GAP
-        : Spacing.lg + planTripFabClearance;
+    const mapTabRightStackNudge =
+      mapTabControlLayout && reservePlanTripFabSpacing ? MAP_TAB_RIGHT_CONTROLS_BOTTOM_NUDGE : 0;
+    const trailingFabBottom = Spacing.lg + planTripFabClearance - mapTabRightStackNudge;
 
     /** Map tab: layers sit above the trailing (+) FAB when present; else bottom-right above plan-trip FAB only. */
     const layersFabBottom =
@@ -438,7 +424,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           attributionPosition={
             mapTabOrnaments
               ? mapTabOrnaments.attributionPosition
-              : resolveAttributionPosition(showZoomControls, hasTrailingFab, planTripFabClearance)
+              : resolveAttributionPosition(hasTrailingFab, planTripFabClearance)
           }
           logoPosition={mapTabOrnaments?.logoPosition}
           onCameraChanged={
@@ -470,43 +456,6 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             anchorBottom={layersFabBottom}
           />
         ) : null}
-        {showZoomControls ? (
-          <View
-            style={[
-              styles.zoomCluster,
-              mapTabControlLayout
-                ? {
-                    bottom: MAP_TAB_MAPBOX_ROW_BOTTOM,
-                    left: Spacing.md,
-                  }
-                : {
-                    bottom: zoomClusterBottom,
-                    right: Spacing.md,
-                  },
-            ]}
-            pointerEvents="box-none"
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Zoom in"
-              style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-              onPress={() => zoomBy(zoomStep)}
-              disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
-            >
-              <MaterialIcons name="add" size={22} color={colors.text} />
-            </Pressable>
-            <View style={styles.zoomDivider} />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Zoom out"
-              style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-              onPress={() => zoomBy(-zoomStep)}
-              disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
-            >
-              <MaterialIcons name="remove" size={22} color={colors.text} />
-            </Pressable>
-          </View>
-        ) : null}
         {trailingFab ? (
           <View
             style={[styles.trailingFabAnchor, { bottom: trailingFabBottom }]}
@@ -531,34 +480,6 @@ function createTripMapboxMapStyles(colors: ThemeColors) {
     trailingFabAnchor: {
       position: 'absolute',
       right: Spacing.md,
-    },
-    zoomCluster: {
-      position: 'absolute',
-      borderRadius: 10,
-      overflow: 'hidden',
-      backgroundColor: colors.surface,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      elevation: 3,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.15,
-      shadowRadius: 2,
-    },
-    zoomButton: {
-      width: 44,
-      height: 44,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-    },
-    zoomButtonPressed: {
-      opacity: 0.85,
-      backgroundColor: colors.surfaceElevated,
-    },
-    zoomDivider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: colors.border,
     },
     placeholder: {
       flex: 1,

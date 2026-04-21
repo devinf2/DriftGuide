@@ -3603,7 +3603,7 @@ function createTripDashboardStyles(colors: ThemeColors) {
   mapTabFabColumn: {
     position: 'absolute',
     right: Spacing.md,
-    /* Clear bottom strip: Mapbox (i) + zoom stack live above trip safe area */
+    /* Clear bottom strip: Mapbox (i) + wordmark live above trip safe area */
     bottom: Spacing.lg + 96,
     gap: Spacing.sm,
     alignItems: 'flex-end',

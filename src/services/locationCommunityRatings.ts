@@ -85,3 +85,72 @@ export async function fetchLocationCommunityRatings(
   const parsed = parseFeedPayload(data);
   return parsed ?? { showCommunityTab: false, rows: [] };
 }
+
+/** Mean of 1–5 trip ratings from feed rows; null if none. */
+export function averagePublicTripRatingFromRows(rows: LocationPublicTripRatingRow[]): number | null {
+  const vals = rows
+    .map((r) => r.rating)
+    .filter((n) => typeof n === 'number' && Number.isFinite(n) && n > 0);
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+export type LocationPublicRatingSummary = {
+  locationId: string;
+  ratingAvg: number;
+  ratingCount: number;
+};
+
+/**
+ * One RPC: avg + count of public rated trips per location (all time), for home cards.
+ */
+export async function fetchLocationPublicRatingSummaries(
+  locationIds: string[],
+): Promise<Map<string, LocationPublicRatingSummary>> {
+  const out = new Map<string, LocationPublicRatingSummary>();
+  const unique = [...new Set(locationIds.filter(Boolean))];
+  if (unique.length === 0) return out;
+
+  const { data, error } = await supabase.rpc('location_public_rating_summaries', {
+    p_location_ids: unique,
+  });
+
+  if (error) {
+    console.warn('[DriftGuide] location_public_rating_summaries failed:', error.message, error.code ?? '');
+    return out;
+  }
+
+  const raw = Array.isArray(data) ? data : typeof data === 'string' ? tryParseJsonArray(data) : null;
+  if (!Array.isArray(raw)) return out;
+
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const o = item as Record<string, unknown>;
+    const id = o.location_id == null ? '' : String(o.location_id);
+    if (!id) continue;
+    const avgRaw = o.rating_avg;
+    const countRaw = o.rating_count;
+    const ratingAvg =
+      typeof avgRaw === 'number'
+        ? avgRaw
+        : typeof avgRaw === 'string'
+          ? Number(avgRaw)
+          : NaN;
+    const ratingCount =
+      typeof countRaw === 'number' && Number.isFinite(countRaw)
+        ? Math.trunc(countRaw)
+        : parseRpcInt(countRaw);
+    if (!Number.isFinite(ratingAvg) || ratingCount <= 0) continue;
+    out.set(id, { locationId: id, ratingAvg, ratingCount });
+  }
+  return out;
+}
+
+function tryParseJsonArray(s: string): unknown[] | null {
+  try {
+    const v = JSON.parse(s) as unknown;
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}

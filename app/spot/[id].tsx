@@ -64,6 +64,7 @@ import {
 } from '@/src/services/locationService';
 import { effectiveIsAppOnline } from '@/src/utils/netReachability';
 import {
+  averagePublicTripRatingFromRows,
   fetchLocationCommunityRatings,
   type LocationPublicTripRatingRow,
 } from '@/src/services/locationCommunityRatings';
@@ -457,6 +458,11 @@ export default function SpotFishingTripScreen() {
   }, [conditions, communityFishN, summarySignal, summaryFetchedAt]);
 
   const displayStars = composite?.stars ?? 0;
+  const averageCommunityRating = useMemo(
+    () => averagePublicTripRatingFromRows(communityRatingRows),
+    [communityRatingRows],
+  );
+  const showLocationRatingRow = !communityRatingsLoading && averageCommunityRating != null;
   const spotTabs = useMemo((): { key: SpotTabKey; label: string }[] => {
     const tabs: { key: SpotTabKey; label: string }[] = [
       { key: 'overview', label: 'Overview' },
@@ -957,62 +963,136 @@ export default function SpotFishingTripScreen() {
 
       {activeTab === 'overview' && (
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
-        {/* Labels row: DriftGuide Score | Best time to fish */}
-        <View style={styles.tileLabelsRow}>
-          <View style={styles.tileLabelLeftWrap}>
-            <Text style={styles.tileLabelLeft}>DriftGuide Score</Text>
-            <Pressable
-              onPress={() => Alert.alert('DriftGuide Score', driftGuideScoreInfoMessage)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="About DriftGuide Score"
-            >
-              <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
-            </Pressable>
-          </View>
-          <Text style={styles.tileLabelRight}>Best time to fish</Text>
-        </View>
-        {/* Tiles row: composite stars + fire (conditions) | best time value */}
-        <View style={styles.tilesRow}>
-          {composite !== null && (
-            <View style={[styles.tile, styles.scoreTile]}>
-              <View style={styles.starsRow}>
-                {[0, 1, 2, 3, 4].map((i) => {
-                  const fullStars = Math.floor(displayStars);
-                  const partial = displayStars - fullStars;
-                  const isFull = i < fullStars;
-                  const isPartial = i === fullStars && partial > 0.05;
-                  if (isFull) {
-                    return <Ionicons key={i} name="star" size={22} color={colors.textInverse} />;
-                  }
-                  if (isPartial) {
-                    return (
-                      <View key={i} style={styles.starPartialWrap}>
-                        <Ionicons name="star-outline" size={22} color={colors.textInverse} style={styles.starOutlineBg} />
-                        <View style={[styles.starPartialFill, { width: 22 * partial }]}>
-                          <Ionicons name="star" size={22} color={colors.textInverse} />
-                        </View>
-                      </View>
-                    );
-                  }
-                  return <Ionicons key={i} name="star-outline" size={22} color={colors.textInverse} />;
-                })}
-                {conditionsScore?.showFire === true && (
-                  <Ionicons name="flame" size={20} color={colors.warning} style={styles.fireIcon} />
+        {showLocationRatingRow ? (
+          <>
+            <View style={styles.ratingsPairLabelsRow}>
+              <View style={styles.tileLabelLeftWrap}>
+                <Text style={styles.tileLabelLeft} numberOfLines={1}>
+                  Drift Guide
+                </Text>
+                <Pressable
+                  onPress={() => Alert.alert('Drift Guide', driftGuideScoreInfoMessage)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="About Drift Guide score"
+                >
+                  <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                </Pressable>
+              </View>
+              <Text style={styles.ratingsPairCommunityLabel} numberOfLines={1}>
+                Community
+              </Text>
+            </View>
+            <View style={styles.ratingsPairTilesRow}>
+              {composite !== null ? (
+                <View style={[styles.tile, styles.scoreTile, styles.tileCompact, styles.ratingsPairTile]}>
+                  <View style={styles.scoreOneLineRow}>
+                    <Text style={[styles.scoreOneLineValue, styles.scoreOneLineValueCompact]}>
+                      {displayStars.toFixed(1)}
+                    </Text>
+                    <Ionicons
+                      name="star"
+                      size={18}
+                      color={colors.textInverse}
+                      accessibilityLabel="out of five"
+                    />
+                    {conditionsScore?.showFire === true ? (
+                      <Ionicons name="flame" size={16} color={colors.warning} />
+                    ) : null}
+                  </View>
+                </View>
+              ) : (
+                <View style={[styles.tile, styles.scoreTileMuted, styles.ratingsPairTile]} accessibilityRole="text">
+                  <Text style={styles.scoreMutedText}>—</Text>
+                </View>
+              )}
+              <View style={[styles.tile, styles.locationRatingTile, styles.tileCompact, styles.ratingsPairTile]}>
+                <View style={styles.scoreOneLineRow}>
+                  <Text style={[styles.locationRatingValue, styles.locationRatingValueCompact]}>
+                    {averageCommunityRating.toFixed(1)}
+                  </Text>
+                  <Ionicons name="star" size={18} color={colors.warning} accessibilityLabel="out of five" />
+                </View>
+              </View>
+            </View>
+            <View style={styles.topTimesBlock}>
+              <Text style={styles.topTimesLabel} numberOfLines={1}>
+                Top times to fish
+              </Text>
+              <View style={[styles.tile, styles.bestTimeTile, styles.bestTimeTileCentered]}>
+                {summaryLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} style={styles.tileLoader} />
+                ) : bestTime ? (
+                  <Text
+                    style={styles.bestTimeValue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
+                    {bestTime}
+                  </Text>
+                ) : (
+                  <Text style={styles.bestTimePlaceholder}>—</Text>
                 )}
               </View>
             </View>
-          )}
-          <View style={[styles.tile, styles.bestTimeTile]}>
-            {summaryLoading ? (
-              <ActivityIndicator size="small" color={colors.primary} style={styles.tileLoader} />
-            ) : bestTime ? (
-              <Text style={styles.bestTimeValue} numberOfLines={1}>{bestTime}</Text>
-            ) : (
-              <Text style={styles.bestTimePlaceholder}>—</Text>
-            )}
-          </View>
-        </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.tileLabelsRow}>
+              <View style={styles.tileLabelLeftWrap}>
+                <Text style={styles.tileLabelLeft} numberOfLines={1}>
+                  Drift Guide
+                </Text>
+                <Pressable
+                  onPress={() => Alert.alert('Drift Guide', driftGuideScoreInfoMessage)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="About Drift Guide score"
+                >
+                  <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                </Pressable>
+              </View>
+              <Text style={styles.tileLabelColumn} numberOfLines={1}>
+                Best Times
+              </Text>
+            </View>
+            <View style={styles.tilesRow}>
+              {composite !== null && (
+                <View style={[styles.tile, styles.scoreTile]}>
+                  <View style={styles.scoreOneLineRow}>
+                    <Text style={styles.scoreOneLineValue}>{displayStars.toFixed(1)}</Text>
+                    <Ionicons
+                      name="star"
+                      size={22}
+                      color={colors.textInverse}
+                      accessibilityLabel="out of five"
+                    />
+                    {conditionsScore?.showFire === true ? (
+                      <Ionicons name="flame" size={20} color={colors.warning} />
+                    ) : null}
+                  </View>
+                </View>
+              )}
+              <View style={[styles.tile, styles.bestTimeTile]}>
+                {summaryLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} style={styles.tileLoader} />
+                ) : bestTime ? (
+                  <Text
+                    style={styles.bestTimeValue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
+                    {bestTime}
+                  </Text>
+                ) : (
+                  <Text style={styles.bestTimePlaceholder}>—</Text>
+                )}
+              </View>
+            </View>
+          </>
+        )}
 
         {/* Conditions summary — block layout: label above value, temp emphasized */}
         {conditions && (
@@ -1503,6 +1583,57 @@ function createSpotStyles(colors: ThemeColors) {
     gap: Spacing.md,
     marginBottom: Spacing.xs,
   },
+  ratingsPairLabelsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.xs,
+  },
+  ratingsPairCommunityLabel: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    textAlign: 'right',
+  },
+  ratingsPairTilesRow: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  ratingsPairTile: {
+    flex: 1,
+  },
+  topTimesBlock: {
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+  },
+  topTimesLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginBottom: Spacing.xs,
+    textAlign: 'center',
+    alignSelf: 'stretch',
+  },
+  bestTimeTileCentered: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 300,
+    alignItems: 'center',
+  },
+  scoreTileMuted: {
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreMutedText: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: colors.textTertiary,
+  },
   tileLabelLeftWrap: {
     flex: 1,
     flexDirection: 'row',
@@ -1514,13 +1645,12 @@ function createSpotStyles(colors: ThemeColors) {
     fontWeight: '600',
     color: colors.textSecondary,
   },
-  tileLabelRight: {
+  /** Overview metric headers (title case; avoids all-caps truncation in 3-col row) */
+  tileLabelColumn: {
     flex: 1,
     fontSize: FontSize.xs,
     fontWeight: '600',
     color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
     textAlign: 'left',
   },
   tilesRow: {
@@ -1535,33 +1665,42 @@ function createSpotStyles(colors: ThemeColors) {
     justifyContent: 'center',
     minHeight: 52,
   },
+  tileCompact: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    minHeight: 48,
+  },
   scoreTile: {
     backgroundColor: colors.primary,
     alignItems: 'center',
   },
-  starsRow: {
+  scoreOneLineRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
+    justifyContent: 'center',
+    gap: 6,
   },
-  starPartialWrap: {
-    width: 22,
-    height: 22,
-    position: 'relative',
+  scoreOneLineValue: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: colors.textInverse,
   },
-  starOutlineBg: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
+  scoreOneLineValueCompact: {
+    fontSize: FontSize.md,
   },
-  starPartialFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    overflow: 'hidden',
+  locationRatingTile: {
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: 'center',
   },
-  fireIcon: {
-    marginLeft: Spacing.sm,
+  locationRatingValue: {
+    fontSize: FontSize.lg,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  locationRatingValueCompact: {
+    fontSize: FontSize.md,
   },
   bestTimeTile: {
     backgroundColor: colors.surface,
@@ -1575,6 +1714,10 @@ function createSpotStyles(colors: ThemeColors) {
     fontSize: FontSize.md,
     fontWeight: '600',
     color: colors.text,
+    textAlign: 'center',
+  },
+  bestTimeValueCompact: {
+    fontSize: FontSize.sm,
   },
   bestTimePlaceholder: {
     fontSize: FontSize.md,

@@ -6,7 +6,6 @@ import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleS
 import { FishHomeSpotsSection } from '@/src/components/home/FishHomeSpotsSection';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useGuideChatContext } from '@/src/hooks/useGuideChatContext';
-import { useHomeHatchBriefing } from '@/src/hooks/useHomeHatchBriefing';
 import { useHomeHotSpots } from '@/src/hooks/useHomeHotSpots';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { fetchProfile } from '@/src/services/friendsService';
@@ -375,7 +374,7 @@ export default function HomeScreen() {
   }, [inviteModalVisible, sessionInviteRows.length]);
 
   const getContext = useGuideChatContext();
-  const { hotSpotList, hotSpotLoading, watersForRegionalBriefing, userCoords } = useHomeHotSpots(
+  const { hotSpotList, hotSpotLoading, userCoords, hatchRows, hatchLoading } = useHomeHotSpots(
     fullHome,
     briefingRefreshKey,
   );
@@ -384,14 +383,6 @@ export default function HomeScreen() {
   useEffect(() => {
     if (fullHome) setFromHomeHotSpots(hotSpotList);
   }, [fullHome, hotSpotList, setFromHomeHotSpots]);
-  const { hatchRows, hatchLoading } = useHomeHatchBriefing(
-    fullHome,
-    hotSpotLoading,
-    watersForRegionalBriefing,
-    briefingRefreshKey,
-    userCoords?.latitude,
-    userCoords?.longitude,
-  );
 
   useEffect(() => {
     if (!activeTrip) return;

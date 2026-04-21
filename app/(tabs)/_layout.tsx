@@ -3,6 +3,7 @@ import { PlanTripFab } from '@/src/components/PlanTripFab';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { prefetchHomeDiscoveryBriefing } from '@/src/utils/homeDiscoveryPrefetch';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import React, { useEffect, useMemo } from 'react';
@@ -21,7 +22,9 @@ export default function TabLayout() {
   const refreshFriends = useFriendsStore((s) => s.refresh);
 
   useEffect(() => {
-    if (userId) void refreshFriends(userId);
+    if (!userId) return;
+    void prefetchHomeDiscoveryBriefing();
+    void refreshFriends(userId);
   }, [userId, refreshFriends]);
 
   const incomingFriendRequestCount = useMemo(() => {

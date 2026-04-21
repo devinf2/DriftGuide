@@ -36,7 +36,7 @@ import { journalMapDefaultFraming } from '@/src/utils/mapViewport';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import * as ExpoLocation from 'expo-location';
-import { type Href, useRouter } from 'expo-router';
+import { type Href } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -52,6 +52,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { pushJournalTripDetail } from '@/src/utils/journalNavigation';
 
 type MediaTab = 'trips' | 'photos';
 type LayoutTab = 'grid' | 'map';
@@ -184,7 +185,6 @@ function mergeCatchesById(prev: CatchRow[], next: CatchRow[]): CatchRow[] {
 
 export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, ProfileTripsPhotosHubProps>(
   function ProfileTripsPhotosHub({ refreshSignal, peerUserId = null, peerAlbumProfile = null }, ref) {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
@@ -821,12 +821,12 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
   const handleMarkerPress = useCallback(
     (group: LocationGroup) => {
       if (group.trips.length === 1) {
-        router.push(journalHrefFromHub(group.trips[0].id, peerUserId));
+        pushJournalTripDetail(journalHrefFromHub(group.trips[0].id, peerUserId));
       } else {
         setSelectedGroup(group);
       }
     },
-    [router, peerUserId],
+    [peerUserId],
   );
 
   const handleFishMarkerPress = useCallback((c: CatchRow) => {
@@ -1066,7 +1066,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
                   trip={item}
                   imageUrls={tripPhotoUrlsMap[item.id] ?? []}
                   cardWidth={cardWidth}
-                  onPress={() => router.push(journalHrefFromHub(item.id, peerUserId))}
+                  onPress={() => pushJournalTripDetail(journalHrefFromHub(item.id, peerUserId))}
                   colors={colors}
                   styles={tripGridStyles}
                 />
@@ -1155,7 +1155,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
                           style={hubStyles.selectedTripCard}
                           onPress={() => {
                             setSelectedGroup(null);
-                            router.push(journalHrefFromHub(item.id, peerUserId));
+                            pushJournalTripDetail(journalHrefFromHub(item.id, peerUserId));
                           }}
                         >
                           <View style={hubStyles.selectedTripRow}>
@@ -1282,7 +1282,7 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
                       onPress={() => {
                         const id = selectedFishCatch.trip_id;
                         setSelectedFishCatch(null);
-                        router.push(journalHrefFromHub(id, peerUserId));
+                        pushJournalTripDetail(journalHrefFromHub(id, peerUserId));
                       }}
                     >
                       <Text style={hubStyles.fishOpenJournalBtnText}>Open trip</Text>

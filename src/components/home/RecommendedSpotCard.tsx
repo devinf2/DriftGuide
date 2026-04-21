@@ -94,8 +94,16 @@ function createStyles(colors: ThemeColors) {
       gap: 4,
       paddingTop: 1,
     },
+    ratingBlockSecond: {
+      marginTop: 3,
+    },
     ratingNum: {
       fontSize: FontSize.sm,
+      fontWeight: '700',
+      color: colors.warning,
+    },
+    ratingNumSecondary: {
+      fontSize: FontSize.xs,
       fontWeight: '700',
       color: colors.warning,
     },
@@ -251,9 +259,15 @@ export function RecommendedSpotCard({
         </View>
         <View style={styles.ratingColumn}>
           <View style={styles.ratingBlock}>
-            <Ionicons name="star" size={14} color={colors.warning} />
             <Text style={styles.ratingNum}>{scoreStars.toFixed(1)}</Text>
+            <Ionicons name="star" size={14} color={colors.warning} accessibilityLabel="out of five" />
           </View>
+          {data.communityRatingAvg != null && (data.communityRatingCount ?? 0) > 0 ? (
+            <View style={[styles.ratingBlock, styles.ratingBlockSecond]}>
+              <Text style={styles.ratingNumSecondary}>{data.communityRatingAvg.toFixed(1)}</Text>
+              <Ionicons name="star" size={12} color={colors.warning} accessibilityLabel="Location rating out of five" />
+            </View>
+          ) : null}
         </View>
       </View>
       <View style={styles.metaRow}>

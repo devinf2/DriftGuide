@@ -1,4 +1,5 @@
-import { fetchHomeHotSpotsData, type HomeHotSpotData, type WaterConditionsBrief } from '@/src/utils/homeHotSpots';
+import type { HatchBriefRow } from '@/src/services/ai';
+import { loadHomeHotSpotsBundle, type HomeHotSpotData, type WaterConditionsBrief } from '@/src/utils/homeHotSpots';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import * as ExpoLocation from 'expo-location';
@@ -7,7 +8,8 @@ import { useEffect, useMemo, useState } from 'react';
 export type { HomeHotSpotData, WaterConditionsBrief };
 
 /**
- * Loads GPS (when enabled), catalog locations, and home hot-spot list + waters payload for regional hatch briefing.
+ * Loads GPS (when enabled), catalog locations, home hot spots, and regional hatch rows
+ * (hatch + spot ranking load together after conditions; see {@link loadHomeHotSpotsBundle} for prefetch/cache).
  */
 export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
   const { locations, fetchLocations } = useLocationStore();
@@ -16,6 +18,7 @@ export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
   const [hotSpotList, setHotSpotList] = useState<HomeHotSpotData[]>([]);
   const [hotSpotLoading, setHotSpotLoading] = useState(false);
   const [watersForRegionalBriefing, setWatersForRegionalBriefing] = useState<WaterConditionsBrief[]>([]);
+  const [hatchRows, setHatchRows] = useState<HatchBriefRow[]>([]);
   const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
@@ -46,16 +49,19 @@ export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
     }
     let cancelled = false;
     setHotSpotLoading(true);
-    fetchHomeHotSpotsData(locations, userCoords, favoriteLocationIds)
+    loadHomeHotSpotsBundle(locations, userCoords, favoriteLocationIds, refreshKey)
       .then((result) => {
         if (cancelled || !result) return;
         setHotSpotList(result.hotSpotList);
         setWatersForRegionalBriefing(result.watersForRegionalBriefing);
+        const rows = result.hatchBriefing?.rows;
+        setHatchRows(Array.isArray(rows) ? rows : []);
       })
       .catch(() => {
         if (!cancelled) {
           setHotSpotList([]);
           setWatersForRegionalBriefing([]);
+          setHatchRows([]);
         }
       })
       .finally(() => {
@@ -79,5 +85,7 @@ export function useHomeHotSpots(enabled: boolean, refreshKey: number) {
     hotSpotLoading,
     watersForRegionalBriefing,
     userCoords,
+    hatchRows,
+    hatchLoading: hotSpotLoading,
   };
 }

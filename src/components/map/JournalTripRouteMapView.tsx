@@ -6,15 +6,7 @@ import {
   useState,
   type ComponentType,
 } from 'react';
-import {
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
+import { Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
@@ -55,24 +47,6 @@ function loadMapbox(): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function mapAttributionBesideZoomControls(
-  showZoomControls: boolean,
-): { bottom: number; right: number } | undefined {
-  if (!showZoomControls) return undefined;
-  return {
-    bottom: Spacing.lg,
-    right: Spacing.md + 44 + Spacing.sm,
-  };
-}
-
-function roundZoom(z: number): number {
-  return Math.round(z * 10) / 10;
-}
-
-function clampZoom(z: number): number {
-  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, z));
 }
 
 /** Chronological route: start → catches (by time) → end. */
@@ -251,7 +225,6 @@ export function JournalTripRouteMapView({
       padding?: number | number[],
       duration?: number,
     ) => void;
-    zoomTo?: (z: number, duration?: number) => void;
   } | null>(null);
 
   const isPlacing =
@@ -272,7 +245,6 @@ export function JournalTripRouteMapView({
     return dedupeConsecutiveLngLat(raw);
   }, [waypoints]);
 
-  const [liveZoom, setLiveZoom] = useState(13);
   const [routeFeature, setRouteFeature] = useState<{
     type: 'Feature';
     properties: Record<string, unknown>;
@@ -354,18 +326,11 @@ export function JournalTripRouteMapView({
     return () => clearTimeout(t);
   }, [fitCameraToTripStart, isPlacing]);
 
-  const reportZoom = useCallback((z: number) => {
-    setLiveZoom(roundZoom(z));
-  }, []);
-
   const placementCbRef = useRef(onPlacementCoordinateChange);
   placementCbRef.current = onPlacementCoordinateChange;
 
   const handlePlacementCamera = useCallback((e: unknown) => {
     const s = e as MapCameraStatePayload;
-    if (typeof s.properties?.zoom === 'number') {
-      setLiveZoom(roundZoom(s.properties.zoom));
-    }
     const c = s.properties?.center;
     if (!Array.isArray(c) || c.length < 2) return;
     const lng = c[0];
@@ -374,23 +339,6 @@ export function JournalTripRouteMapView({
       placementCbRef.current?.(lat, lng);
     }
   }, []);
-
-  const handleMapIdle = useCallback(
-    (state: { properties?: { zoom?: number } }) => {
-      const z = state.properties?.zoom;
-      if (typeof z === 'number') reportZoom(z);
-    },
-    [reportZoom],
-  );
-
-  const zoomBy = useCallback(
-    (delta: number) => {
-      const next = clampZoom(roundZoom(liveZoom + delta));
-      cameraRef.current?.zoomTo?.(next, 220);
-      reportZoom(next);
-    },
-    [liveZoom, reportZoom],
-  );
 
   if (Platform.OS === 'web') {
     return (
@@ -448,10 +396,6 @@ export function JournalTripRouteMapView({
         scaleBarEnabled={false}
         logoEnabled
         attributionEnabled
-        attributionPosition={mapAttributionBesideZoomControls(true)}
-        onMapIdle={
-          isPlacing ? undefined : (e: unknown) => handleMapIdle(e as { properties?: { zoom?: number } })
-        }
         onCameraChanged={isPlacing ? (e: unknown) => handlePlacementCamera(e) : undefined}
       >
         <Camera
@@ -536,28 +480,6 @@ export function JournalTripRouteMapView({
       ) : null}
 
       <MapBasemapSwitcher />
-
-      <View style={styles.zoomCluster} pointerEvents="box-none">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Zoom in"
-          style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-          onPress={() => zoomBy(1)}
-          disabled={liveZoom >= MAP_MAX_ZOOM - 0.01}
-        >
-          <MaterialIcons name="add" size={22} color={Colors.text} />
-        </Pressable>
-        <View style={styles.zoomDivider} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Zoom out"
-          style={({ pressed }) => [styles.zoomButton, pressed && styles.zoomButtonPressed]}
-          onPress={() => zoomBy(-1)}
-          disabled={liveZoom <= MAP_MIN_ZOOM + 0.01}
-        >
-          <MaterialIcons name="remove" size={22} color={Colors.text} />
-        </Pressable>
-      </View>
     </View>
   );
 }
@@ -586,35 +508,5 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     textAlign: 'center',
-  },
-  zoomCluster: {
-    position: 'absolute',
-    bottom: Spacing.lg,
-    right: Spacing.md,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: Colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
-  zoomButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-  },
-  zoomButtonPressed: {
-    opacity: 0.85,
-    backgroundColor: Colors.surfaceElevated,
-  },
-  zoomDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
   },
 });

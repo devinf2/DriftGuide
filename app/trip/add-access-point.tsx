@@ -148,7 +148,6 @@ export default function AddAccessPointScreen() {
           interactionMode="pan_center"
           focusRequestKey={focusNonce}
           mapFallbackCenter={mapFallbackCenter}
-          showZoomControls
           containerStyle={styles.map}
           hintPosition="below"
           hintText="Pan and zoom to place the access point. The pin marks the map center."

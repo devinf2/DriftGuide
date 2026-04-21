@@ -1,7 +1,9 @@
 import { DRIFTGUIDE_HATCH_CHART_ENTRIES, MONTH_LABELS_SHORT } from '@/src/data/driftGuideHatchChart';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { activityCellColor } from '@/src/components/hatchChart/hatchChartTheme';
-import { StyleSheet, Text, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useCallback, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 type Props = {
   currentMonthIndex0: number;
@@ -9,45 +11,140 @@ type Props = {
 };
 
 export function HatchYearMatrix({ currentMonthIndex0, colors }: Props) {
+  const currentColumnBorder = colors.water;
+  const [truncatedRowIds, setTruncatedRowIds] = useState<Set<string>>(() => new Set());
+  const [nameTipRowId, setNameTipRowId] = useState<string | null>(null);
+
+  const onRowLabelTextLayout = useCallback(
+    (rowId: string, shortLabel: string, lines: { text: string }[]) => {
+      const line0 = lines[0]?.text?.replace(/\u2026/g, '...').trim();
+      if (line0 == null) return;
+      const truncated = line0 !== shortLabel.trim();
+      setTruncatedRowIds((prev) => {
+        const was = prev.has(rowId);
+        if (was === truncated) return prev;
+        const next = new Set(prev);
+        if (truncated) next.add(rowId);
+        else next.delete(rowId);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const nameTipEntry =
+    nameTipRowId != null ? DRIFTGUIDE_HATCH_CHART_ENTRIES.find((e) => e.id === nameTipRowId) : undefined;
+
   return (
     <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <Text style={[styles.title, { color: colors.text }]}>Year at a glance</Text>
       <Text style={[styles.sub, { color: colors.textSecondary }]}>
-        Each square is a month (J–D). Darker = more worth planning around. Bold column = this month.
+        Each square is a month (J–D). Darker = more worth planning around. Ringed column = this month. Tap a clipped
+        hatch name to see the full label.
       </Text>
-      <View style={styles.headerRow}>
-        <View style={styles.labelSpacer} />
-        {MONTH_LABELS_SHORT.map((m, i) => (
-          <View key={m + i} style={styles.headCellWrap}>
-            <Text
+      {nameTipEntry ? (
+        <View
+          style={[
+            styles.nameTipBar,
+            { backgroundColor: colors.surfaceElevated, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.nameTipText, { color: colors.text }]} numberOfLines={3}>
+            {nameTipEntry.name}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss hatch name"
+            hitSlop={12}
+            onPress={() => setNameTipRowId(null)}
+            style={({ pressed }) => [styles.nameTipClose, pressed && { opacity: 0.6 }]}
+          >
+            <MaterialCommunityIcons name="close" size={20} color={colors.textTertiary} />
+          </Pressable>
+        </View>
+      ) : null}
+      <View style={styles.grid}>
+        <View style={styles.labelColumn}>
+          <View style={styles.headerLabelSpacer} />
+          {DRIFTGUIDE_HATCH_CHART_ENTRIES.map((row) => {
+            const isTruncated = truncatedRowIds.has(row.id);
+            const labelBody = (
+              <Text
+                style={[
+                  styles.rowLabel,
+                  { color: colors.textSecondary },
+                  isTruncated && styles.rowLabelTappable,
+                  isTruncated && { color: colors.water },
+                ]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                onTextLayout={(e) => onRowLabelTextLayout(row.id, row.shortLabel, e.nativeEvent.lines)}
+              >
+                {row.shortLabel}
+              </Text>
+            );
+            return (
+              <View key={row.id} style={styles.rowLabelWrap}>
+                {isTruncated ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${row.shortLabel}, full name`}
+                    accessibilityHint="Shows full hatch name"
+                    onPress={() =>
+                      setNameTipRowId((prev) => (prev === row.id ? null : row.id))
+                    }
+                    style={({ pressed }) => [
+                      styles.rowLabelHit,
+                      pressed && styles.rowLabelPressed,
+                    ]}
+                  >
+                    {labelBody}
+                  </Pressable>
+                ) : (
+                  labelBody
+                )}
+              </View>
+            );
+          })}
+        </View>
+        {MONTH_LABELS_SHORT.map((m, monthIndex) => {
+          const isCurrent = monthIndex === currentMonthIndex0;
+          return (
+            <View
+              key={m + monthIndex}
               style={[
-                styles.headCell,
-                { color: colors.textTertiary },
-                i === currentMonthIndex0 && { color: colors.secondary, fontWeight: '800' },
+                styles.monthColumn,
+                {
+                  borderColor: isCurrent ? currentColumnBorder : 'transparent',
+                  backgroundColor: isCurrent ? `${currentColumnBorder}18` : 'transparent',
+                },
               ]}
             >
-              {m}
-            </Text>
-          </View>
-        ))}
+              <Text
+                style={[
+                  styles.headCell,
+                  { color: colors.textTertiary },
+                  isCurrent && { color: currentColumnBorder, fontWeight: '800' },
+                ]}
+              >
+                {m}
+              </Text>
+              {DRIFTGUIDE_HATCH_CHART_ENTRIES.map((entry) => {
+                const level = entry.monthActivity[monthIndex] ?? 0;
+                return (
+                  <View
+                    key={entry.id}
+                    style={[
+                      styles.matrixCell,
+                      { backgroundColor: activityCellColor(level, colors) },
+                    ]}
+                  />
+                );
+              })}
+            </View>
+          );
+        })}
       </View>
-      {DRIFTGUIDE_HATCH_CHART_ENTRIES.map((row) => (
-        <View key={row.id} style={styles.dataRow}>
-          <Text style={[styles.rowLabel, { color: colors.textSecondary }]} numberOfLines={1}>
-            {row.shortLabel}
-          </Text>
-          {row.monthActivity.map((level, i) => (
-            <View
-              key={i}
-              style={[
-                styles.matrixCell,
-                { backgroundColor: activityCellColor(level, colors) },
-                i === currentMonthIndex0 && { borderWidth: 1.5, borderColor: colors.secondary },
-              ]}
-            />
-          ))}
-        </View>
-      ))}
       <View style={[styles.legend, { borderTopColor: colors.border }]}>
         {[0, 1, 2, 3].map((lvl) => (
           <View key={lvl} style={styles.legendItem}>
@@ -64,6 +161,9 @@ export function HatchYearMatrix({ currentMonthIndex0, colors }: Props) {
 
 const CELL = 16;
 const LABEL_W = 44;
+/** Border on every month column so current month can show a ring without shifting layout. */
+const MONTH_COLUMN_BORDER = 2;
+const MONTH_COLUMN_GAP = 2;
 
 const styles = StyleSheet.create({
   card: {
@@ -82,40 +182,80 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginBottom: Spacing.sm,
   },
-  headerRow: {
+  grid: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+  },
+  labelColumn: {
+    width: LABEL_W,
+    marginRight: MONTH_COLUMN_GAP,
+  },
+  headerLabelSpacer: {
+    height: 14,
     marginBottom: 4,
   },
-  labelSpacer: {
+  rowLabelWrap: {
     width: LABEL_W,
+    height: CELL + 3,
+    justifyContent: 'center',
+    marginBottom: 0,
   },
-  headCellWrap: {
-    width: CELL,
-    marginRight: 2,
+  rowLabelHit: {
+    alignSelf: 'stretch',
+  },
+  rowLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    paddingRight: 4,
+  },
+  rowLabelTappable: {
+    textDecorationLine: 'underline',
+    textDecorationStyle: 'dotted',
+  },
+  rowLabelPressed: {
+    opacity: 0.75,
+  },
+  nameTipBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: Spacing.sm,
+  },
+  nameTipText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  nameTipClose: {
+    marginTop: -2,
+    marginRight: -2,
+    padding: 2,
+  },
+  monthColumn: {
+    /** Outer width: room for 2px border inside the layout box (RN) so 16px cells still fit. */
+    width: CELL + MONTH_COLUMN_BORDER * 2,
+    marginRight: MONTH_COLUMN_GAP,
     alignItems: 'center',
+    borderRadius: BorderRadius.sm,
+    borderWidth: MONTH_COLUMN_BORDER,
   },
   headCell: {
     textAlign: 'center',
     fontSize: 9,
     fontWeight: '700',
-  },
-  dataRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 3,
-  },
-  rowLabel: {
-    width: LABEL_W,
-    fontSize: 10,
-    fontWeight: '600',
-    paddingRight: 4,
+    marginBottom: 4,
+    height: 14,
   },
   matrixCell: {
     width: CELL,
     height: CELL,
     borderRadius: 3,
-    marginRight: 2,
+    marginBottom: 3,
   },
   legend: {
     flexDirection: 'row',
