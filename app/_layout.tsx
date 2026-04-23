@@ -70,6 +70,13 @@ const OfflineSimOverlay: ComponentType | undefined = __DEV__
     require('@/src/dev/OfflineSimOverlay').OfflineSimOverlay
   : undefined;
 
+/** GoTrue returns this when persisted auth is incomplete or the server no longer accepts the refresh token. */
+function isRecoverableRefreshTokenAuthError(message: string | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return m.includes('refresh token') && (m.includes('not found') || m.includes('invalid'));
+}
+
 const styles = StyleSheet.create({
   authGateRoot: { flex: 1 },
   authGateStackShell: { flex: 1 },
@@ -111,8 +118,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       if (session) fetchProfile();
     });
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    void supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error?.message && isRecoverableRefreshTokenAuthError(error.message)) {
+        await supabase.auth.signOut({ scope: 'local' });
+        setSession(null);
+        return;
+      }
+      setSession(session ?? null);
       if (session) fetchProfile();
     });
 

@@ -2,7 +2,7 @@
   "expo": {
     "name": "DriftGuide",
     "slug": "DriftGuide",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "driftguide",
@@ -46,6 +46,14 @@
         {
           "photosPermission": "Allow DriftGuide to access your photos for your profile picture.",
           "cameraPermission": "Allow DriftGuide to use the camera for your profile picture."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "DriftGuide uses your location while you use the app to attach GPS coordinates when you log a fish catch—for example, saving the exact spot where you landed a fish—and to personalize what flies and tactics we suggest using your catch history and where you fish. We also use it to show your position on trip and river maps and for nearby waterway suggestions on the home screen. Location is only used while the app is open.",
+          "locationAlwaysAndWhenInUsePermission": "DriftGuide uses your location while you use the app to attach GPS coordinates when you log a fish catch—for example, saving the exact spot where you landed a fish—and to personalize what flies and tactics we suggest using your catch history and where you fish. We also use it to show your position on trip and river maps and for nearby waterway suggestions on the home screen. Location is only used while the app is open.",
+          "locationAlwaysPermission": "DriftGuide uses your location while you use the app to attach GPS coordinates when you log a fish catch—for example, saving the exact spot where you landed a fish—and to personalize what flies and tactics we suggest using your catch history and where you fish. We also use it to show your position on trip and river maps and for nearby waterway suggestions on the home screen. Location is only used while the app is open."
         }
       ],
       "@rnmapbox/maps"

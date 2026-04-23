@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
+import { signInWithAppleNative } from '@/src/auth/appleAuth';
 import { signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
 import { Profile, type TripPhotoVisibility } from '@/src/types';
 import { edgeFunctionInvokeHeaders, supabase } from '@/src/services/supabase';
@@ -25,6 +26,7 @@ interface AuthState {
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
+  signInWithApple: () => Promise<{ error: string | null }>;
   completeProfileOnboarding: (input: {
     firstName: string;
     lastName: string;
@@ -159,6 +161,22 @@ export const useAuthStore = create<AuthState>()(
         if (result.error) return { error: result.error };
 
         const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          set({ session, user: session.user, isLoading: false });
+        }
+        await get().fetchProfile();
+
+        return { error: null };
+      },
+
+      signInWithApple: async () => {
+        const result = await signInWithAppleNative();
+        if (result.cancelled) return { error: null };
+        if (result.error) return { error: result.error };
+
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         if (session) {
           set({ session, user: session.user, isLoading: false });
         }

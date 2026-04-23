@@ -1,7 +1,8 @@
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { useMemo, useState } from 'react';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -77,6 +78,10 @@ function createStyles(colors: ThemeColors) {
       fontSize: FontSize.md,
       fontWeight: '600',
     },
+    appleButton: {
+      width: '100%',
+      height: 48,
+    },
     input: {
       backgroundColor: colors.surface,
       borderRadius: BorderRadius.md,
@@ -126,9 +131,16 @@ export default function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const { signIn, signUp, signInWithGoogle } = useAuthStore();
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  const { signIn, signUp, signInWithGoogle, signInWithApple } = useAuthStore();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    void AppleAuthentication.isAvailableAsync().then(setAppleAvailable);
+  }, []);
 
   const handleSubmit = async () => {
     setError(null);
@@ -162,6 +174,20 @@ export default function AuthScreen() {
     }
   };
 
+  const handleApple = async () => {
+    if (appleLoading || googleLoading || loading) return;
+    setError(null);
+    setAppleLoading(true);
+    try {
+      const result = await signInWithApple();
+      if (result.error) setError(result.error);
+    } catch {
+      setError('Sign in with Apple failed. Please try again.');
+    } finally {
+      setAppleLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <KeyboardAvoidingView
@@ -179,10 +205,25 @@ export default function AuthScreen() {
           </View>
 
           <View style={styles.form}>
+            {Platform.OS === 'ios' && appleAvailable ? (
+              <View style={[appleLoading && styles.buttonDisabled]}>
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
+                  cornerRadius={BorderRadius.md}
+                  style={styles.appleButton}
+                  onPress={handleApple}
+                />
+              </View>
+            ) : null}
+
             <Pressable
-              style={[styles.googleButton, (loading || googleLoading) && styles.buttonDisabled]}
+              style={[
+                styles.googleButton,
+                (loading || googleLoading || appleLoading) && styles.buttonDisabled,
+              ]}
               onPress={handleGoogle}
-              disabled={loading || googleLoading}
+              disabled={loading || googleLoading || appleLoading}
             >
               {googleLoading ? (
                 <ActivityIndicator color={colors.text} />
@@ -228,9 +269,9 @@ export default function AuthScreen() {
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
             <Pressable
-              style={[styles.button, loading && styles.buttonDisabled]}
+              style={[styles.button, (loading || googleLoading || appleLoading) && styles.buttonDisabled]}
               onPress={handleSubmit}
-              disabled={loading}
+              disabled={loading || googleLoading || appleLoading}
             >
               <Text style={styles.buttonText}>
                 {loading ? 'Please wait...' : isSignUp ? 'Create Account' : 'Sign In'}
