@@ -2,13 +2,20 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
+import {
+  isEmailIdentifier,
+  isValidUsernameForLogin,
+  normalizeUsernameForLogin,
+} from '@/src/auth/authIdentifiers';
 import { signInWithAppleNative } from '@/src/auth/appleAuth';
-import { signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
+import { getAuthCallbackRedirectUri, signInWithGoogleOAuth } from '@/src/auth/googleOAuth';
 import { Profile, type TripPhotoVisibility } from '@/src/types';
 import { edgeFunctionInvokeHeaders, supabase } from '@/src/services/supabase';
 import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useThemeStore } from '@/src/stores/themeStore';
 import { useTripStore } from '@/src/stores/tripStore';
+
+const INVALID_CREDENTIALS_MESSAGE = 'Invalid email/username or password.';
 
 interface AuthState {
   session: Session | null;
@@ -17,14 +24,21 @@ interface AuthState {
   isLoading: boolean;
   /** True while fetching profile for the current session (avoid onboarding flash). */
   isProfileLoading: boolean;
+  /** After opening a password-reset deep link; cleared when the user sets a new password or signs out. */
+  passwordRecoveryPending: boolean;
+  setPasswordRecoveryPending: (pending: boolean) => void;
   setSession: (session: Session | null) => void;
+  /** If `getSession()` throws during cold start, clear splash without guessing session. */
+  clearAuthBootstrap: () => void;
   setProfile: (profile: Profile | null) => void;
   fetchProfile: () => Promise<void>;
   updateProfileNames: (firstName: string, lastName: string) => Promise<{ error: string | null }>;
   updateUsername: (username: string) => Promise<{ error: string | null }>;
   updateHomeState: (homeState: string | null) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName: string) => Promise<{ error: string | null }>;
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Email or @username plus password (username resolved server-side). */
+  signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
+  requestPasswordReset: (email: string) => Promise<{ error: string | null }>;
   signInWithGoogle: () => Promise<{ error: string | null }>;
   signInWithApple: () => Promise<{ error: string | null }>;
   completeProfileOnboarding: (input: {
@@ -48,6 +62,9 @@ export const useAuthStore = create<AuthState>()(
       profile: null,
       isLoading: true,
       isProfileLoading: false,
+      passwordRecoveryPending: false,
+
+      setPasswordRecoveryPending: (pending) => set({ passwordRecoveryPending: pending }),
 
       setSession: (session) => {
         set({
@@ -58,6 +75,8 @@ export const useAuthStore = create<AuthState>()(
           ...(session ? {} : { profile: null }),
         });
       },
+
+      clearAuthBootstrap: () => set({ isLoading: false }),
 
       setProfile: (profile) => set({ profile }),
 
@@ -141,17 +160,61 @@ export const useAuthStore = create<AuthState>()(
         return { error: null };
       },
 
-      signIn: async (email, password) => {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
+      signIn: async (identifier, password) => {
+        const trimmed = identifier.trim();
+        if (!trimmed) return { error: INVALID_CREDENTIALS_MESSAGE };
+
+        if (isEmailIdentifier(trimmed)) {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: trimmed,
+            password,
+          });
+          if (error) return { error: INVALID_CREDENTIALS_MESSAGE };
+          set({ session: data.session, user: data.user });
+          await get().fetchProfile();
+          return { error: null };
+        }
+
+        const username = normalizeUsernameForLogin(trimmed);
+        if (!isValidUsernameForLogin(username)) {
+          return {
+            error:
+              'Usernames are 3–20 characters: lowercase letters, numbers, and underscores only.',
+          };
+        }
+
+        const { data, error: fnError } = await supabase.functions.invoke<{
+          access_token?: string;
+          refresh_token?: string;
+          error?: string;
+        }>('login-with-identifier', { body: { username, password } });
+
+        if (fnError) return { error: INVALID_CREDENTIALS_MESSAGE };
+        if (data && typeof data === 'object' && 'error' in data && data.error) {
+          return { error: INVALID_CREDENTIALS_MESSAGE };
+        }
+        const access_token = data?.access_token;
+        const refresh_token = data?.refresh_token;
+        if (!access_token || !refresh_token) return { error: INVALID_CREDENTIALS_MESSAGE };
+
+        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+          access_token,
+          refresh_token,
         });
+        if (sessionError || !sessionData.session) return { error: INVALID_CREDENTIALS_MESSAGE };
 
-        if (error) return { error: error.message };
-
-        set({ session: data.session, user: data.user });
+        set({ session: sessionData.session, user: sessionData.session.user, isLoading: false });
         await get().fetchProfile();
+        return { error: null };
+      },
 
+      requestPasswordReset: async (email) => {
+        const trimmed = email.trim();
+        if (!trimmed) return { error: 'Please enter your email address.' };
+        const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
+          redirectTo: getAuthCallbackRedirectUri(),
+        });
+        if (error) return { error: error.message };
         return { error: null };
       },
 
@@ -238,7 +301,13 @@ export const useAuthStore = create<AuthState>()(
 
       signOut: async () => {
         await supabase.auth.signOut();
-        set({ session: null, user: null, profile: null, isProfileLoading: false });
+        set({
+          session: null,
+          user: null,
+          profile: null,
+          isProfileLoading: false,
+          passwordRecoveryPending: false,
+        });
       },
 
       softDeleteAccount: async () => {
@@ -273,7 +342,13 @@ export const useAuthStore = create<AuthState>()(
         await useTripStore.getState().clearAllLocalTripData();
 
         await supabase.auth.signOut();
-        set({ session: null, user: null, profile: null, isProfileLoading: false });
+        set({
+          session: null,
+          user: null,
+          profile: null,
+          isProfileLoading: false,
+          passwordRecoveryPending: false,
+        });
         await AsyncStorage.removeItem('auth-storage');
 
         return { error: null };

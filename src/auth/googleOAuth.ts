@@ -17,17 +17,34 @@ function getOAuthParamsFromUrl(url: string): { params: Record<string, string>; e
   return { params, errorCode };
 }
 
-/** Matches Supabase OAuth return URLs (query or hash tokens, or PKCE code). */
+/** Matches Supabase OAuth / magic-link / password-recovery returns (query or hash tokens, or PKCE code). */
 function looksLikeOAuthReturn(url: string): boolean {
   return (
     url.includes('access_token=') ||
     url.includes('refresh_token=') ||
-    (url.includes('code=') && (url.includes('auth/callback') || url.includes('callback')))
+    (url.includes('code=') && (url.includes('auth/callback') || url.includes('callback'))) ||
+    (url.includes('type=recovery') &&
+      (url.includes('access_token=') || url.includes('refresh_token=') || url.includes('code=')))
   );
 }
 
-export function getGoogleOAuthRedirectUri(): string {
+/**
+ * Deep link used for Google OAuth, password recovery emails, and any auth callback to this app.
+ * Add this exact URL to Supabase Dashboard → Authentication → URL configuration → Redirect URLs.
+ */
+export function getAuthCallbackRedirectUri(): string {
   return Linking.createURL('auth/callback', { scheme: 'driftguide' });
+}
+
+export function getGoogleOAuthRedirectUri(): string {
+  return getAuthCallbackRedirectUri();
+}
+
+/** True when this URL is a Supabase password-recovery redirect (fragment or query). */
+export function isPasswordRecoveryDeepLink(url: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return lower.includes('type=recovery');
 }
 
 export async function applyOAuthReturnUrl(url: string): Promise<void> {

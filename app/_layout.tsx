@@ -11,7 +11,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
-import { applyOAuthReturnUrl } from '@/src/auth/googleOAuth';
+import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/googleOAuth';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { supabase } from '@/src/services/supabase';
@@ -94,8 +94,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const isLoading = useAuthStore((s) => s.isLoading);
   const isProfileLoading = useAuthStore((s) => s.isProfileLoading);
   const setSession = useAuthStore((s) => s.setSession);
+  const clearAuthBootstrap = useAuthStore((s) => s.clearAuthBootstrap);
   const fetchProfile = useAuthStore((s) => s.fetchProfile);
   const signOut = useAuthStore((s) => s.signOut);
+  const passwordRecoveryPending = useAuthStore((s) => s.passwordRecoveryPending);
   const segments = useSegments();
   const router = useRouter();
   const closedAccountHandledRef = useRef(false);
@@ -113,20 +115,29 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, [router, segments]);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        useAuthStore.getState().setPasswordRecoveryPending(true);
+      }
       setSession(session);
       if (session) fetchProfile();
     });
 
-    void supabase.auth.getSession().then(async ({ data: { session }, error }) => {
-      if (error?.message && isRecoverableRefreshTokenAuthError(error.message)) {
-        await supabase.auth.signOut({ scope: 'local' });
-        setSession(null);
-        return;
-      }
-      setSession(session ?? null);
-      if (session) fetchProfile();
-    });
+    void supabase.auth
+      .getSession()
+      .then(async ({ data: { session }, error }) => {
+        if (error?.message && isRecoverableRefreshTokenAuthError(error.message)) {
+          await supabase.auth.signOut({ scope: 'local' });
+          setSession(null);
+          return;
+        }
+        setSession(session ?? null);
+        if (session) fetchProfile();
+      })
+      .catch((e) => {
+        console.warn('[auth] getSession failed during bootstrap', e);
+        clearAuthBootstrap();
+      });
 
     return () => subscription.unsubscribe();
   }, []);
@@ -148,9 +159,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
         return;
       }
       void (async () => {
+        const recovery = isPasswordRecoveryDeepLink(url);
+        if (recovery) {
+          useAuthStore.getState().setPasswordRecoveryPending(true);
+        }
         try {
           await applyOAuthReturnUrl(url);
         } catch {
+          if (recovery) {
+            useAuthStore.getState().setPasswordRecoveryPending(false);
+          }
           /* unrelated or malformed deep link */
         }
       })();
@@ -178,13 +196,23 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     }
     if (!session) closedAccountHandledRef.current = false;
 
-    if (isLoading || (session && isProfileLoading)) return;
+    if (isLoading) return;
+    if (session && isProfileLoading && !passwordRecoveryPending) return;
 
     const inAuth = segments[0] === 'auth';
     const inOnboarding = segments[0] === 'onboarding';
+    const onResetPasswordRoute = segments[0] === 'auth' && segments[1] === 'reset-password';
 
     if (!session) {
       if (!inAuth) router.replace('/auth');
+      return;
+    }
+
+    if (passwordRecoveryPending) {
+      if (!onResetPasswordRoute) {
+        router.replace('/auth/reset-password');
+        return;
+      }
       return;
     }
 
@@ -209,6 +237,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     segments,
     isLoading,
     isProfileLoading,
+    passwordRecoveryPending,
     router,
     signOut,
     flushPendingTripDeepLink,

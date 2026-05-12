@@ -12,3 +12,6 @@ verify_jwt = false
 
 [functions.share-trip]
 verify_jwt = false
+
+[functions.login-with-identifier]
+verify_jwt = false

@@ -32,7 +32,9 @@ export function SimulateOfflineDevButton() {
         },
       ]}
       accessibilityLabel={
-        simulateOffline ? 'Turn off simulated offline mode' : 'Simulate offline mode'
+        simulateOffline
+          ? 'Turn off simulated offline mode (persists across restarts in development)'
+          : 'Simulate offline mode; persists across app restarts in development'
       }
       accessibilityRole="button"
     >
