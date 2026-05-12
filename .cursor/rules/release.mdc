@@ -1,0 +1,41 @@
+---
+description: How to ship the iOS app to TestFlight via EAS
+alwaysApply: true
+---
+
+# Shipping to TestFlight
+
+When the user says "send to TestFlight", "ship to TestFlight", "release to TestFlight", or anything semantically equivalent for iOS, follow this workflow.
+
+## Default command
+
+```bash
+npm run testflight
+```
+
+This runs `eas build --platform ios --profile production --auto-submit`, which builds the iOS production binary and submits to App Store Connect on success.
+
+- Build profile is defined in `eas.json` → `production` (`distribution: "store"`, `autoIncrement: true`).
+- `buildNumber` in `app.json` auto-increments per build. **Do not bump it manually.**
+- Only edit `version` in `app.json` if a new user-facing marketing version is needed (e.g. `1.0.2` → `1.0.3`). Confirm with the user first.
+
+## Pre-flight checks (do these before kicking off a build)
+
+1. **Git working tree must be clean** (or intentionally staged). Run `git status` and surface any uncommitted changes to the user before building — TestFlight builds ship whatever is on disk to real testers.
+2. **Check for an in-flight build** before starting a new one. Read terminal files (`/Users/dfree22/.cursor/projects/Users-dfree22-Desktop-DriftGuide/terminals/*.txt`) or run `eas build:list --platform ios --limit 1` to confirm. Do not start a duplicate build without asking.
+3. **Confirm the marketing version** in `app.json` if the user mentioned a release version.
+
+## Variants
+
+- **Build only** (no submit): `npm run testflight:build`
+- **Submit the latest existing build**: `npm run testflight:submit` — useful when a build already finished and only submission is needed.
+
+## Long-running command guidance
+
+EAS iOS production builds take ~15–30+ minutes. When invoking, run in background (`block_until_ms: 0`) and let the user know you've started it. Do not poll continuously; rely on completion notification.
+
+## What you cannot do
+
+- You cannot make Apple/EAS process the build faster.
+- You cannot bypass Apple Beta App Review for first-time external testers on a new version.
+- Do not edit `eas.json` build profiles or Apple credentials without explicit user direction.
