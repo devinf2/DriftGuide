@@ -10,6 +10,7 @@ import { useFriendsStore } from '@/src/stores/friendsStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { profileDisplayName, profileInitialLetter } from '@/src/utils/profileDisplay';
+import { saveCameraPhotoToLibrary } from '@/src/utils/saveCameraPhotoToLibrary';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
@@ -159,6 +160,9 @@ export default function ProfileScreen() {
     });
 
     if (result.canceled || !result.assets[0]?.uri) return;
+    if (source === 'camera') {
+      void saveCameraPhotoToLibrary(result.assets[0].uri);
+    }
     setAvatarPreviewUri(result.assets[0].uri);
   }, [user]);
 

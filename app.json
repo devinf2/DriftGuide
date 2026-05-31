@@ -44,8 +44,16 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow DriftGuide to access your photos for your profile picture.",
-          "cameraPermission": "Allow DriftGuide to use the camera for your profile picture."
+          "photosPermission": "Allow DriftGuide to access your photos to add catch and trip photos.",
+          "cameraPermission": "Allow DriftGuide to use the camera to take catch and trip photos."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow DriftGuide to access your photos to add catch and trip photos.",
+          "savePhotosPermission": "Allow DriftGuide to save photos you take in the app to your camera roll.",
+          "isAccessMediaLocationEnabled": true
         }
       ],
       [

@@ -36,6 +36,7 @@ import { fetchHistoricalWeather } from '@/src/services/historicalWeather';
 import { tripMapDefaultCenterCoordinate, tripSeedLatLng } from '@/src/utils/mapViewport';
 import { upsertEventSorted } from '@/src/utils/journalTimeline';
 import { extractPhotoMetadataFromPickerAsset, type PhotoExifMetadata } from '@/src/utils/imageExif';
+import { saveCameraPhotoToLibrary } from '@/src/utils/saveCameraPhotoToLibrary';
 import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
 import type {
   CatchData,
@@ -1523,6 +1524,7 @@ export function CatchDetailsModal({
       const result = await ImagePicker.launchCameraAsync(pickerOpts);
       const asset = result.assets?.[0];
       if (!result.canceled && asset?.uri) {
+        void saveCameraPhotoToLibrary(asset.uri);
         const meta = extractPhotoMetadataFromPickerAsset(asset);
         const hasMeta =
           meta.takenAt != null || meta.latitude != null || meta.longitude != null;

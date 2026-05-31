@@ -11,6 +11,7 @@ import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 import { profileInitialLetter } from '@/src/utils/profileDisplay';
+import { saveCameraPhotoToLibrary } from '@/src/utils/saveCameraPhotoToLibrary';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
 import Constants from 'expo-constants';
@@ -544,6 +545,9 @@ export default function ProfileSettingsScreen() {
     });
 
     if (result.canceled || !result.assets[0]?.uri) return;
+    if (source === 'camera') {
+      void saveCameraPhotoToLibrary(result.assets[0].uri);
+    }
     setAvatarPreviewUri(result.assets[0].uri);
   }, [user]);
 
