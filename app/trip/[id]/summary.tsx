@@ -13,7 +13,9 @@ import {
   Switch,
   TextInput,
   Share,
+  PixelRatio,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { cacheDirectory, downloadAsync } from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,7 +42,7 @@ import {
   Photo,
   WaterClarity,
 } from '@/src/types';
-import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
+import { buildAlbumPhotoUrlsByCatchId, buildCatchViewerSlideFields, resolveCatchDisplayPhotoUrls } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
 import { formatCatchWeightLabel, getTripEventDescription } from '@/src/utils/journalTimeline';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
@@ -69,6 +71,7 @@ import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { tripMapDefaultCenterCoordinate } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
+import { layoutSizeToPixelSize, supabasePhotoThumbUrl } from '@/src/utils/photoDisplayUrl';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
@@ -145,6 +148,7 @@ export default function TripSummaryScreen() {
     date?: string;
     species?: string;
     caption?: string;
+    detailLines?: string[];
   } | null>(null);
   const [tripPhotoViewerIndex, setTripPhotoViewerIndex] = useState<number | null>(null);
   const [tripPinPlacement, setTripPinPlacement] = useState<TripPinPlacementState | null>(null);
@@ -249,6 +253,32 @@ export default function TripSummaryScreen() {
       cancelled = true;
     };
   }, [id, user?.id, isConnected]);
+
+  const timelineCatchThumbPixelSize = useMemo(
+    () => layoutSizeToPixelSize(72, PixelRatio.get()),
+    [],
+  );
+
+  /** Warm expo-image cache once trip album rows load (shared by Fishing + Photos tabs). */
+  useEffect(() => {
+    if (tripPhotos.length === 0) return;
+    const thumbUrls: string[] = [];
+    const seen = new Set<string>();
+    for (const photo of tripPhotos) {
+      const url = photo.url?.trim();
+      if (!url.startsWith('http') || seen.has(url)) continue;
+      seen.add(url);
+      thumbUrls.push(supabasePhotoThumbUrl(url, timelineCatchThumbPixelSize));
+    }
+    if (thumbUrls.length > 0) {
+      void Image.prefetch(thumbUrls);
+    }
+  }, [tripPhotos, timelineCatchThumbPixelSize]);
+
+  const albumPhotoUrlsByCatchId = useMemo(
+    () => buildAlbumPhotoUrlsByCatchId(tripPhotos),
+    [tripPhotos],
+  );
 
   const handleSessionChanged = useCallback((sid: string | null) => {
     setTrip((prev) => (prev ? { ...prev, shared_session_id: sid } : null));
@@ -409,6 +439,7 @@ export default function TripSummaryScreen() {
           date: fullScreenPhoto.date,
           species: fullScreenPhoto.species,
           caption: fullScreenPhoto.caption,
+          detailLines: fullScreenPhoto.detailLines,
         },
       ];
     }
@@ -429,38 +460,34 @@ export default function TripSummaryScreen() {
 
   const handleCatchPhotoPress = useCallback((event: TripEvent) => {
     const data = event.data as CatchData;
-    const hero = getCatchHeroPhotoUrl(data);
+    const hero =
+      resolveCatchDisplayPhotoUrls(event.id, data, albumPhotoUrlsByCatchId)[0] ?? null;
     if (!hero) return;
     setTripPhotoViewerIndex(null);
     setFullScreenPhoto({
       url: hero,
-      location: trip?.location?.name ?? undefined,
-      date: formatTripDate(event.timestamp),
-      species: data.species ?? undefined,
-      caption: data.note ?? undefined,
+      ...buildCatchViewerSlideFields(event, data, trip?.location?.name ?? undefined),
     });
-  }, [trip?.location?.name]);
+  }, [trip?.location?.name, albumPhotoUrlsByCatchId]);
 
   const handleMapCatchWaypointPress = useCallback(
     (catchEventId: string) => {
       const ev = events.find((e) => e.id === catchEventId && e.event_type === 'catch');
       if (!ev) return;
       const data = ev.data as CatchData;
-      const hero = getCatchHeroPhotoUrl(data);
+      const hero =
+        resolveCatchDisplayPhotoUrls(ev.id, data, albumPhotoUrlsByCatchId)[0] ?? null;
       if (hero) {
         setTripPhotoViewerIndex(null);
         setFullScreenPhoto({
           url: hero,
-          location: trip?.location?.name ?? undefined,
-          date: formatTripDate(ev.timestamp),
-          species: data.species ?? undefined,
-          caption: data.note ?? undefined,
+          ...buildCatchViewerSlideFields(ev, data, trip?.location?.name ?? undefined),
         });
       } else {
         setMapCatchDetailEvent(ev);
       }
     },
-    [events, trip?.location?.name],
+    [events, trip?.location?.name, albumPhotoUrlsByCatchId],
   );
 
   const persistTripPins = useCallback(
@@ -1006,12 +1033,6 @@ export default function TripSummaryScreen() {
               saving={photoVisSaving}
             />
           </View>
-          {effectivePhotoVisibility !== 'public' ? (
-            <Text style={styles.sharePreviewHint}>
-              Set trip photos to Public to include images in the share (iOS attaches the first photo;
-              link previews use your public album).
-            </Text>
-          ) : null}
         </View>
       ) : null}
 
@@ -1230,40 +1251,45 @@ export default function TripSummaryScreen() {
         ))}
       </View>
 
-      {/* Tab Content */}
-      {activeTab === 'fishing' && user && trip && (
-        <SharedTripTimelineSection
-          trip={trip}
-          userId={user.id}
-          isConnected={isConnected}
-          events={events}
-          editMode={isOwnTrip && journalEditMode}
-          onEventsChange={setEvents}
-          onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
-          onCatchPhotoPress={handleCatchPhotoPress}
-          onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
-        />
-      )}
-      {activeTab === 'photos' && trip && (
-        trip.shared_session_id && user ? (
-          <SharedTripPhotosSection
+      {/* Tab Content — keep Fishing + Photos mounted so album images load once and reuse cache */}
+      {user && trip ? (
+        <View style={[styles.tabPane, activeTab !== 'fishing' && styles.tabPaneHidden]}>
+          <SharedTripTimelineSection
             trip={trip}
-            viewerUserId={user.id}
+            userId={user.id}
             isConnected={isConnected}
-            myTripPhotos={tripPhotos}
-            myPhotosLoading={tripPhotosLoading}
-            onPhotoPress={handleTripPhotoPress}
+            events={events}
+            editMode={isOwnTrip && journalEditMode}
+            onEventsChange={setEvents}
+            onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
+            onCatchPhotoPress={handleCatchPhotoPress}
+            onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
+            tripAlbumPhotos={tripPhotos}
           />
-        ) : (
-          <SummaryPhotosTab
-            tripPhotos={tripPhotos}
-            loading={tripPhotosLoading}
-            onPhotoPress={handleTripPhotoPress}
-            summaryStyles={styles}
-            palette={themeColors}
-          />
-        )
-      )}
+        </View>
+      ) : null}
+      {trip ? (
+        <View style={[styles.tabPane, activeTab !== 'photos' && styles.tabPaneHidden]}>
+          {trip.shared_session_id && user ? (
+            <SharedTripPhotosSection
+              trip={trip}
+              viewerUserId={user.id}
+              isConnected={isConnected}
+              myTripPhotos={tripPhotos}
+              myPhotosLoading={tripPhotosLoading}
+              onPhotoPress={handleTripPhotoPress}
+            />
+          ) : (
+            <SummaryPhotosTab
+              tripPhotos={tripPhotos}
+              loading={tripPhotosLoading}
+              onPhotoPress={handleTripPhotoPress}
+              summaryStyles={styles}
+              palette={themeColors}
+            />
+          )}
+        </View>
+      ) : null}
       {activeTab === 'conditions' && (
         <ConditionsTab
           weatherData={trip.weather_cache ?? null}
@@ -1340,6 +1366,7 @@ export default function TripSummaryScreen() {
         <SummaryMapTab
           trip={trip}
           events={events}
+          tripPhotos={tripPhotos}
           editMode={isOwnTrip && journalEditMode}
           tripPinPlacement={tripPinPlacement}
           onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
@@ -1477,6 +1504,7 @@ function AIGuideTab({
 /* ─── Photos Tab (read-only, same info as trip Photos tab) ─── */
 
 const SUMMARY_PHOTO_SIZE = 100;
+const SUMMARY_PHOTO_THUMB_PIXEL_SIZE = layoutSizeToPixelSize(SUMMARY_PHOTO_SIZE, PixelRatio.get());
 
 function SummaryPhotosTab({
   tripPhotos,
@@ -1509,7 +1537,12 @@ function SummaryPhotosTab({
         <View style={summaryStyles.summaryPhotosGrid}>
           {tripPhotos.map((photo) => (
             <Pressable key={photo.id} onPress={() => onPhotoPress?.(photo)}>
-              <OfflineTripPhotoImage remoteUri={photo.url} style={summaryStyles.summaryPhotoThumb} contentFit="cover" />
+              <OfflineTripPhotoImage
+                remoteUri={photo.url}
+                maxPixelSize={SUMMARY_PHOTO_THUMB_PIXEL_SIZE}
+                style={summaryStyles.summaryPhotoThumb}
+                contentFit="cover"
+              />
             </Pressable>
           ))}
         </View>
@@ -1526,6 +1559,7 @@ const TRIP_ROUTE_LEGEND_INFO =
 function SummaryMapTab({
   trip,
   events,
+  tripPhotos,
   editMode,
   tripPinPlacement,
   onRequestEditTripPin,
@@ -1539,6 +1573,7 @@ function SummaryMapTab({
 }: {
   trip: Trip;
   events: TripEvent[];
+  tripPhotos: Photo[];
   editMode: boolean;
   tripPinPlacement: TripPinPlacementState | null;
   onRequestEditTripPin: (kind: TripEndpointKind) => void;
@@ -1551,7 +1586,14 @@ function SummaryMapTab({
   palette: ThemeColors;
 }) {
   const insets = useSafeAreaInsets();
-  const waypoints = useMemo(() => buildJournalWaypoints(trip, events), [trip, events]);
+  const albumPhotoUrlsByCatchId = useMemo(
+    () => buildAlbumPhotoUrlsByCatchId(tripPhotos),
+    [tripPhotos],
+  );
+  const waypoints = useMemo(
+    () => buildJournalWaypoints(trip, events, albumPhotoUrlsByCatchId),
+    [trip, events, albumPhotoUrlsByCatchId],
+  );
   const hasMapData = waypoints.length > 0;
 
   const coordSummary = useMemo(() => tripStartEndDisplayCoords(trip, events), [trip, events]);
@@ -1580,6 +1622,7 @@ function SummaryMapTab({
         <JournalTripRouteMapView
           trip={trip}
           events={events}
+          tripAlbumPhotos={tripPhotos}
           containerStyle={summaryStyles.summaryMapNative}
           onCatchWaypointPress={onCatchWaypointPress}
           placementKind={placing ? tripPinPlacement.kind : null}
@@ -1914,12 +1957,13 @@ function createTripSummaryStyles(c: ThemeColors) {
   keepOfflineSwitch: {
     transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
   },
-  sharePreviewHint: {
-    fontSize: FontSize.xs,
-    color: c.textSecondary,
-    marginHorizontal: Spacing.md,
-    marginBottom: Spacing.sm,
-    lineHeight: 16,
+
+  tabPane: {
+    flex: 1,
+    minHeight: 0,
+  },
+  tabPaneHidden: {
+    display: 'none',
   },
 
   tabBar: {

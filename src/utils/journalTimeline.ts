@@ -1,4 +1,5 @@
-import type { FlyChangeData, Trip, TripEvent, TripEventWithSource } from '@/src/types';
+import type { CatchData, FlyChangeData, Trip, TripEvent, TripEventWithSource } from '@/src/types';
+import { v4 as uuidv4 } from 'uuid';
 
 function parseTripEventCoord(value: unknown): number | null {
   if (value == null) return null;
@@ -55,6 +56,43 @@ export function formatCatchWeightLabel(
   return `${o} oz`;
 }
 
+function formatCatchDetailLabel(value: string): string {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function appendCatchMeasurementDetailLines(data: CatchData, lines: string[]): void {
+  const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
+  if (w) lines.push(`Weight: ${w}`);
+  if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
+  if (data.structure) lines.push(`Structure: ${formatCatchDetailLabel(data.structure)}`);
+  if (data.presentation_method) lines.push(`Presentation: ${formatCatchDetailLabel(data.presentation_method)}`);
+  if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
+}
+
+/** Species label for viewers — includes length when set. */
+export function formatCatchSpeciesLabel(data: CatchData): string | null {
+  const species = data.species?.trim();
+  if (species && data.size_inches != null) return `${data.size_inches}" ${species}`;
+  if (species) return species;
+  if (data.size_inches != null) return `${data.size_inches}"`;
+  return null;
+}
+
+/** Extra catch detail lines shown when a timeline row is expanded (excludes species/size subtitle). */
+export function getCatchDetailLines(data: CatchData): string[] {
+  const lines: string[] = [];
+  if (data.note?.trim()) lines.push(data.note.trim());
+  appendCatchMeasurementDetailLines(data, lines);
+  return lines;
+}
+
+/** Weight, depth, structure, presentation, released — for photo viewer (note is shown separately). */
+export function getCatchViewerDetailLines(data: CatchData): string[] {
+  const lines: string[] = [];
+  appendCatchMeasurementDetailLines(data, lines);
+  return lines;
+}
+
 /** Single place for journal / summary timeline row titles (handles stringified `data`). */
 export function getTripEventDescription(event: TripEvent): string {
   const d = coerceTripEventDataObject(event);
@@ -109,6 +147,83 @@ export function getTripEventDescription(event: TripEvent): string {
     default:
       return 'Event';
   }
+}
+
+export type TimelineFlySlot = 'primary' | 'secondary';
+
+export type TimelineDisplayRow = {
+  key: string;
+  event: TripEvent;
+  flySlot: TimelineFlySlot | null;
+  /** Index in `sortEventsByTime(events)` for row menu / insert actions */
+  eventIndex: number;
+};
+
+function flyChangeDataHasSecondary(data: FlyChangeData): boolean {
+  return data.pattern2 != null && String(data.pattern2).trim().length > 0;
+}
+
+/** One timeline row label for a single rig slot on a fly_change event. */
+export function getFlyChangeSlotDescription(data: FlyChangeData, slot: TimelineFlySlot): string {
+  if (slot === 'secondary') {
+    const pattern = typeof data.pattern2 === 'string' ? data.pattern2.trim() : '';
+    const label = pattern || 'Fly';
+    return `Changed to ${label}`;
+  }
+  const pattern = typeof data.pattern === 'string' ? data.pattern.trim() : '';
+  const label = pattern || 'Fly';
+  return `Changed to ${label}`;
+}
+
+export function getFlyChangeTimelineDescription(event: TripEvent, slot: TimelineFlySlot): string {
+  const d = coerceTripEventDataObject(event) as unknown as FlyChangeData;
+  return getFlyChangeSlotDescription(d, slot);
+}
+
+/**
+ * Expand combined fly_change rows into separate primary / secondary timeline entries.
+ * Within one fly_change event, primary is always listed before secondary.
+ */
+export function buildTimelineDisplayRows(
+  events: TripEvent[],
+  options?: { newestFirst?: boolean },
+): TimelineDisplayRow[] {
+  const sorted = sortEventsByTime(events);
+  const orderedEvents = options?.newestFirst ? [...sorted].reverse() : sorted;
+  const rows: TimelineDisplayRow[] = [];
+
+  for (let displayIdx = 0; displayIdx < orderedEvents.length; displayIdx++) {
+    const event = orderedEvents[displayIdx];
+    const eventIndex = options?.newestFirst ? sorted.length - 1 - displayIdx : displayIdx;
+
+    if (event.event_type === 'fly_change') {
+      const d = coerceTripEventDataObject(event) as unknown as FlyChangeData;
+      rows.push({
+        key: `${event.id}-primary`,
+        event,
+        flySlot: 'primary',
+        eventIndex,
+      });
+      if (flyChangeDataHasSecondary(d)) {
+        rows.push({
+          key: `${event.id}-secondary`,
+          event,
+          flySlot: 'secondary',
+          eventIndex,
+        });
+      }
+      continue;
+    }
+
+    rows.push({
+      key: event.id,
+      event,
+      flySlot: null,
+      eventIndex,
+    });
+  }
+
+  return rows;
 }
 
 export function totalFishFromEvents(events: TripEvent[]): number {
@@ -180,6 +295,43 @@ export function findActiveFlyEventIdBefore(events: TripEvent[], timestampIso: st
   return last;
 }
 
+/** Empty catch row for timeline insert / append (opens CatchDetailsModal for details). */
+export function createBlankCatchEvent(
+  tripId: string,
+  timestamp: string,
+  events: TripEvent[],
+  eventId: string = uuidv4(),
+): TripEvent {
+  return {
+    id: eventId,
+    trip_id: tripId,
+    event_type: 'catch',
+    timestamp,
+    data: {
+      species: null,
+      size_inches: null,
+      weight_lb: null,
+      weight_oz: null,
+      note: null,
+      photo_url: null,
+      active_fly_event_id: findActiveFlyEventIdBefore(events, timestamp),
+      caught_on_fly: null,
+      quantity: 1,
+      depth_ft: null,
+      presentation_method: null,
+      released: null,
+      structure: null,
+    } as CatchData,
+    conditions_snapshot: null,
+    latitude: null,
+    longitude: null,
+  };
+}
+
+export function appendBlankCatchEventAtTimelineEnd(trip: Trip, events: TripEvent[]): TripEvent {
+  return createBlankCatchEvent(trip.id, nextSequentialTimelineTimestamp(trip, events), events);
+}
+
 /** Last fly_change by time → rig for `currentFly` / `currentFly2` / `currentFlyEventId` (active trip store). */
 export function latestFlyChangeRigFromEvents(events: TripEvent[]): {
   eventId: string | null;
@@ -200,6 +352,8 @@ export function latestFlyChangeRigFromEvents(events: TripEvent[]): {
     fly_id: d.fly_id,
     fly_color_id: d.fly_color_id,
     fly_size_id: d.fly_size_id,
+    user_fly_box_id: d.user_fly_box_id,
+    photo_url: d.photo_url,
   };
   const has2 = d.pattern2 != null && String(d.pattern2).trim().length > 0;
   const dropper: FlyChangeData | null = has2
@@ -210,6 +364,8 @@ export function latestFlyChangeRigFromEvents(events: TripEvent[]): {
         fly_id: d.fly_id2 ?? undefined,
         fly_color_id: d.fly_color_id2 ?? undefined,
         fly_size_id: d.fly_size_id2 ?? undefined,
+        user_fly_box_id: d.user_fly_box_id2 ?? undefined,
+        photo_url: d.photo_url2 ?? undefined,
       }
     : null;
   return { eventId: last.id, primary, dropper };

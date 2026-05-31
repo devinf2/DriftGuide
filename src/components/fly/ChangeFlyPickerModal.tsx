@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dimensions,
-  Image,
   Modal,
   Platform,
   Pressable,
@@ -11,42 +10,28 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { FLY_COLORS, FLY_SIZES } from '@/src/constants/fishingTypes';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { Fly, FlyCatalog, FlyChangeData, NextFlyRecommendation } from '@/src/types';
 import { mergeTryNextWithSyntheticDropperIfMissing } from '@/src/services/ai';
-import { TripFlyPatternPickerModal } from '@/src/components/fly/TripFlyPatternPickerModal';
+import { fetchFliesOrCache } from '@/src/services/flyService';
+import { AddFlySheet } from '@/src/components/fly/AddFlySheet';
+import { FlyCatalogAddModal } from '@/src/components/fly/FlyCatalogAddModal';
+import { FlyImageGrid, type FlyImageGridItem } from '@/src/components/fly/FlyImageGrid';
+import { FlyImageTile } from '@/src/components/fly/FlyImageTile';
+import { displayFlyName, isFlySelectionValid } from '@/src/utils/flyValidation';
+import {
+  isSameFlyChangeSelection,
+  resolveUserBoxFlyIdForPicker,
+  seedSelectionFromFlyChange,
+} from '@/src/utils/flyPickerSelection';
+import { flyToFlyChangeData, isUserFlyPhotoUrl, resolveFlyPhotoUrl } from '@/src/utils/resolveFlyPhotoUrl';
 
-function selectionFromNextRecommendation(rec: NextFlyRecommendation): {
-  primary: FlyChangeData;
-  dropper: FlyChangeData | null;
-} {
-  const primary: FlyChangeData = {
-    pattern: rec.pattern,
-    size: rec.size,
-    color: rec.color,
-    fly_id: rec.fly_id ?? undefined,
-    fly_color_id: rec.fly_color_id ?? undefined,
-    fly_size_id: rec.fly_size_id ?? undefined,
-  };
-  const dropper =
-    rec.pattern2 != null && rec.pattern2.trim()
-      ? {
-          pattern: rec.pattern2.trim(),
-          size: rec.size2 ?? null,
-          color: rec.color2 ?? null,
-          fly_id: rec.fly_id2 ?? undefined,
-          fly_color_id: rec.fly_color_id2 ?? undefined,
-          fly_size_id: rec.fly_size_id2 ?? undefined,
-        }
-      : null;
-  return { primary, dropper };
-}
+export { seedSelectionFromFlyChange } from '@/src/utils/flyPickerSelection';
 
-export function primaryFromRecommendation(rec: NextFlyRecommendation): FlyChangeData {
+function primaryFromRecommendation(rec: NextFlyRecommendation): FlyChangeData {
   return {
     pattern: rec.pattern,
     size: rec.size,
@@ -69,54 +54,78 @@ export function dropperFromRecommendation(rec: NextFlyRecommendation): FlyChange
   };
 }
 
-export function seedSelectionFromFlyChange(
-  p: FlyChangeData | null | undefined,
+function buildRigSlotChipPreview(
+  initial: FlyChangeData | null | undefined,
+  pattern: string | null,
+  size: number | null,
+  color: string | null,
+  userBoxFlyId: string | null,
+  catalogFlyId: string | null,
   userFlies: Fly[],
   catalog: FlyCatalog[],
-): { userBoxId: string | null; catalogFlyId: string | null; manual: boolean } {
-  if (!p?.pattern?.trim()) {
-    return { userBoxId: null, catalogFlyId: null, manual: false };
-  }
-  const pat = p.pattern.trim();
-  const um = userFlies.find(
-    (f) =>
-      f.name === pat &&
-      (f.size ?? null) === (p.size ?? null) &&
-      (f.color ?? null) === (p.color ?? null),
+): { oldLabel: string | null; newLabel: string | null; showArrow: boolean } {
+  const oldPat = initial?.pattern?.trim();
+  const oldLabel = oldPat ? displayFlyName(oldPat) : null;
+
+  const draftValid = isFlySelectionValid({
+    pattern,
+    size,
+    color,
+    userBoxFlyId,
+    catalogFlyId,
+  });
+  const draftPat = pattern?.trim();
+  const draft =
+    draftValid && draftPat
+      ? buildFlyChangeFromSelection(
+          pattern,
+          size,
+          color,
+          userBoxFlyId,
+          catalogFlyId,
+          userFlies,
+          catalog,
+        )
+      : null;
+  const newLabel = draftPat && draftValid ? displayFlyName(draftPat) : oldLabel;
+
+  const showArrow = Boolean(
+    draft &&
+      newLabel &&
+      (oldLabel ? !isSameFlyChangeSelection(draft, initial) : true),
   );
-  if (um) return { userBoxId: um.id, catalogFlyId: null, manual: false };
-  if (p.fly_id && catalog.some((c) => c.id === p.fly_id)) {
-    return { userBoxId: null, catalogFlyId: p.fly_id, manual: false };
-  }
-  const byName = catalog.find((c) => c.name === pat);
-  if (byName) return { userBoxId: null, catalogFlyId: byName.id, manual: false };
-  return { userBoxId: null, catalogFlyId: null, manual: true };
+
+  return { oldLabel, newLabel, showArrow };
 }
 
-function applyFlyChangeToState(
-  p: FlyChangeData,
+function buildFlyChangeFromSelection(
+  pattern: string | null,
+  size: number | null,
+  color: string | null,
+  userBoxFlyId: string | null,
+  catalogFlyId: string | null,
   userFlies: Fly[],
   catalog: FlyCatalog[],
-): {
-  pattern: string;
-  size: number | null;
-  color: string | null;
-  userBoxId: string | null;
-  catalogFlyId: string | null;
-  manual: boolean;
-} {
-  const seed = seedSelectionFromFlyChange(p, userFlies, catalog);
+): FlyChangeData | null {
+  if (!isFlySelectionValid({ pattern, size, color, userBoxFlyId, catalogFlyId })) {
+    return null;
+  }
+
+  const fromBox = userBoxFlyId ? userFlies.find((f) => f.id === userBoxFlyId) : null;
+  if (fromBox) return flyToFlyChangeData(fromBox, userFlies, catalog);
+
+  const pat = pattern?.trim() || catalog.find((c) => c.id === catalogFlyId)?.name || '';
+  const photoUrl = resolveFlyPhotoUrl(pat, size, color, userBoxFlyId, catalogFlyId, userFlies, catalog);
   return {
-    pattern: p.pattern.trim(),
-    size: p.size ?? null,
-    color: p.color ?? null,
-    userBoxId: seed.userBoxId,
-    catalogFlyId: seed.catalogFlyId,
-    manual: seed.manual,
+    pattern: pat,
+    size,
+    color,
+    fly_id: catalogFlyId ?? undefined,
+    user_fly_box_id: userBoxFlyId ?? undefined,
+    photo_url: photoUrl,
   };
 }
 
-/** Split stored fly_change `data` into primary + optional dropper for the picker. */
 export function splitFlyChangeData(data: FlyChangeData): {
   primary: FlyChangeData;
   dropper: FlyChangeData | null;
@@ -128,6 +137,8 @@ export function splitFlyChangeData(data: FlyChangeData): {
     fly_id: data.fly_id,
     fly_color_id: data.fly_color_id,
     fly_size_id: data.fly_size_id,
+    user_fly_box_id: data.user_fly_box_id,
+    photo_url: data.photo_url,
   };
   const has2 = data.pattern2 != null && String(data.pattern2).trim().length > 0;
   if (!has2) return { primary, dropper: null };
@@ -140,11 +151,12 @@ export function splitFlyChangeData(data: FlyChangeData): {
       fly_id: data.fly_id2 ?? undefined,
       fly_color_id: data.fly_color_id2 ?? undefined,
       fly_size_id: data.fly_size_id2 ?? undefined,
+      user_fly_box_id: data.user_fly_box_id2 ?? undefined,
+      photo_url: data.photo_url2 ?? undefined,
     },
   };
 }
 
-/** Merge picker primary + dropper into one `FlyChangeData` for events / store. */
 export function mergeFlyPickerSelection(primary: FlyChangeData, dropper: FlyChangeData | null): FlyChangeData {
   return {
     pattern: primary.pattern,
@@ -153,6 +165,8 @@ export function mergeFlyPickerSelection(primary: FlyChangeData, dropper: FlyChan
     fly_id: primary.fly_id,
     fly_color_id: primary.fly_color_id,
     fly_size_id: primary.fly_size_id,
+    user_fly_box_id: primary.user_fly_box_id,
+    photo_url: primary.photo_url,
     ...(dropper
       ? {
           pattern2: dropper.pattern,
@@ -161,6 +175,8 @@ export function mergeFlyPickerSelection(primary: FlyChangeData, dropper: FlyChan
           fly_id2: dropper.fly_id ?? null,
           fly_color_id2: dropper.fly_color_id ?? null,
           fly_size_id2: dropper.fly_size_id ?? null,
+          user_fly_box_id2: dropper.user_fly_box_id ?? null,
+          photo_url2: dropper.photo_url ?? null,
         }
       : {}),
   };
@@ -170,23 +186,27 @@ export type ChangeFlyPickerModalProps = {
   visible: boolean;
   onClose: () => void;
   userFlies: Fly[];
-  /** Global catalog for “All flies” section */
   flyCatalog: FlyCatalog[];
-  /** Re-seed internal pickers when this changes (e.g. event id or `'rig'`). */
   seedKey: string;
   initialPrimary: FlyChangeData | null;
   initialDropper: FlyChangeData | null;
   title?: string;
   onConfirm: (primary: FlyChangeData, dropper: FlyChangeData | null) => void;
-  /** When set (e.g. active trip, not editing a timeline row), shows Try next banner above the form. */
   nextFlyRecommendation?: NextFlyRecommendation | null;
   recommendationLoading?: boolean;
+  userId?: string;
+  isConnected?: boolean;
+  /** Active trip id when picking flies during a session (offline sync scope). */
+  tripId?: string;
+  onUserFliesUpdated?: (flies: Fly[]) => void;
+  /** When set, only edit one rig slot; the other is preserved from initialPrimary / initialDropper. */
+  singleEditSlot?: 'primary' | 'secondary' | null;
 };
 
 export function ChangeFlyPickerModal({
   visible,
   onClose,
-  userFlies,
+  userFlies: userFliesProp,
   flyCatalog,
   seedKey,
   initialPrimary,
@@ -195,28 +215,53 @@ export function ChangeFlyPickerModal({
   onConfirm,
   nextFlyRecommendation = null,
   recommendationLoading = false,
+  userId,
+  isConnected = true,
+  tripId,
+  onUserFliesUpdated,
+  singleEditSlot = null,
 }: ChangeFlyPickerModalProps) {
   const { colors, resolvedScheme } = useAppTheme();
-  const scrim =
-    resolvedScheme === 'dark' ? 'rgba(0,0,0,0.78)' : 'rgba(0,0,0,0.52)';
+  const insets = useSafeAreaInsets();
+  const scrim = resolvedScheme === 'dark' ? 'rgba(0,0,0,0.78)' : 'rgba(0,0,0,0.52)';
   const styles = useMemo(() => createFlyPickerStyles(colors, scrim), [colors, scrim]);
 
+  const [userFlies, setUserFlies] = useState(userFliesProp);
   const [pickerName, setPickerName] = useState<string | null>(null);
   const [pickerSize, setPickerSize] = useState<number | null>(null);
   const [pickerColor, setPickerColor] = useState<string | null>(null);
   const [primaryUserBoxFlyId, setPrimaryUserBoxFlyId] = useState<string | null>(null);
   const [primaryCatalogFlyId, setPrimaryCatalogFlyId] = useState<string | null>(null);
-  const [primaryManual, setPrimaryManual] = useState(false);
 
   const [pickerName2, setPickerName2] = useState<string | null>(null);
   const [pickerSize2, setPickerSize2] = useState<number | null>(null);
   const [pickerColor2, setPickerColor2] = useState<string | null>(null);
   const [dropperUserBoxFlyId, setDropperUserBoxFlyId] = useState<string | null>(null);
   const [dropperCatalogFlyId, setDropperCatalogFlyId] = useState<string | null>(null);
-  const [dropperManual, setDropperManual] = useState(false);
 
-  const [primaryPatternPickerOpen, setPrimaryPatternPickerOpen] = useState(false);
-  const [dropperPatternPickerOpen, setDropperPatternPickerOpen] = useState(false);
+  const [activeSlot, setActiveSlot] = useState<'primary' | 'dropper'>('primary');
+  const [flySearch, setFlySearch] = useState('');
+  const [addFlyOpen, setAddFlyOpen] = useState(false);
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
+  const [openAsCustom, setOpenAsCustom] = useState(false);
+  const [initialCatalogFlyForAdd, setInitialCatalogFlyForAdd] = useState<FlyCatalog | null>(null);
+
+  useEffect(() => {
+    setUserFlies(userFliesProp);
+  }, [userFliesProp]);
+
+  useEffect(() => {
+    if (!visible || !userId) return;
+    let cancelled = false;
+    void fetchFliesOrCache(userId).then((list) => {
+      if (cancelled) return;
+      setUserFlies(list);
+      onUserFliesUpdated?.(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, userId, isConnected, onUserFliesUpdated]);
 
   useEffect(() => {
     if (!visible) return;
@@ -224,98 +269,130 @@ export function ChangeFlyPickerModal({
     setPickerName(p?.pattern?.trim() ? p.pattern.trim() : null);
     setPickerSize(p?.size ?? null);
     setPickerColor(p?.color ?? null);
-    const ps = seedSelectionFromFlyChange(p, userFlies, flyCatalog);
+    const ps = seedSelectionFromFlyChange(p, userFliesProp, flyCatalog);
     setPrimaryUserBoxFlyId(ps.userBoxId);
     setPrimaryCatalogFlyId(ps.catalogFlyId);
-    setPrimaryManual(ps.manual);
 
     const d = initialDropper;
-    if (d?.pattern != null && String(d.pattern).trim()) {
+    const addingSecondary =
+      singleEditSlot === 'secondary' && !(d?.pattern != null && String(d.pattern).trim());
+    if (singleEditSlot === 'primary') {
+      setPickerName2(null);
+      setPickerSize2(null);
+      setPickerColor2(null);
+      setDropperUserBoxFlyId(null);
+      setDropperCatalogFlyId(null);
+      setActiveSlot('primary');
+    } else if (singleEditSlot === 'secondary') {
+      if (d?.pattern != null && String(d.pattern).trim()) {
+        setPickerName2(d.pattern.trim());
+        setPickerSize2(d.size ?? null);
+        setPickerColor2(d.color ?? null);
+        const ds = seedSelectionFromFlyChange(d, userFliesProp, flyCatalog);
+        setDropperUserBoxFlyId(ds.userBoxId);
+        setDropperCatalogFlyId(ds.catalogFlyId);
+      } else {
+        setPickerName2('');
+        setPickerSize2(null);
+        setPickerColor2(null);
+        setDropperUserBoxFlyId(null);
+        setDropperCatalogFlyId(null);
+      }
+      setActiveSlot('dropper');
+    } else if (d?.pattern != null && String(d.pattern).trim()) {
       setPickerName2(d.pattern.trim());
       setPickerSize2(d.size ?? null);
       setPickerColor2(d.color ?? null);
-      const ds = seedSelectionFromFlyChange(d, userFlies, flyCatalog);
+      const ds = seedSelectionFromFlyChange(d, userFliesProp, flyCatalog);
       setDropperUserBoxFlyId(ds.userBoxId);
       setDropperCatalogFlyId(ds.catalogFlyId);
-      setDropperManual(ds.manual);
+      setActiveSlot('primary');
+    } else if (addingSecondary) {
+      setPickerName2('');
+      setPickerSize2(null);
+      setPickerColor2(null);
+      setDropperUserBoxFlyId(null);
+      setDropperCatalogFlyId(null);
+      setActiveSlot('dropper');
     } else {
       setPickerName2(null);
       setPickerSize2(null);
       setPickerColor2(null);
       setDropperUserBoxFlyId(null);
       setDropperCatalogFlyId(null);
-      setDropperManual(false);
+      setActiveSlot('primary');
     }
-    setPrimaryPatternPickerOpen(false);
-    setDropperPatternPickerOpen(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed on open / seedKey / catalog lists / initial rows
+    setFlySearch('');
+    setAddFlyOpen(false);
+    setAddSheetOpen(false);
+    setInitialCatalogFlyForAdd(null);
+    setOpenAsCustom(false);
+    // Intentionally omit userFliesProp — updating the box after "Add fly" must not re-seed and clear selection.
   }, [
     visible,
     seedKey,
-    userFlies,
     flyCatalog,
+    singleEditSlot,
     initialPrimary?.pattern,
     initialPrimary?.size,
     initialPrimary?.color,
     initialPrimary?.fly_id,
+    initialPrimary?.user_fly_box_id,
     initialDropper?.pattern,
     initialDropper?.size,
     initialDropper?.color,
     initialDropper?.fly_id,
+    initialDropper?.user_fly_box_id,
   ]);
 
-  const handleConfirm = useCallback(() => {
-    if (!pickerName?.trim()) return;
-    const matchPrimary = userFlies.find(
-      (f) =>
-        f.name === pickerName.trim() &&
-        (f.size ?? null) === (pickerSize ?? null) &&
-        (f.color ?? null) === (pickerColor ?? null),
+  useEffect(() => {
+    if (!visible) return;
+    const resolvedPrimaryId = resolveUserBoxFlyIdForPicker(
+      primaryUserBoxFlyId,
+      primaryCatalogFlyId,
+      pickerName,
+      pickerSize,
+      pickerColor,
+      userFlies,
+      flyCatalog,
     );
-    const primary: FlyChangeData = {
-      pattern: pickerName.trim(),
-      size: pickerSize ?? null,
-      color: pickerColor ?? null,
-      fly_id: matchPrimary?.fly_id ?? primaryCatalogFlyId ?? undefined,
-      fly_color_id: matchPrimary?.fly_color_id ?? undefined,
-      fly_size_id: matchPrimary?.fly_size_id ?? undefined,
-    };
-    const dropper =
-      pickerName2 != null && String(pickerName2).trim()
-        ? (() => {
-            const match2 = userFlies.find(
-              (f) =>
-                f.name === pickerName2.trim() &&
-                (f.size ?? null) === (pickerSize2 ?? null) &&
-                (f.color ?? null) === (pickerColor2 ?? null),
-            );
-            const d: FlyChangeData = {
-              pattern: pickerName2.trim(),
-              size: pickerSize2 ?? null,
-              color: pickerColor2 ?? null,
-              fly_id: match2?.fly_id ?? dropperCatalogFlyId ?? undefined,
-              fly_color_id: match2?.fly_color_id ?? undefined,
-              fly_size_id: match2?.fly_size_id ?? undefined,
-            };
-            return d;
-          })()
-        : null;
-    onConfirm(primary, dropper);
+    if (resolvedPrimaryId && resolvedPrimaryId !== primaryUserBoxFlyId) {
+      setPrimaryUserBoxFlyId(resolvedPrimaryId);
+      setPrimaryCatalogFlyId(null);
+    }
+    const resolvedDropperId = resolveUserBoxFlyIdForPicker(
+      dropperUserBoxFlyId,
+      dropperCatalogFlyId,
+      pickerName2,
+      pickerSize2,
+      pickerColor2,
+      userFlies,
+      flyCatalog,
+    );
+    if (resolvedDropperId && resolvedDropperId !== dropperUserBoxFlyId) {
+      setDropperUserBoxFlyId(resolvedDropperId);
+      setDropperCatalogFlyId(null);
+    }
   }, [
+    visible,
+    userFlies,
+    flyCatalog,
+    primaryUserBoxFlyId,
+    primaryCatalogFlyId,
     pickerName,
     pickerSize,
     pickerColor,
-    primaryCatalogFlyId,
+    dropperUserBoxFlyId,
+    dropperCatalogFlyId,
     pickerName2,
     pickerSize2,
     pickerColor2,
-    dropperCatalogFlyId,
-    userFlies,
-    onConfirm,
   ]);
 
-  /** Dropper row visible (Add dropper tapped, or initial rig had a dropper). */
-  const dropperSectionOpen = pickerName2 !== null;
+  const dropperSectionOpen = singleEditSlot === 'secondary' ? true : pickerName2 !== null;
+  const lockedSlot: 'primary' | 'dropper' | null =
+    singleEditSlot === 'primary' ? 'primary' : singleEditSlot === 'secondary' ? 'dropper' : null;
+  const effectiveActiveSlot = lockedSlot ?? activeSlot;
 
   const effectiveNextFlyRecommendation = useMemo(() => {
     if (!nextFlyRecommendation) return null;
@@ -323,62 +400,467 @@ export function ChangeFlyPickerModal({
     return mergeTryNextWithSyntheticDropperIfMissing(nextFlyRecommendation, userFlies);
   }, [nextFlyRecommendation, dropperSectionOpen, userFlies]);
 
-  const hasSecondaryRec =
-    effectiveNextFlyRecommendation != null &&
-    Boolean(effectiveNextFlyRecommendation.pattern2?.trim());
+  const recHasDropper = Boolean(effectiveNextFlyRecommendation?.pattern2?.trim());
 
-  const applyNextRecommendation = useCallback(() => {
+  const applyRecPrimary = useCallback(() => {
     if (!effectiveNextFlyRecommendation) return;
-    const { primary, dropper } = selectionFromNextRecommendation(effectiveNextFlyRecommendation);
+    const primary = primaryFromRecommendation(effectiveNextFlyRecommendation);
+    if (singleEditSlot === 'secondary') return;
+    onConfirm(primary, singleEditSlot === 'primary' ? (initialDropper ?? null) : null);
+  }, [effectiveNextFlyRecommendation, onConfirm, singleEditSlot, initialDropper]);
+
+  const applyRecDropper = useCallback(() => {
+    if (!effectiveNextFlyRecommendation) return;
+    const dropper = dropperFromRecommendation(effectiveNextFlyRecommendation);
+    if (!dropper) return;
+    if (singleEditSlot === 'primary') return;
+    if (singleEditSlot === 'secondary' && initialPrimary?.pattern?.trim()) {
+      onConfirm(initialPrimary, dropper);
+      return;
+    }
+    onConfirm(dropper, null);
+  }, [effectiveNextFlyRecommendation, onConfirm, singleEditSlot, initialPrimary]);
+
+  const flySearchQuery = flySearch.trim().toLowerCase();
+
+  const boxGridItems: FlyImageGridItem[] = useMemo(
+    () =>
+      userFlies
+        .filter((f) => !flySearchQuery || f.name.toLowerCase().includes(flySearchQuery))
+        .map((f) => ({
+          key: f.id,
+          name: f.name,
+          photoUrl: isUserFlyPhotoUrl(f.photo_url) ? f.photo_url : null,
+          size: f.size,
+          color: f.color,
+        })),
+    [userFlies, flySearchQuery],
+  );
+
+  const catalogGridItems: FlyImageGridItem[] = useMemo(() => {
+    return flyCatalog
+      .filter((c) => !flySearchQuery || c.name.toLowerCase().includes(flySearchQuery))
+      .map((c) => ({
+        key: c.id,
+        name: c.name,
+        photoUrl: c.photo_url,
+      }));
+  }, [flyCatalog, flySearchQuery]);
+
+  const selectedBoxKey = useMemo(() => {
+    if (effectiveActiveSlot === 'primary') {
+      return resolveUserBoxFlyIdForPicker(
+        primaryUserBoxFlyId,
+        primaryCatalogFlyId,
+        pickerName,
+        pickerSize,
+        pickerColor,
+        userFlies,
+        flyCatalog,
+      );
+    }
+    return resolveUserBoxFlyIdForPicker(
+      dropperUserBoxFlyId,
+      dropperCatalogFlyId,
+      pickerName2,
+      pickerSize2,
+      pickerColor2,
+      userFlies,
+      flyCatalog,
+    );
+  }, [
+    effectiveActiveSlot,
+    primaryUserBoxFlyId,
+    primaryCatalogFlyId,
+    pickerName,
+    pickerSize,
+    pickerColor,
+    dropperUserBoxFlyId,
+    dropperCatalogFlyId,
+    pickerName2,
+    pickerSize2,
+    pickerColor2,
+    userFlies,
+    flyCatalog,
+  ]);
+
+  const selectedCatalogKey = useMemo(() => {
+    if (selectedBoxKey) return null;
+    const catalogFlyId = effectiveActiveSlot === 'primary' ? primaryCatalogFlyId : dropperCatalogFlyId;
+    if (catalogFlyId) return catalogFlyId;
+    const pattern = effectiveActiveSlot === 'primary' ? pickerName : pickerName2;
+    if (!pattern?.trim()) return null;
+    return flyCatalog.find((c) => c.name === pattern.trim())?.id ?? null;
+  }, [
+    selectedBoxKey,
+    effectiveActiveSlot,
+    primaryCatalogFlyId,
+    dropperCatalogFlyId,
+    pickerName,
+    pickerName2,
+    flyCatalog,
+  ]);
+
+  const applyUserFlySelection = useCallback(
+    (fly: Pick<Fly, 'id' | 'name' | 'size' | 'color'>, slot: 'primary' | 'dropper') => {
+      if (slot === 'primary') {
+        setPickerName(fly.name);
+        setPickerSize(fly.size ?? null);
+        setPickerColor(fly.color ?? null);
+        setPrimaryUserBoxFlyId(fly.id);
+        setPrimaryCatalogFlyId(null);
+      } else {
+        setPickerName2(fly.name);
+        setPickerSize2(fly.size ?? null);
+        setPickerColor2(fly.color ?? null);
+        setDropperUserBoxFlyId(fly.id);
+        setDropperCatalogFlyId(null);
+      }
+    },
+    [],
+  );
+
+  const applyUserFly = useCallback(
+    (item: FlyImageGridItem, slot: 'primary' | 'dropper') => {
+      const fly = userFlies.find((f) => f.id === item.key);
+      if (!fly) return;
+      applyUserFlySelection(fly, slot);
+    },
+    [userFlies, applyUserFlySelection],
+  );
+
+  const applyCatalogFly = useCallback(
+    (item: FlyImageGridItem, slot: 'primary' | 'dropper') => {
+      const catalogFly = flyCatalog.find((c) => c.id === item.key);
+      if (!catalogFly) return;
+
+      const boxFly = userFlies.find((f) => f.fly_id === catalogFly.id);
+      if (boxFly) {
+        applyUserFly(
+          { key: boxFly.id, name: boxFly.name, photoUrl: boxFly.photo_url, size: boxFly.size, color: boxFly.color },
+          slot,
+        );
+        return;
+      }
+
+      if (userId) {
+        setActiveSlot(slot);
+        setInitialCatalogFlyForAdd(catalogFly);
+        setAddSheetOpen(true);
+        return;
+      }
+
+      if (slot === 'primary') {
+        setPickerName(catalogFly.name);
+        setPickerSize(null);
+        setPickerColor(null);
+        setPrimaryUserBoxFlyId(null);
+        setPrimaryCatalogFlyId(catalogFly.id);
+      } else {
+        setPickerName2(catalogFly.name);
+        setPickerSize2(null);
+        setPickerColor2(null);
+        setDropperUserBoxFlyId(null);
+        setDropperCatalogFlyId(catalogFly.id);
+      }
+    },
+    [flyCatalog, userFlies, userId, applyUserFly],
+  );
+
+  const handleConfirm = useCallback(() => {
+    if (singleEditSlot === 'primary') {
+      const primary = buildFlyChangeFromSelection(
+        pickerName,
+        pickerSize,
+        pickerColor,
+        primaryUserBoxFlyId,
+        primaryCatalogFlyId,
+        userFlies,
+        flyCatalog,
+      );
+      if (!primary) return;
+      onConfirm(primary, initialDropper ?? null);
+      return;
+    }
+    if (singleEditSlot === 'secondary') {
+      if (!initialPrimary?.pattern?.trim()) return;
+      const dropper = buildFlyChangeFromSelection(
+        pickerName2,
+        pickerSize2,
+        pickerColor2,
+        dropperUserBoxFlyId,
+        dropperCatalogFlyId,
+        userFlies,
+        flyCatalog,
+      );
+      if (!dropper) return;
+      onConfirm(initialPrimary, dropper);
+      return;
+    }
+    const primary = buildFlyChangeFromSelection(
+      pickerName,
+      pickerSize,
+      pickerColor,
+      primaryUserBoxFlyId,
+      primaryCatalogFlyId,
+      userFlies,
+      flyCatalog,
+    );
+    if (!primary) return;
+    const dropper =
+      pickerName2 != null && String(pickerName2).trim()
+        ? buildFlyChangeFromSelection(
+            pickerName2,
+            pickerSize2,
+            pickerColor2,
+            dropperUserBoxFlyId,
+            dropperCatalogFlyId,
+            userFlies,
+            flyCatalog,
+          )
+        : null;
     onConfirm(primary, dropper);
-  }, [effectiveNextFlyRecommendation, onConfirm]);
+  }, [
+    pickerName,
+    pickerSize,
+    pickerColor,
+    primaryUserBoxFlyId,
+    primaryCatalogFlyId,
+    pickerName2,
+    pickerSize2,
+    pickerColor2,
+    dropperUserBoxFlyId,
+    dropperCatalogFlyId,
+    userFlies,
+    flyCatalog,
+    onConfirm,
+    singleEditSlot,
+    initialPrimary,
+    initialDropper,
+  ]);
 
-  const applyPrimarySuggestion = useCallback(() => {
-    if (!effectiveNextFlyRecommendation) return;
-    const slice = primaryFromRecommendation(effectiveNextFlyRecommendation);
-    const st = applyFlyChangeToState(slice, userFlies, flyCatalog);
-    setPickerName(st.pattern);
-    setPickerSize(st.size);
-    setPickerColor(st.color);
-    setPrimaryUserBoxFlyId(st.userBoxId);
-    setPrimaryCatalogFlyId(st.catalogFlyId);
-    setPrimaryManual(st.manual);
-  }, [effectiveNextFlyRecommendation, userFlies, flyCatalog]);
+  const canConfirm =
+    singleEditSlot === 'primary'
+      ? isFlySelectionValid({
+          pattern: pickerName,
+          size: pickerSize,
+          color: pickerColor,
+          userBoxFlyId: primaryUserBoxFlyId,
+          catalogFlyId: primaryCatalogFlyId,
+        })
+      : singleEditSlot === 'secondary'
+        ? isFlySelectionValid({
+            pattern: pickerName2,
+            size: pickerSize2,
+            color: pickerColor2,
+            userBoxFlyId: dropperUserBoxFlyId,
+            catalogFlyId: dropperCatalogFlyId,
+          })
+        : isFlySelectionValid({
+            pattern: pickerName,
+            size: pickerSize,
+            color: pickerColor,
+            userBoxFlyId: primaryUserBoxFlyId,
+            catalogFlyId: primaryCatalogFlyId,
+          }) &&
+          (!dropperSectionOpen ||
+            isFlySelectionValid({
+              pattern: pickerName2,
+              size: pickerSize2,
+              color: pickerColor2,
+              userBoxFlyId: dropperUserBoxFlyId,
+              catalogFlyId: dropperCatalogFlyId,
+            }));
 
-  const applyDropperSuggestion = useCallback(() => {
-    if (!effectiveNextFlyRecommendation) return;
-    const slice = dropperFromRecommendation(effectiveNextFlyRecommendation);
-    if (!slice) return;
-    const st = applyFlyChangeToState(slice, userFlies, flyCatalog);
-    setPickerName2(st.pattern);
-    setPickerSize2(st.size);
-    setPickerColor2(st.color);
-    setDropperUserBoxFlyId(st.userBoxId);
-    setDropperCatalogFlyId(st.catalogFlyId);
-    setDropperManual(st.manual);
-  }, [effectiveNextFlyRecommendation, userFlies, flyCatalog]);
+  const confirmButtonLabel = useMemo(() => {
+    const slot = effectiveActiveSlot;
+    const pattern = slot === 'dropper' ? pickerName2 : pickerName;
+    const size = slot === 'dropper' ? pickerSize2 : pickerSize;
+    const color = slot === 'dropper' ? pickerColor2 : pickerColor;
+    const userBoxFlyId = slot === 'dropper' ? dropperUserBoxFlyId : primaryUserBoxFlyId;
+    const catalogFlyId = slot === 'dropper' ? dropperCatalogFlyId : primaryCatalogFlyId;
+    const initial = slot === 'dropper' ? initialDropper : initialPrimary;
 
-  const confirmLabel = pickerName
-    ? pickerName2
-      ? `Select ${pickerName}${pickerSize ? ` #${pickerSize}` : ''} / ${pickerName2}${pickerSize2 ? ` #${pickerSize2}` : ''}`
-      : `Select ${pickerName}${pickerSize ? ` #${pickerSize}` : ''}${pickerColor ? ` · ${pickerColor}` : ''}`
-    : 'Choose a fly name';
+    if (!isFlySelectionValid({ pattern, size, color, userBoxFlyId, catalogFlyId })) {
+      return 'Select fly';
+    }
 
-  const primaryPatternSummary = useMemo(() => {
-    if (!pickerName?.trim()) return null;
-    const bits = [pickerName.trim()];
-    if (pickerSize != null) bits.push(`#${pickerSize}`);
-    if (pickerColor?.trim()) bits.push(pickerColor.trim());
-    return bits.join(' · ');
-  }, [pickerName, pickerSize, pickerColor]);
+    const current = buildFlyChangeFromSelection(
+      pattern,
+      size,
+      color,
+      userBoxFlyId,
+      catalogFlyId,
+      userFlies,
+      flyCatalog,
+    );
 
-  const dropperPatternSummary = useMemo(() => {
-    if (!pickerName2?.trim()) return null;
-    const bits = [pickerName2.trim()];
-    if (pickerSize2 != null) bits.push(`#${pickerSize2}`);
-    if (pickerColor2?.trim()) bits.push(pickerColor2.trim());
-    return bits.join(' · ');
-  }, [pickerName2, pickerSize2, pickerColor2]);
+    if (current && isSameFlyChangeSelection(current, initial)) {
+      return 'Keep fly';
+    }
+
+    return `Select ${displayFlyName(pattern!.trim())}`;
+  }, [
+    effectiveActiveSlot,
+    pickerName,
+    pickerSize,
+    pickerColor,
+    primaryUserBoxFlyId,
+    primaryCatalogFlyId,
+    pickerName2,
+    pickerSize2,
+    pickerColor2,
+    dropperUserBoxFlyId,
+    dropperCatalogFlyId,
+    initialPrimary,
+    initialDropper,
+    userFlies,
+    flyCatalog,
+  ]);
+
+  const primarySlotChipPreview = useMemo(
+    () =>
+      buildRigSlotChipPreview(
+        initialPrimary,
+        pickerName,
+        pickerSize,
+        pickerColor,
+        primaryUserBoxFlyId,
+        primaryCatalogFlyId,
+        userFlies,
+        flyCatalog,
+      ),
+    [
+      initialPrimary,
+      pickerName,
+      pickerSize,
+      pickerColor,
+      primaryUserBoxFlyId,
+      primaryCatalogFlyId,
+      userFlies,
+      flyCatalog,
+    ],
+  );
+  const dropperSlotChipPreview = useMemo(
+    () =>
+      buildRigSlotChipPreview(
+        initialDropper,
+        pickerName2,
+        pickerSize2,
+        pickerColor2,
+        dropperUserBoxFlyId,
+        dropperCatalogFlyId,
+        userFlies,
+        flyCatalog,
+      ),
+    [
+      initialDropper,
+      pickerName2,
+      pickerSize2,
+      pickerColor2,
+      dropperUserBoxFlyId,
+      dropperCatalogFlyId,
+      userFlies,
+      flyCatalog,
+    ],
+  );
+
+  const renderSlotChip = (
+    slotTitle: 'Primary' | 'Secondary',
+    preview: { oldLabel: string | null; newLabel: string | null; showArrow: boolean },
+    active: boolean,
+  ) => {
+    const currentLabel = preview.oldLabel ?? preview.newLabel ?? '—';
+    const line1Name =
+      preview.showArrow && preview.oldLabel
+        ? preview.oldLabel
+        : preview.showArrow && !preview.oldLabel
+          ? '—'
+          : currentLabel;
+    return (
+      <View style={styles.slotChipBody}>
+        <Text
+          style={[styles.slotChipText, active && styles.slotChipTextActive]}
+          numberOfLines={1}
+        >
+          {slotTitle}:{' '}
+          {preview.showArrow && preview.oldLabel ? (
+            <Text style={styles.slotChipOld}>{line1Name}</Text>
+          ) : (
+            line1Name
+          )}
+        </Text>
+        {preview.showArrow && preview.newLabel ? (
+          <Text
+            style={[styles.slotChipNewLine, active && styles.slotChipNewActive]}
+            numberOfLines={1}
+          >
+            → {preview.newLabel}
+          </Text>
+        ) : null}
+      </View>
+    );
+  };
+
+  const handleFlySaved = useCallback(
+    (fly: Fly) => {
+      const next = userFlies.some((f) => f.id === fly.id)
+        ? userFlies.map((f) => (f.id === fly.id ? fly : f))
+        : [...userFlies, fly];
+      next.sort((a, b) => a.name.localeCompare(b.name));
+      setUserFlies(next);
+      onUserFliesUpdated?.(next);
+      applyUserFlySelection(fly, effectiveActiveSlot);
+    },
+    [userFlies, onUserFliesUpdated, applyUserFlySelection, effectiveActiveSlot],
+  );
+
+  const handleCatalogAddSelect = useCallback(
+    (catalogFly: FlyCatalog) => {
+      const existing = userFlies.find((f) => f.fly_id === catalogFly.id);
+      setAddFlyOpen(false);
+      setOpenAsCustom(false);
+      if (existing) {
+        applyUserFly(
+          {
+            key: existing.id,
+            name: existing.name,
+            photoUrl: existing.photo_url,
+            size: existing.size,
+            color: existing.color,
+          },
+          effectiveActiveSlot,
+        );
+        return;
+      }
+      setInitialCatalogFlyForAdd(catalogFly);
+      setAddSheetOpen(true);
+    },
+    [userFlies, applyUserFly, effectiveActiveSlot],
+  );
+
+  const handleOtherAddSelect = useCallback(() => {
+    setAddFlyOpen(false);
+    setInitialCatalogFlyForAdd(null);
+    setOpenAsCustom(true);
+    setAddSheetOpen(true);
+  }, []);
+
+  const handleAddSheetClose = useCallback(() => {
+    setAddSheetOpen(false);
+    setInitialCatalogFlyForAdd(null);
+    setOpenAsCustom(false);
+  }, []);
+
+  const handleAddSheetSaved = useCallback(
+    (fly: Fly) => {
+      handleFlySaved(fly);
+      setAddSheetOpen(false);
+      setInitialCatalogFlyForAdd(null);
+      setOpenAsCustom(false);
+    },
+    [handleFlySaved],
+  );
 
   const windowH = Dimensions.get('window').height;
   const sheetMaxH = windowH * 0.92;
@@ -392,579 +874,332 @@ export function ChangeFlyPickerModal({
       transparent={Platform.OS === 'android'}
     >
       <View style={styles.modalRoot} pointerEvents="box-none">
-        <Pressable
-          style={styles.modalDimTap}
-          onPress={onClose}
-          accessibilityLabel="Close"
-          accessibilityRole="button"
-        />
+        <Pressable style={styles.modalDimTap} onPress={onClose} accessibilityLabel="Close" accessibilityRole="button" />
         <View style={styles.modalSheetOverlay} pointerEvents="box-none">
-          <SafeAreaView edges={['bottom']} style={styles.modalSheetSafe}>
+          <View style={styles.modalSheetSafe}>
             <View style={[styles.flyPickerSheet, { height: sheetMaxH }]}>
-          <View style={styles.flyPickerHeader}>
-            <Text style={styles.flyPickerTitle}>{title}</Text>
-            <Pressable onPress={onClose} hitSlop={12}>
-              <Text style={styles.flyPickerClose}>Cancel</Text>
-            </Pressable>
-          </View>
-          {effectiveNextFlyRecommendation ? (
-            <View style={styles.nextFlyBanner}>
-              <View style={styles.nextFlyLeft}>
-                <Text style={styles.nextFlyLabel}>
-                  {recommendationLoading ? 'AI thinking\u2026' : 'Try next'}
-                </Text>
-                {effectiveNextFlyRecommendation.reason ? (
-                  <Text style={styles.nextFlyReason} numberOfLines={5}>
-                    {effectiveNextFlyRecommendation.reason}
-                  </Text>
-                ) : null}
-                {hasSecondaryRec ? (
-                  <>
-                    <Pressable style={styles.nextFlyAction} onPress={applyPrimarySuggestion}>
-                      <Text style={styles.nextFlyActionLabel}>Primary</Text>
-                      <Text style={styles.nextFlyActionValue}>
-                        {effectiveNextFlyRecommendation.pattern}
-                        {effectiveNextFlyRecommendation.size != null ? ` #${effectiveNextFlyRecommendation.size}` : ''}
-                        {effectiveNextFlyRecommendation.color ? ` · ${effectiveNextFlyRecommendation.color}` : ''}
-                      </Text>
-                    </Pressable>
-                    <Pressable style={styles.nextFlyAction} onPress={applyDropperSuggestion}>
-                      <Text style={styles.nextFlyActionLabel}>Dropper</Text>
-                      <Text style={styles.nextFlyActionValue}>
-                        {effectiveNextFlyRecommendation.pattern2}
-                        {effectiveNextFlyRecommendation.size2 != null ? ` #${effectiveNextFlyRecommendation.size2}` : ''}
-                        {effectiveNextFlyRecommendation.color2 ? ` · ${effectiveNextFlyRecommendation.color2}` : ''}
-                      </Text>
-                    </Pressable>
-                    <Pressable style={styles.nextFlyFullRig} onPress={applyNextRecommendation}>
-                      <Text style={styles.nextFlyFullRigText}>Apply full rig</Text>
-                    </Pressable>
-                  </>
-                ) : (
-                  <Pressable style={styles.nextFlyAction} onPress={applyPrimarySuggestion}>
-                    <Text style={styles.nextFlyActionLabel}>Suggestion</Text>
-                    <Text style={styles.nextFlyActionValue}>
-                      {effectiveNextFlyRecommendation.pattern}
-                      {effectiveNextFlyRecommendation.size != null ? ` #${effectiveNextFlyRecommendation.size}` : ''}
-                      {effectiveNextFlyRecommendation.color ? ` · ${effectiveNextFlyRecommendation.color}` : ''}
-                    </Text>
-                  </Pressable>
-                )}
+              <View style={styles.flyPickerHeader}>
+                <Text style={styles.flyPickerTitle}>{title}</Text>
+                <Pressable onPress={onClose} hitSlop={12}>
+                  <Text style={styles.flyPickerClose}>Cancel</Text>
+                </Pressable>
               </View>
-            </View>
-          ) : null}
-          <ScrollView
-            style={styles.flyPickerScroll}
-            contentContainerStyle={styles.flyPickerContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator
-          >
-            {(pickerName || pickerName2) && (() => {
-              const matchPrimary = userFlies.find(
-                (f) =>
-                  f.name === (pickerName ?? '')?.trim() &&
-                  (f.size ?? null) === (pickerSize ?? null) &&
-                  (f.color ?? null) === (pickerColor ?? null),
-              );
-              const matchDropper =
-                pickerName2 != null && String(pickerName2).trim()
-                  ? userFlies.find(
-                      (f) =>
-                        f.name === String(pickerName2).trim() &&
-                        (f.size ?? null) === (pickerSize2 ?? null) &&
-                        (f.color ?? null) === (pickerColor2 ?? null),
-                    )
-                  : null;
-              const primaryUrl = matchPrimary?.photo_url ?? null;
-              const dropperUrl = matchDropper?.photo_url ?? null;
-              if (!primaryUrl && !dropperUrl) return null;
-              return (
-                <>
-                  <Text style={styles.flyFieldLabel}>Photo (optional)</Text>
-                  <View style={styles.flyThumbnailRow}>
-                    {primaryUrl ? <Image source={{ uri: primaryUrl }} style={styles.flyThumbnailImage} /> : null}
-                    {dropperUrl ? <Image source={{ uri: dropperUrl }} style={styles.flyThumbnailImage} /> : null}
+
+              {effectiveNextFlyRecommendation ? (
+                <View style={styles.nextFlyBanner}>
+                  <Text style={styles.nextFlyLabel}>
+                    {recommendationLoading ? 'AI thinking…' : 'Try next'}
+                  </Text>
+                  <View style={styles.nextFlyBody}>
+                    <View style={styles.nextFlyTilesCol}>
+                      {singleEditSlot !== 'secondary' ? (
+                      <FlyImageTile
+                        name={effectiveNextFlyRecommendation.pattern}
+                        photoUrl={resolveFlyPhotoUrl(
+                          effectiveNextFlyRecommendation.pattern,
+                          effectiveNextFlyRecommendation.size,
+                          effectiveNextFlyRecommendation.color,
+                          null,
+                          effectiveNextFlyRecommendation.fly_id ?? null,
+                          userFlies,
+                          flyCatalog,
+                        )}
+                        size={effectiveNextFlyRecommendation.size}
+                        color={effectiveNextFlyRecommendation.color}
+                        variant="row"
+                        onPress={applyRecPrimary}
+                      />
+                      ) : null}
+                      {recHasDropper && singleEditSlot !== 'primary' ? (
+                        <FlyImageTile
+                          name={effectiveNextFlyRecommendation.pattern2!.trim()}
+                          photoUrl={resolveFlyPhotoUrl(
+                            effectiveNextFlyRecommendation.pattern2!.trim(),
+                            effectiveNextFlyRecommendation.size2 ?? null,
+                            effectiveNextFlyRecommendation.color2 ?? null,
+                            null,
+                            effectiveNextFlyRecommendation.fly_id2 ?? null,
+                            userFlies,
+                            flyCatalog,
+                          )}
+                          size={effectiveNextFlyRecommendation.size2 ?? null}
+                          color={effectiveNextFlyRecommendation.color2 ?? null}
+                          variant="row"
+                          onPress={applyRecDropper}
+                        />
+                      ) : null}
+                    </View>
+                    <View style={styles.nextFlyTextCol}>
+                      {effectiveNextFlyRecommendation.reason ? (
+                        <Text style={styles.nextFlyReason} numberOfLines={5}>
+                          {effectiveNextFlyRecommendation.reason}
+                        </Text>
+                      ) : null}
+                    </View>
                   </View>
-                </>
-              );
-            })()}
+                </View>
+              ) : null}
 
-            <Text style={styles.flyFieldLabel}>Pattern</Text>
-            <Pressable style={styles.patternTrigger} onPress={() => setPrimaryPatternPickerOpen(true)}>
-              <Text
-                style={[styles.patternTriggerText, !primaryPatternSummary && styles.patternTriggerPlaceholder]}
-                numberOfLines={2}
-              >
-                {primaryPatternSummary ?? 'Select pattern'}
-              </Text>
-              <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
-            </Pressable>
-            {primaryManual ? (
-              <TextInput
-                style={styles.manualPatternInput}
-                value={pickerName ?? ''}
-                onChangeText={(t) => {
-                  setPickerName(t.length > 0 ? t : null);
-                  setPrimaryUserBoxFlyId(null);
-                  setPrimaryCatalogFlyId(null);
-                }}
-                placeholder="Custom pattern name"
-                placeholderTextColor={colors.textTertiary}
-                autoCapitalize="words"
-              />
-            ) : null}
+              <ScrollView style={styles.flyPickerScroll} contentContainerStyle={styles.flyPickerContent} keyboardShouldPersistTaps="handled">
+                {dropperSectionOpen && !singleEditSlot ? (
+                  <View style={styles.slotSwitcher}>
+                    <Pressable
+                      style={[styles.slotChip, activeSlot === 'primary' && styles.slotChipActive]}
+                      onPress={() => setActiveSlot('primary')}
+                    >
+                      {renderSlotChip('Primary', primarySlotChipPreview, activeSlot === 'primary')}
+                    </Pressable>
+                    <Pressable
+                      style={[styles.slotChip, activeSlot === 'dropper' && styles.slotChipActive]}
+                      onPress={() => setActiveSlot('dropper')}
+                    >
+                      {renderSlotChip('Secondary', dropperSlotChipPreview, activeSlot === 'dropper')}
+                    </Pressable>
+                  </View>
+                ) : null}
 
-            <Text style={styles.flyFieldLabel}>Size (optional)</Text>
-            <View style={styles.chipRow}>
-              <Pressable
-                style={[styles.chip, pickerSize === null && styles.chipActive]}
-                onPress={() => setPickerSize(null)}
-              >
-                <Text style={[styles.chipText, pickerSize === null && styles.chipTextActive]}>None</Text>
-              </Pressable>
-              {FLY_SIZES.map((size) => (
-                <Pressable
-                  key={size}
-                  style={[styles.chip, pickerSize === size && styles.chipActive]}
-                  onPress={() => setPickerSize(size)}
-                >
-                  <Text style={[styles.chipText, pickerSize === size && styles.chipTextActive]}>#{size}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.flyFieldLabel}>Color (optional)</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-              <View style={styles.chipRow}>
-                <Pressable
-                  style={[styles.chip, pickerColor === null && styles.chipActive]}
-                  onPress={() => setPickerColor(null)}
-                >
-                  <Text style={[styles.chipText, pickerColor === null && styles.chipTextActive]}>None</Text>
-                </Pressable>
-                {FLY_COLORS.map((color) => (
-                  <Pressable
-                    key={color}
-                    style={[styles.chip, pickerColor === color && styles.chipActive]}
-                    onPress={() => setPickerColor(color)}
-                  >
-                    <Text style={[styles.chipText, pickerColor === color && styles.chipTextActive]}>{color}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
-
-            <Text style={[styles.flyFieldLabel, { marginTop: Spacing.md }]}>Second fly (dropper)</Text>
-            {pickerName2 === null ? (
-              <Pressable style={styles.addDropperButton} onPress={() => setPickerName2('')}>
-                <Text style={styles.addDropperButtonText}>Add dropper (e.g. hopper-dropper)</Text>
-              </Pressable>
-            ) : (
-              <>
-                <Pressable
-                  style={styles.addDropperButton}
-                  onPress={() => {
-                    setPickerName2(null);
-                    setPickerSize2(null);
-                    setPickerColor2(null);
-                    setDropperUserBoxFlyId(null);
-                    setDropperCatalogFlyId(null);
-                    setDropperManual(false);
-                  }}
-                >
-                  <Text style={styles.addDropperButtonText}>Remove dropper</Text>
-                </Pressable>
-                <Pressable style={styles.patternTrigger} onPress={() => setDropperPatternPickerOpen(true)}>
-                  <Text
-                    style={[styles.patternTriggerText, !dropperPatternSummary && styles.patternTriggerPlaceholder]}
-                    numberOfLines={2}
-                  >
-                    {dropperPatternSummary ?? 'Select dropper pattern'}
-                  </Text>
-                  <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
-                </Pressable>
-                {dropperManual ? (
+                <View style={styles.searchWrap}>
+                  <Ionicons name="search" size={18} color={colors.textTertiary} />
                   <TextInput
-                    style={styles.manualPatternInput}
-                    value={pickerName2 ?? ''}
-                    onChangeText={(t) => {
-                      setPickerName2(t.trim() ? t : '');
+                    style={styles.searchInput}
+                    value={flySearch}
+                    onChangeText={setFlySearch}
+                    placeholder="Search flies…"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    clearButtonMode="while-editing"
+                  />
+                </View>
+
+                <FlyImageGrid
+                  title="My fly box"
+                  items={boxGridItems}
+                  selectedKey={selectedBoxKey}
+                  onSelect={(item) => applyUserFly(item, effectiveActiveSlot)}
+                  onAddNew={userId && !flySearchQuery ? () => setAddFlyOpen(true) : undefined}
+                  addNewLabel="Add New"
+                  emptyMessage={flySearchQuery ? 'No matches in your box' : 'No flies in your box yet'}
+                />
+
+                <FlyImageGrid
+                  title="Catalog"
+                  items={catalogGridItems}
+                  selectedKey={selectedCatalogKey}
+                  onSelect={(item) => applyCatalogFly(item, effectiveActiveSlot)}
+                  emptyMessage={flySearchQuery ? 'No matches in catalog' : 'No flies in catalog'}
+                />
+
+                {!singleEditSlot ? (
+                pickerName2 === null ? (
+                  <Pressable style={styles.addDropperButton} onPress={() => setPickerName2('')}>
+                    <Text style={styles.addDropperButtonText}>Add secondary (e.g. hopper-dropper)</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    style={styles.addDropperButton}
+                    onPress={() => {
+                      setPickerName2(null);
+                      setPickerSize2(null);
+                      setPickerColor2(null);
                       setDropperUserBoxFlyId(null);
                       setDropperCatalogFlyId(null);
+                      setActiveSlot('primary');
                     }}
-                    placeholder="Custom dropper name"
-                    placeholderTextColor={colors.textTertiary}
-                    autoCapitalize="words"
-                  />
-                ) : null}
-                <Text style={styles.flyFieldLabel}>Size (optional)</Text>
-                <View style={styles.chipRow}>
-                  <Pressable
-                    style={[styles.chip, pickerSize2 === null && styles.chipActive]}
-                    onPress={() => setPickerSize2(null)}
                   >
-                    <Text style={[styles.chipText, pickerSize2 === null && styles.chipTextActive]}>None</Text>
+                    <Text style={styles.addDropperButtonText}>Remove secondary</Text>
                   </Pressable>
-                  {FLY_SIZES.map((size) => (
-                    <Pressable
-                      key={size}
-                      style={[styles.chip, pickerSize2 === size && styles.chipActive]}
-                      onPress={() => setPickerSize2(size)}
-                    >
-                      <Text style={[styles.chipText, pickerSize2 === size && styles.chipTextActive]}>#{size}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <Text style={styles.flyFieldLabel}>Color (optional)</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                  <View style={styles.chipRow}>
-                    <Pressable
-                      style={[styles.chip, pickerColor2 === null && styles.chipActive]}
-                      onPress={() => setPickerColor2(null)}
-                    >
-                      <Text style={[styles.chipText, pickerColor2 === null && styles.chipTextActive]}>None</Text>
-                    </Pressable>
-                    {FLY_COLORS.map((color) => (
-                      <Pressable
-                        key={color}
-                        style={[styles.chip, pickerColor2 === color && styles.chipActive]}
-                        onPress={() => setPickerColor2(color)}
-                      >
-                        <Text style={[styles.chipText, pickerColor2 === color && styles.chipTextActive]}>{color}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </ScrollView>
-              </>
-            )}
-          </ScrollView>
+                )
+                ) : null}
+              </ScrollView>
 
-          <View style={styles.flyPickerFooter}>
-            <Pressable
-              style={[styles.confirmFlyButton, !pickerName && styles.confirmFlyButtonDisabled]}
-              onPress={handleConfirm}
-              disabled={!pickerName}
-            >
-              <Text style={styles.confirmFlyButtonText}>{confirmLabel}</Text>
-            </Pressable>
-          </View>
+              <View style={[styles.flyPickerFooter, { paddingBottom: Math.max(Spacing.md, insets.bottom) }]}>
+                <Pressable
+                  style={[styles.confirmFlyButton, !canConfirm && styles.confirmFlyButtonDisabled]}
+                  onPress={handleConfirm}
+                  disabled={!canConfirm}
+                >
+                  <Text style={styles.confirmFlyButtonText}>{confirmButtonLabel}</Text>
+                </Pressable>
+              </View>
             </View>
-          </SafeAreaView>
+          </View>
         </View>
       </View>
 
-      <TripFlyPatternPickerModal
-          visible={primaryPatternPickerOpen}
-          onRequestClose={() => setPrimaryPatternPickerOpen(false)}
-          userFlies={userFlies}
-          catalog={flyCatalog}
-          title="Primary pattern"
-          selectedUserBoxFlyId={primaryUserBoxFlyId}
-          selectedCatalogFlyId={primaryCatalogFlyId}
-          otherActive={primaryManual}
-          onSelectUserFly={(fly) => {
-            setPickerName(fly.name);
-            setPickerSize(fly.size ?? null);
-            setPickerColor(fly.color ?? null);
-            setPrimaryUserBoxFlyId(fly.id);
-            setPrimaryCatalogFlyId(null);
-            setPrimaryManual(false);
-          }}
-          onSelectCatalogFly={(item) => {
-            setPickerName(item.name);
-            setPickerSize(null);
-            setPickerColor(null);
-            setPrimaryUserBoxFlyId(null);
-            setPrimaryCatalogFlyId(item.id);
-            setPrimaryManual(false);
-          }}
-          initialOtherPatternName={pickerName ?? ''}
-          onSelectOther={(customName) => {
-            setPrimaryUserBoxFlyId(null);
-            setPrimaryCatalogFlyId(null);
-            setPrimaryManual(true);
-            setPickerName(customName.trim() ? customName.trim() : null);
-            setPickerSize(null);
-            setPickerColor(null);
-          }}
-        />
-
-        <TripFlyPatternPickerModal
-          visible={dropperPatternPickerOpen}
-          onRequestClose={() => setDropperPatternPickerOpen(false)}
-          userFlies={userFlies}
-          catalog={flyCatalog}
-          title="Dropper pattern"
-          selectedUserBoxFlyId={dropperUserBoxFlyId}
-          selectedCatalogFlyId={dropperCatalogFlyId}
-          otherActive={dropperManual}
-          onSelectUserFly={(fly) => {
-            setPickerName2(fly.name);
-            setPickerSize2(fly.size ?? null);
-            setPickerColor2(fly.color ?? null);
-            setDropperUserBoxFlyId(fly.id);
-            setDropperCatalogFlyId(null);
-            setDropperManual(false);
-          }}
-          onSelectCatalogFly={(item) => {
-            setPickerName2(item.name);
-            setPickerSize2(null);
-            setPickerColor2(null);
-            setDropperUserBoxFlyId(null);
-            setDropperCatalogFlyId(item.id);
-            setDropperManual(false);
-          }}
-          initialOtherPatternName={pickerName2 ?? ''}
-          onSelectOther={(customName) => {
-            setDropperUserBoxFlyId(null);
-            setDropperCatalogFlyId(null);
-            setDropperManual(true);
-            setPickerName2(customName.trim() ? customName.trim() : null);
-            setPickerSize2(null);
-            setPickerColor2(null);
-          }}
-        />
+      {userId ? (
+        <>
+          <FlyCatalogAddModal
+            visible={addFlyOpen}
+            onClose={() => setAddFlyOpen(false)}
+            catalog={flyCatalog}
+            onSelectCatalogFly={handleCatalogAddSelect}
+            onSelectOther={handleOtherAddSelect}
+            title="Add fly to box"
+          />
+          <AddFlySheet
+            visible={addSheetOpen}
+            onClose={handleAddSheetClose}
+            userId={userId}
+            isConnected={isConnected}
+            catalog={flyCatalog}
+            initialCatalogFly={initialCatalogFlyForAdd}
+            openAsCustom={openAsCustom}
+            tripId={tripId}
+            onSaved={handleAddSheetSaved}
+            title="Add fly to box"
+          />
+        </>
+      ) : null}
     </Modal>
   );
 }
 
 function createFlyPickerStyles(colors: ThemeColors, modalScrim: string) {
   return StyleSheet.create({
-  modalRoot: {
-    flex: 1,
-    backgroundColor: modalScrim,
-  },
-  /** Full-screen tap target behind the sheet (sits under overlay in z-order). */
-  modalDimTap: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'transparent',
-  },
-  modalSheetOverlay: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'flex-end',
-    backgroundColor: 'transparent',
-  },
-  modalSheetSafe: {
-    width: '100%',
-    backgroundColor: 'transparent',
-  },
-  flyPickerSheet: {
-    width: '100%',
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: BorderRadius.lg,
-    borderTopRightRadius: BorderRadius.lg,
-    overflow: 'hidden',
-    flexDirection: 'column',
-    alignSelf: 'stretch',
-  },
-  flyPickerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
-    flexShrink: 0,
-  },
-  nextFlyBanner: {
-    backgroundColor: colors.accent,
-    paddingVertical: Spacing.sm + 2,
-    paddingHorizontal: Spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    flexShrink: 0,
-    flexDirection: 'column',
-  },
-  nextFlyLeft: {
-    width: '100%',
-  },
-  nextFlyLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: colors.textInverse,
-    textTransform: 'uppercase',
-  },
-  nextFlyReason: {
-    fontSize: FontSize.xs,
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: 4,
-    marginBottom: Spacing.sm,
-  },
-  nextFlyAction: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: BorderRadius.md,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    marginTop: Spacing.xs,
-  },
-  nextFlyActionLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.75)',
-    textTransform: 'uppercase',
-  },
-  nextFlyActionValue: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    color: colors.textInverse,
-    marginTop: 2,
-  },
-  nextFlyFullRig: {
-    marginTop: Spacing.sm,
-    alignSelf: 'flex-start',
-    paddingVertical: Spacing.xs,
-  },
-  nextFlyFullRigText: {
-    fontSize: FontSize.sm,
-    fontWeight: '700',
-    color: colors.textInverse,
-    textDecorationLine: 'underline',
-  },
-  flyPickerTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  flyPickerClose: {
-    fontSize: FontSize.md,
-    color: colors.primary,
-    fontWeight: '600',
-  },
-  flyPickerScroll: {
-    flexGrow: 1,
-    flexShrink: 1,
-    minHeight: 0,
-  },
-  flyPickerContent: {
-    padding: Spacing.lg,
-    paddingBottom: Spacing.lg,
-  },
-  flyPickerFooter: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    paddingBottom: Spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.surface,
-    flexShrink: 0,
-  },
-  flyThumbnailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  flyThumbnailImage: {
-    width: 64,
-    height: 64,
-    borderRadius: BorderRadius.sm,
-    backgroundColor: colors.border,
-  },
-  flyFieldLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.sm,
-  },
-  patternTrigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
-    marginBottom: Spacing.sm,
-    backgroundColor: colors.background,
-    gap: Spacing.sm,
-  },
-  patternTriggerText: {
-    flex: 1,
-    fontSize: FontSize.md,
-    color: colors.text,
-    fontWeight: '500',
-  },
-  patternTriggerPlaceholder: {
-    color: colors.textTertiary,
-    fontWeight: '400',
-  },
-  manualPatternInput: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    fontSize: FontSize.md,
-    color: colors.text,
-    marginBottom: Spacing.md,
-  },
-  chipScroll: {
-    marginBottom: Spacing.xs,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.xs,
-    marginBottom: Spacing.xs,
-  },
-  chip: {
-    backgroundColor: colors.background,
-    borderRadius: BorderRadius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs + 2,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-  },
-  chipActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '15',
-  },
-  chipText: {
-    fontSize: FontSize.sm,
-    color: colors.textSecondary,
-    fontWeight: '500',
-  },
-  chipTextActive: {
-    color: colors.primary,
-    fontWeight: '600',
-  },
-  addDropperButton: {
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    marginBottom: Spacing.sm,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderStyle: 'dashed',
-    alignSelf: 'flex-start',
-  },
-  addDropperButtonText: {
-    fontSize: FontSize.sm,
-    color: colors.primary,
-  },
-  confirmFlyButton: {
-    backgroundColor: colors.primary,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  confirmFlyButtonDisabled: {
-    backgroundColor: colors.border,
-  },
-  confirmFlyButtonText: {
-    color: colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: '600',
-  },
-});
+    modalRoot: { flex: 1, backgroundColor: modalScrim },
+    modalDimTap: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
+    modalSheetOverlay: { flex: 1, width: '100%', justifyContent: 'flex-end', backgroundColor: 'transparent' },
+    modalSheetSafe: { width: '100%', backgroundColor: 'transparent' },
+    flyPickerSheet: {
+      width: '100%',
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: BorderRadius.lg,
+      borderTopRightRadius: BorderRadius.lg,
+      overflow: 'hidden',
+      flexDirection: 'column',
+      alignSelf: 'stretch',
+    },
+    flyPickerHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: Spacing.lg,
+      paddingVertical: Spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    flyPickerTitle: { fontSize: FontSize.xl, fontWeight: '700', color: colors.text },
+    flyPickerClose: { fontSize: FontSize.md, color: colors.primary, fontWeight: '600' },
+    nextFlyBanner: {
+      backgroundColor: colors.accent,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.lg,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    nextFlyLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.textInverse,
+      textTransform: 'uppercase',
+    },
+    nextFlyReason: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.85)', lineHeight: 16 },
+    nextFlyBody: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      marginTop: Spacing.xs,
+      alignItems: 'flex-start',
+    },
+    nextFlyTilesCol: {
+      width: 132,
+      gap: Spacing.xs,
+      flexShrink: 0,
+    },
+    nextFlyTextCol: {
+      flex: 1,
+      minWidth: 0,
+    },
+    flyPickerScroll: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
+    flyPickerContent: { padding: Spacing.lg, paddingBottom: Spacing.lg },
+    flyPickerFooter: {
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.md,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    slotSwitcher: {
+      flexDirection: 'row',
+      gap: Spacing.xs,
+      marginBottom: Spacing.md,
+    },
+    slotChip: {
+      flex: 1,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.sm,
+      backgroundColor: colors.background,
+    },
+    slotChipActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '12',
+    },
+    slotChipBody: {
+      alignItems: 'center',
+      gap: 2,
+    },
+    slotChipText: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 16,
+    },
+    slotChipTextActive: { color: colors.primary },
+    slotChipOld: {
+      color: colors.textTertiary,
+      textDecorationLine: 'line-through',
+    },
+    slotChipNewLine: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.text,
+      textAlign: 'center',
+      lineHeight: 16,
+    },
+    slotChipNewActive: {
+      color: colors.primary,
+    },
+    flyFieldLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+      marginBottom: Spacing.sm,
+    },
+    searchWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.sm,
+      paddingHorizontal: Spacing.sm,
+      marginBottom: Spacing.md,
+      backgroundColor: colors.background,
+      gap: Spacing.xs,
+    },
+    searchInput: { flex: 1, fontSize: FontSize.md, color: colors.text, paddingVertical: Spacing.sm },
+    addDropperButton: {
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      marginBottom: Spacing.sm,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      borderStyle: 'dashed',
+      alignSelf: 'flex-start',
+    },
+    addDropperButtonText: { fontSize: FontSize.sm, color: colors.primary },
+    confirmFlyButton: {
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      alignItems: 'center',
+    },
+    confirmFlyButtonDisabled: { backgroundColor: colors.border },
+    confirmFlyButtonText: { color: colors.textInverse, fontSize: FontSize.md, fontWeight: '600' },
+  });
 }

@@ -1,4 +1,5 @@
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { PinchZoomPhotoViewport } from '@/src/components/PinchZoomPhotoViewport';
 import { Spacing, FontSize, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { Photo } from '@/src/types';
@@ -25,6 +26,8 @@ export type TripViewerPhotoSlide = {
   date?: string;
   species?: string;
   caption?: string;
+  /** Weight, depth, structure, presentation, released, etc. */
+  detailLines?: string[];
 };
 
 export function photosToViewerSlides(photos: Photo[], locationName?: string): TripViewerPhotoSlide[] {
@@ -148,20 +151,28 @@ export function TripFullScreenPhotoViewerModal({
                 }}
                 renderItem={({ item }) => (
                   <View style={[styles.page, { width: winWidth, height: heroHeight }]}>
-                    <OfflineTripPhotoImage
-                      remoteUri={item.remoteUri}
-                      style={{ width: winWidth, height: heroHeight }}
-                      contentFit="contain"
-                    />
+                    <PinchZoomPhotoViewport width={winWidth} height={heroHeight}>
+                      <OfflineTripPhotoImage
+                        remoteUri={item.remoteUri}
+                        style={{ width: winWidth, height: heroHeight }}
+                        contentFit="contain"
+                      />
+                    </PinchZoomPhotoViewport>
                   </View>
                 )}
               />
             ) : (
-              <OfflineTripPhotoImage
-                remoteUri={current.remoteUri}
-                style={[styles.singleImage, { width: winWidth, height: heroHeight }]}
-                contentFit="contain"
-              />
+              <PinchZoomPhotoViewport
+                width={winWidth}
+                height={heroHeight}
+                style={styles.singleImage}
+              >
+                <OfflineTripPhotoImage
+                  remoteUri={current.remoteUri}
+                  style={{ width: winWidth, height: heroHeight }}
+                  contentFit="contain"
+                />
+              </PinchZoomPhotoViewport>
             )}
             <View style={styles.info}>
               {slides.length > 1 ? (
@@ -188,6 +199,11 @@ export function TripFullScreenPhotoViewerModal({
                 </Text>
               ) : null}
               {current.caption ? <Text style={styles.caption}>{current.caption}</Text> : null}
+              {current.detailLines?.map((line, i) => (
+                <Text key={`${i}-${line}`} style={styles.detailLine}>
+                  {line}
+                </Text>
+              ))}
             </View>
           </ScrollView>
         </View>
@@ -247,6 +263,11 @@ function createStyles(colors: ThemeColors) {
       fontSize: FontSize.sm,
       color: colors.textTertiary,
       marginTop: Spacing.xs,
+    },
+    detailLine: {
+      fontSize: FontSize.sm,
+      color: colors.textTertiary,
+      lineHeight: 20,
     },
   });
 }

@@ -35,6 +35,7 @@ import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
+import { ExpandableMapFrame } from '@/src/components/map/ExpandableMapFrame';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 
 /** All values must match Postgres `location_type` enum (see migrations). */
@@ -459,23 +460,29 @@ export default function AddLocationScreen() {
           ) : null}
         </View>
 
-        <View
-          style={styles.mapContainer}
-          pointerEvents={parentPickerOpen ? 'none' : 'auto'}
-        >
-          <TripMapboxMapView
-            containerStyle={styles.map}
-            centerCoordinate={mapCenter}
-            zoomLevel={mapZoom}
-            cameraKey={`add-loc-${cameraNonce}`}
-            markers={catalogMarkers}
-            showUserLocation
-            onMapIdle={handleMapIdle}
-            onZoomLevelChange={setMapZoom}
-          />
-          <View style={styles.centerPinWrap} pointerEvents="none">
-            <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
-          </View>
+        <View pointerEvents={parentPickerOpen ? 'none' : 'auto'}>
+          <ExpandableMapFrame
+            previewContainerStyle={styles.mapContainer}
+            overlay={
+              <View style={styles.centerPinWrap} pointerEvents="none">
+                <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
+              </View>
+            }
+          >
+            {() => (
+              <TripMapboxMapView
+                expandable={false}
+                containerStyle={styles.map}
+                centerCoordinate={mapCenter}
+                zoomLevel={mapZoom}
+                cameraKey={`add-loc-${cameraNonce}`}
+                markers={catalogMarkers}
+                showUserLocation
+                onMapIdle={handleMapIdle}
+                onZoomLevelChange={setMapZoom}
+              />
+            )}
+          </ExpandableMapFrame>
         </View>
 
         <View style={styles.formPanel}>

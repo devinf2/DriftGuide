@@ -11,13 +11,15 @@ export type PendingFlyCreateInput = {
   color?: string | null;
   presentation?: FlyPresentation | null;
   photo_url?: string | null;
+  /** Local file URI to upload when back online */
+  local_photo_uri?: string | null;
   fly_color_id?: string | null;
   fly_size_id?: string | null;
   quantity?: number | null;
 };
 
 export type PendingFlyOp =
-  | { kind: 'create'; clientBoxId: string; userId: string; input: PendingFlyCreateInput }
+  | { kind: 'create'; clientBoxId: string; userId: string; tripId?: string; input: PendingFlyCreateInput }
   | { kind: 'delete'; userId: string; serverId: string };
 
 export async function getPendingFlyOps(): Promise<PendingFlyOp[]> {
@@ -39,9 +41,10 @@ export async function enqueuePendingFlyCreate(
   userId: string,
   clientBoxId: string,
   input: PendingFlyCreateInput,
+  tripId?: string,
 ): Promise<void> {
   const ops = await getPendingFlyOps();
-  ops.push({ kind: 'create', clientBoxId, userId, input });
+  ops.push({ kind: 'create', clientBoxId, userId, tripId, input });
   await setPendingFlyOps(ops);
 }
 

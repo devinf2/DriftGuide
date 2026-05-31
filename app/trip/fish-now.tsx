@@ -43,8 +43,7 @@ import {
   LocationPinParentTwoStepFlow,
   type PinParentFlowStep,
 } from '@/src/components/location/LocationPinParentTwoStepFlow';
-// Re-enable with fish-now offline prompt below.
-// import { isPlaceCoveredByOfflineDownloads } from '@/src/utils/offlineDownloadCoverage';
+import { handleOfflineDataBeforeTrip } from '@/src/utils/offlineTripDownloadPrompt';
 import { useOfflineDownloadResumeStore } from '@/src/stores/offlineDownloadResumeStore';
 
 /**
@@ -304,48 +303,30 @@ export default function FishNowScreen() {
         return;
       }
 
-      // Optional: prompt to download offline map before starting trip (see offline-region-picker + fishNowLocation resume).
-      // if (!options?.skipOfflineDownloadPrompt && isConnected) {
-      //   const lat = loc.latitude;
-      //   const lng = loc.longitude;
-      //   const coordsOk =
-      //     lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
-      //   if (coordsOk && !(await isPlaceCoveredByOfflineDownloads(lat, lng, loc.id))) {
-      //     Alert.alert(
-      //       'Download map for offline?',
-      //       'This place is not inside a saved offline map region. Download the map now so you can use it without a signal?',
-      //       [
-      //         {
-      //           text: 'Not now',
-      //           style: 'cancel',
-      //           onPress: () => {
-      //             void executeStartTripForLocation(loc);
-      //           },
-      //         },
-      //         {
-      //           text: 'Download',
-      //           onPress: () => {
-      //             router.push({
-      //               pathname: '/trip/offline-region-picker',
-      //               params: {
-      //                 centerLat: String(lat),
-      //                 centerLng: String(lng),
-      //                 locationId: loc.id,
-      //                 resumeFlow: 'fish-now',
-      //                 resumeLocation: JSON.stringify(loc),
-      //               },
-      //             });
-      //           },
-      //         },
-      //       ],
-      //     );
-      //     return;
-      //   }
-      // }
+      if (!options?.skipOfflineDownloadPrompt) {
+        const lat = loc.latitude;
+        const lng = loc.longitude;
+        const coordsOk =
+          lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+        if (coordsOk) {
+          const shouldStop = await handleOfflineDataBeforeTrip({
+            lat,
+            lng,
+            locationId: loc.id,
+            userId: user.id,
+            isConnected,
+            router,
+            resumeFlow: 'fish-now',
+            onProceed: () => executeStartTripForLocation(loc),
+            resumeLocation: loc,
+          });
+          if (shouldStop) return;
+        }
+      }
 
       await executeStartTripForLocation(loc);
     },
-    [user, executeStartTripForLocation],
+    [user, isConnected, executeStartTripForLocation, router],
   );
 
   useFocusEffect(

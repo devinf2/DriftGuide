@@ -1,4 +1,7 @@
-import type { CatchData } from '@/src/types';
+import type { CatchData, Photo, TripEvent } from '@/src/types';
+import type { TripViewerPhotoSlide } from '@/src/components/trip/TripFullScreenPhotoViewerModal';
+import { formatTripDate } from '@/src/utils/formatters';
+import { formatCatchSpeciesLabel, getCatchViewerDetailLines } from '@/src/utils/journalTimeline';
 
 function dedupePreserveOrder(urls: string[]): string[] {
   const seen = new Set<string>();
@@ -25,6 +28,42 @@ export function mergeCatchDataPhotoUrls(remote: CatchData, local: CatchData): Ca
   return { ...remote, photo_urls: merged, photo_url: merged[0] ?? null };
 }
 
+/** Album rows keyed by catch event id (`photos.catch_id`). */
+export function buildAlbumPhotoUrlsByCatchId(photos: Photo[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  const sorted = [...photos].sort((a, b) => {
+    const ao = a.display_order ?? 0;
+    const bo = b.display_order ?? 0;
+    if (ao !== bo) return ao - bo;
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+  });
+  for (const photo of sorted) {
+    const catchId = photo.catch_id?.trim();
+    const url = photo.url?.trim();
+    if (!catchId || !url) continue;
+    const list = map.get(catchId) ?? [];
+    list.push(url);
+    map.set(catchId, list);
+  }
+  return map;
+}
+
+/**
+ * Prefer canonical album URLs for a catch; fall back to JSON on the trip event.
+ * Keeps Fishing timeline and Photos tab on the same loaded rows.
+ */
+export function resolveCatchDisplayPhotoUrls(
+  catchEventId: string,
+  data: CatchData,
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const fromAlbum = albumPhotoUrlsByCatchId?.get(catchEventId);
+  if (fromAlbum?.length) {
+    return dedupePreserveOrder([...fromAlbum]);
+  }
+  return normalizeCatchPhotoUrls(data);
+}
+
 /** Ordered image URLs for a catch (remote or local file URIs). */
 export function normalizeCatchPhotoUrls(data: CatchData): string[] {
   const fromUrls = (data.photo_urls ?? []).map((u) => u?.trim()).filter(Boolean) as string[];
@@ -36,6 +75,15 @@ export function normalizeCatchPhotoUrls(data: CatchData): string[] {
 export function getCatchHeroPhotoUrl(data: CatchData): string | null {
   const urls = normalizeCatchPhotoUrls(data);
   return urls[0] ?? null;
+}
+
+/** Hero URL for map pins / previews — prefers album rows when available. */
+export function resolveCatchHeroPhotoUrl(
+  catchEventId: string,
+  data: CatchData,
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
+): string | null {
+  return resolveCatchDisplayPhotoUrls(catchEventId, data, albumPhotoUrlsByCatchId)[0] ?? null;
 }
 
 /** Only http(s) URLs — safe for Supabase `catches` / map rows; omit file:// until upload completes. */
@@ -82,5 +130,21 @@ export function catchDataWithoutPhotoUri(data: CatchData, uriToRemove: string): 
     ...data,
     photo_urls: urls.length ? urls : null,
     photo_url: urls[0] ?? null,
+  };
+}
+
+/** Metadata for full-screen catch photo viewer (excludes `remoteUri`). */
+export function buildCatchViewerSlideFields(
+  event: TripEvent,
+  data: CatchData,
+  locationName?: string,
+): Omit<TripViewerPhotoSlide, 'remoteUri'> {
+  const detailLines = getCatchViewerDetailLines(data);
+  return {
+    location: locationName,
+    date: formatTripDate(event.timestamp),
+    species: formatCatchSpeciesLabel(data) ?? undefined,
+    caption: data.note?.trim() || undefined,
+    detailLines: detailLines.length > 0 ? detailLines : undefined,
   };
 }

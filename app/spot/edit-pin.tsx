@@ -1,5 +1,6 @@
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
+import { ExpandableMapFrame } from '@/src/components/map/ExpandableMapFrame';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -236,21 +237,28 @@ export default function EditSpotPinScreen() {
             <Text style={styles.webPlaceholderText}>Edit pin is available in the iOS and Android app with Mapbox.</Text>
           </View>
         ) : (
-          <>
-            <TripMapboxMapView
-              containerStyle={styles.map}
-              centerCoordinate={mapCenter}
-              zoomLevel={mapZoom}
-              cameraKey={`edit-pin-${cameraNonce}`}
-              markers={catalogMarkers}
-              showUserLocation
-              onMapIdle={handleMapIdle}
-              onZoomLevelChange={setMapZoom}
-            />
-            <View style={styles.centerPinWrap} pointerEvents="none">
-              <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
-            </View>
-          </>
+          <ExpandableMapFrame
+            previewContainerStyle={styles.mapContainer}
+            overlay={
+              <View style={styles.centerPinWrap} pointerEvents="none">
+                <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
+              </View>
+            }
+          >
+            {() => (
+              <TripMapboxMapView
+                expandable={false}
+                containerStyle={styles.map}
+                centerCoordinate={mapCenter}
+                zoomLevel={mapZoom}
+                cameraKey={`edit-pin-${cameraNonce}`}
+                markers={catalogMarkers}
+                showUserLocation
+                onMapIdle={handleMapIdle}
+                onZoomLevelChange={setMapZoom}
+              />
+            )}
+          </ExpandableMapFrame>
         )}
       </View>
     </View>

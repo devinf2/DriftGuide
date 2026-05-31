@@ -84,6 +84,21 @@ export async function patchPendingTripPayload(
   await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(data));
 }
 
+/** Replace event list on a pending trip (e.g. after fly box ID remap). */
+export async function patchPendingTripEvents(tripId: string, events: TripEvent[]): Promise<void> {
+  const raw = await AsyncStorage.getItem(PENDING_SYNC_KEY);
+  if (!raw) return;
+  const data: Record<string, PendingTripPayload> = JSON.parse(raw);
+  const prev = data[tripId];
+  if (!prev) return;
+  data[tripId] = {
+    ...prev,
+    events,
+    eventSyncState: mergeEventSyncState(prev.eventSyncState, events),
+  };
+  await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(data));
+}
+
 export async function getPendingTrips(): Promise<Record<string, PendingTripPayload>> {
   const raw = await AsyncStorage.getItem(PENDING_SYNC_KEY);
   if (!raw) return {};

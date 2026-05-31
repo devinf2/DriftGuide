@@ -13,7 +13,7 @@ import {
 } from '@/src/services/sharedSessionService';
 import { fetchProfile } from '@/src/services/friendsService';
 import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
-import type { CatchData, Trip, TripEvent, TripEventWithSource } from '@/src/types';
+import type { CatchData, Photo, Trip, TripEvent, TripEventWithSource } from '@/src/types';
 import { mergeCatchDataPhotoUrls, normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 import {
   filterEventsToViewerTripLog,
@@ -96,6 +96,8 @@ export interface SharedTripTimelineSectionProps {
   onTripPatch: (patch: Partial<Trip>) => void;
   onCatchPhotoPress?: (event: TripEvent) => void;
   onRequestEditTripPin?: (kind: TripEndpointKind) => void;
+  /** Same album rows as Photos tab (canonical URLs for catch thumbnails). */
+  tripAlbumPhotos?: Photo[];
   /** Poll interval ms for Group when online (default 15000). */
   groupPollMs?: number;
 }
@@ -110,6 +112,7 @@ export function SharedTripTimelineSection({
   onTripPatch,
   onCatchPhotoPress,
   onRequestEditTripPin,
+  tripAlbumPhotos = [],
   groupPollMs = 15000,
 }: SharedTripTimelineSectionProps) {
   const { colors } = useAppTheme();
@@ -319,6 +322,7 @@ export function SharedTripTimelineSection({
         onRequestEditTripPin={onRequestEditTripPin}
         colorTokens={colors}
         eventSyncStatusForEvent={showTimelineSync ? eventSyncStatusForEvent : undefined}
+        tripAlbumPhotos={tripAlbumPhotos}
       />
     );
   }
@@ -500,6 +504,7 @@ export function SharedTripTimelineSection({
             const peerUid = sessionTripTabOptions.find((o) => o.tripId === timelineMode)?.userId;
             return peerUid ? avatarUriByUserId.get(peerUid) ?? null : null;
           }}
+          tripAlbumPhotos={tripAlbumPhotos}
         />
       ) : null}
     </View>

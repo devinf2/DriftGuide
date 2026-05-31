@@ -1,4 +1,3 @@
-import type { RefObject } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,7 +19,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ExpoLocation from 'expo-location';
 import { v4 as uuidv4 } from 'uuid';
 import { MaterialIcons } from '@expo/vector-icons';
-import { COMMON_SPECIES as SPECIES_OPTIONS, FLY_COLORS, FLY_NAMES, FLY_SIZES } from '@/src/constants/fishingTypes';
+import { COMMON_FLIES_BY_NAME, FLY_NAMES } from '@/src/constants/fishingTypes';
+import { orderSpeciesByRecent, speciesCardShortLabel } from '@/src/constants/speciesImages';
+import { useRecentSpeciesStore } from '@/src/stores/recentSpeciesStore';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { CatchPinPickerMap } from '@/src/components/map/CatchPinPickerMap';
@@ -47,40 +48,76 @@ import type {
   Trip,
   TripEvent,
 } from '@/src/types';
-import { TripFlyPatternPickerModal } from '@/src/components/fly/TripFlyPatternPickerModal';
-import { seedSelectionFromFlyChange } from '@/src/components/fly/ChangeFlyPickerModal';
+import { ChangeFlyPickerModal, seedSelectionFromFlyChange } from '@/src/components/fly/ChangeFlyPickerModal';
+import { resolveFlyImageSource } from '@/src/utils/resolveFlyPhotoUrl';
+import { SinglePhotoZoomModal } from '@/src/components/SinglePhotoZoomModal';
 import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
 
 const MAX_CATCH_PHOTOS = 8;
-
-/** Sentinel for size/color fly dropdowns: set field to null */
-const CLEAR_FLY_FIELD = '__clear__';
-
-const PRESENTATION_OPTIONS: { value: PresentationMethod; label: string }[] = [
-  { value: 'dry', label: 'Dry' },
-  { value: 'nymph', label: 'Nymph' },
-  { value: 'streamer', label: 'Streamer' },
-  { value: 'wet', label: 'Wet' },
-  { value: 'other', label: 'Other' },
-];
-
-function presentationMethodLabel(m: PresentationMethod | null | undefined): string {
-  if (!m) return '';
-  return PRESENTATION_OPTIONS.find((o) => o.value === m)?.label ?? m;
-}
 
 const STRUCTURE_OPTIONS: { value: Structure; label: string }[] = [
   { value: 'pool', label: 'Pool' },
   { value: 'riffle', label: 'Riffle' },
   { value: 'run', label: 'Run' },
-  { value: 'undercut_bank', label: 'Undercut' },
   { value: 'eddy', label: 'Eddy' },
+  { value: 'undercut_bank', label: 'Undercut' },
   { value: 'other', label: 'Other' },
 ];
 
-function structureMethodLabel(s: Structure | null | undefined): string {
-  if (!s) return '';
-  return STRUCTURE_OPTIONS.find((o) => o.value === s)?.label ?? s;
+function formatFlySummary(name: string, size: number | null, color: string | null): string {
+  const parts: string[] = [];
+  if (name.trim()) parts.push(name.trim());
+  if (size != null) parts.push(`#${size}`);
+  if (color) parts.push(color);
+  return parts.length > 0 ? parts.join(' · ') : 'Not set';
+}
+
+function presentationForFlyPattern(
+  name: string,
+  size: number | null,
+  color: string | null,
+  userFlies: Fly[],
+  getPresentationForFly?: (
+    name: string,
+    size: number | null,
+    color: string | null,
+  ) => PresentationMethod | null,
+): PresentationMethod | null {
+  if (getPresentationForFly) {
+    return getPresentationForFly(name, size, color);
+  }
+  if (!name.trim()) return null;
+  const match = userFlies.find(
+    (f) =>
+      f.name === name.trim() &&
+      (f.size ?? null) === (size ?? null) &&
+      (f.color ?? null) === (color ?? null),
+  );
+  const pres = match?.presentation ?? COMMON_FLIES_BY_NAME[name.trim()]?.presentation ?? null;
+  if (!pres) return null;
+  return pres === 'emerger' ? 'other' : (pres as PresentationMethod);
+}
+
+function presentationForCatchRig(
+  primary: FlyChangeData,
+  dropper: FlyChangeData | null,
+  caughtOnFly: 'primary' | 'dropper' | null,
+  userFlies: Fly[],
+  getPresentationForFly?: (
+    name: string,
+    size: number | null,
+    color: string | null,
+  ) => PresentationMethod | null,
+): PresentationMethod | null {
+  const useDropper = caughtOnFly === 'dropper' && Boolean(dropper?.pattern?.trim());
+  const fly = useDropper ? dropper! : primary;
+  return presentationForFlyPattern(
+    fly.pattern ?? '',
+    fly.size ?? null,
+    fly.color ?? null,
+    userFlies,
+    getPresentationForFly,
+  );
 }
 
 function isRemoteStorageUrl(uri: string): boolean {
@@ -262,6 +299,7 @@ export type CatchDetailsModalProps = {
   onPickPhoto?: (source: 'camera' | 'library') => void;
   /** When true, edit submit skips Supabase photo/sync calls (e.g. import-past wizard). */
   deferCloudWrites?: boolean;
+  onUserFliesUpdated?: (flies: Fly[]) => void;
   /** Add mode: pre-fill gallery (e.g. import past trips). */
   initialAddPhotoUris?: string[];
   /**
@@ -364,15 +402,162 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       alignItems: 'flex-start',
       marginBottom: Spacing.sm,
     },
-    /** Presentation + water structure dropdowns on one row */
-    presentationStructureRow: {
+    /** Water structure horizontal chip row */
+    structureSection: {
+      marginBottom: Spacing.xs,
+    },
+    moreDetailsCard: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: BorderRadius.md,
+      marginBottom: Spacing.sm,
+      backgroundColor: colors.background,
+      overflow: 'hidden',
+    },
+    moreDetailsHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      padding: Spacing.md,
+    },
+    moreDetailsHeaderText: {
+      flex: 1,
+      minWidth: 0,
+    },
+    moreDetailsTitle: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    moreDetailsHint: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      marginTop: 2,
+    },
+    moreDetailsBody: {
+      paddingHorizontal: Spacing.md,
+      paddingBottom: Spacing.md,
+      gap: Spacing.sm,
+    },
+    horizontalChipScroll: {
+      marginBottom: Spacing.xs,
+    },
+    horizontalChipRow: {
       flexDirection: 'row',
       gap: Spacing.sm,
-      alignItems: 'flex-start',
+      paddingRight: Spacing.md,
+    },
+    speciesScroll: {
       marginBottom: Spacing.sm,
     },
-    presentationStructureCol: { flex: 1, minWidth: 0 },
-    catchFlyDropdownInPair: { marginBottom: 0 },
+    speciesScrollContent: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      paddingRight: Spacing.md,
+    },
+    speciesCard: {
+      width: 88,
+      alignItems: 'center',
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: Spacing.xs,
+      borderRadius: BorderRadius.md,
+      borderWidth: 2,
+      borderColor: colors.border,
+      backgroundColor: colors.background,
+    },
+    speciesCardActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '12',
+    },
+    speciesCardImage: {
+      width: 72,
+      height: 44,
+      marginBottom: 4,
+    },
+    speciesCardLabel: {
+      fontSize: FontSize.xs,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      fontWeight: '500',
+    },
+    speciesCardLabelActive: {
+      color: colors.primary,
+      fontWeight: '600',
+    },
+    speciesOtherIcon: {
+      width: 72,
+      height: 44,
+      marginBottom: 4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    flySummaryCard: {
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: Spacing.sm,
+      marginBottom: Spacing.sm,
+      gap: Spacing.xs,
+    },
+    flySummaryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+    },
+    flySummaryRowMain: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      minWidth: 0,
+    },
+    flySummaryRowSelectable: {
+      paddingVertical: Spacing.xs,
+      paddingHorizontal: Spacing.xs,
+      marginHorizontal: -Spacing.xs,
+      borderRadius: BorderRadius.sm,
+    },
+    flySummaryRowSelected: {
+      backgroundColor: colors.primary + '12',
+    },
+    flySummaryImage: {
+      width: 44,
+      height: 44,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.surface,
+    },
+    flySummaryImagePlaceholder: {
+      width: 44,
+      height: 44,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    flySummaryTextCol: {
+      flex: 1,
+      minWidth: 0,
+      gap: 2,
+    },
+    flySummaryRole: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.textTertiary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
+    },
+    flySummaryDetail: {
+      fontSize: FontSize.sm,
+      color: colors.text,
+      fontWeight: '500',
+    },
+    changeFlyIconButton: {
+      padding: Spacing.xs,
+      marginLeft: Spacing.xs,
+    },
     /** Weight column is content-sized so lb/oz never wrap; size uses remaining width. */
     sizeWeightSizeCol: { flex: 1, minWidth: 0 },
     sizeWeightWeightCol: { flexShrink: 0 },
@@ -622,16 +807,21 @@ function createCatchDetailsStyles(colors: ThemeColors) {
     },
     flyFieldLabelInline: { marginBottom: 0, flex: 1, minWidth: 0 },
     addSecondaryFlyButton: {
-      paddingVertical: Spacing.sm,
-      paddingHorizontal: Spacing.md,
+      marginTop: Spacing.xs,
       marginBottom: Spacing.sm,
-      borderRadius: BorderRadius.md,
+      paddingVertical: 4,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
       borderWidth: 1,
       borderColor: colors.primary,
       borderStyle: 'dashed',
       alignSelf: 'flex-start',
     },
-    addSecondaryFlyButtonText: { fontSize: FontSize.sm, color: colors.primary },
+    addSecondaryFlyButtonText: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.primary,
+    },
     /** Inline next to “Secondary fly” header */
     removeSecondaryFlyButton: {
       paddingVertical: 4,
@@ -718,15 +908,6 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.sm },
-    /** Released chips + catch depth on one row */
-    releasedDepthRow: {
-      flexDirection: 'row',
-      gap: Spacing.md,
-      alignItems: 'flex-start',
-      marginBottom: Spacing.sm,
-    },
-    releasedDepthLeft: { flex: 1, minWidth: 0 },
-    releasedDepthRight: { minWidth: 108, maxWidth: 140, flexShrink: 0, alignSelf: 'stretch' },
     releasedDepthChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
     catchDepthInput: { marginBottom: 0 },
     chip: {
@@ -790,6 +971,7 @@ export function CatchDetailsModal({
   onSkipAdd,
   onPickPhoto: onPickPhotoProp,
   deferCloudWrites = false,
+  onUserFliesUpdated,
   initialAddPhotoUris,
   importPhotoMetaSeed = null,
 }: CatchDetailsModalProps) {
@@ -802,8 +984,6 @@ export function CatchDetailsModal({
   const [catchFlySize2, setCatchFlySize2] = useState<number | null>(null);
   const [catchFlyColor2, setCatchFlyColor2] = useState<string | null>(null);
   const [catchSpecies, setCatchSpecies] = useState('');
-  /** True after user picks "Other" or when editing a custom species not in the preset list. */
-  const [catchSpeciesOther, setCatchSpeciesOther] = useState(false);
   const [catchSize, setCatchSize] = useState('');
   const [catchWeightLb, setCatchWeightLb] = useState('');
   const [catchWeightOz, setCatchWeightOz] = useState('');
@@ -815,28 +995,20 @@ export function CatchDetailsModal({
   /** Set when user picks a photo that includes EXIF (library or camera). */
   const [photoExifMeta, setPhotoExifMeta] = useState<PhotoExifMetadata | null>(null);
   const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper' | null>(null);
-  const [catchPresentation, setCatchPresentation] = useState<PresentationMethod | null>(null);
-  const [catchReleased, setCatchReleased] = useState<boolean | null>(true);
+  const [catchReleased, setCatchReleased] = useState<boolean | null>(null);
   const [catchStructure, setCatchStructure] = useState<Structure | null>(null);
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [pinLat, setPinLat] = useState<number | null>(null);
   const [pinLon, setPinLon] = useState<number | null>(null);
   const [latText, setLatText] = useState('');
   const [lonText, setLonText] = useState('');
-  const [catchFlyDropdownOpen, setCatchFlyDropdownOpen] = useState<
-    null | 'size' | 'color' | 'size2' | 'color2'
-  >(null);
-  const [flyPatternPickerOpen, setFlyPatternPickerOpen] = useState(false);
-  const [flyPatternPickerFor, setFlyPatternPickerFor] = useState<'primary' | 'dropper'>('primary');
+  const [changeFlyPickerOpen, setChangeFlyPickerOpen] = useState(false);
   const [primaryUserBoxFlyId, setPrimaryUserBoxFlyId] = useState<string | null>(null);
   const [primaryCatalogFlyId, setPrimaryCatalogFlyId] = useState<string | null>(null);
   const [primaryPatternManual, setPrimaryPatternManual] = useState(false);
   const [dropperUserBoxFlyId, setDropperUserBoxFlyId] = useState<string | null>(null);
   const [dropperCatalogFlyId, setDropperCatalogFlyId] = useState<string | null>(null);
   const [dropperPatternManual, setDropperPatternManual] = useState(false);
-  const [catchSpeciesDropdownOpen, setCatchSpeciesDropdownOpen] = useState(false);
-  const [catchPresentationDropdownOpen, setCatchPresentationDropdownOpen] = useState(false);
-  const [catchStructureDropdownOpen, setCatchStructureDropdownOpen] = useState(false);
-  const [catchSpeciesSearch, setCatchSpeciesSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [coordRecenterTick, setCoordRecenterTick] = useState(0);
   /** Until true, map uses `editTargetCatch` coords so we don't flash the previous catch's pin. */
@@ -846,18 +1018,9 @@ export function CatchDetailsModal({
   const [importCatchAt, setImportCatchAt] = useState(() => new Date());
   const [showImportDatePicker, setShowImportDatePicker] = useState(false);
   const [showImportTimePicker, setShowImportTimePicker] = useState(false);
+  const [zoomPhotoUri, setZoomPhotoUri] = useState<string | null>(null);
 
   const catchModalContentRef = useRef<View>(null);
-  const speciesFieldRef = useRef<View>(null);
-  const presentationFieldRef = useRef<View>(null);
-  const structureFieldRef = useRef<View>(null);
-  /** Position for species / presentation / structure sheets (relative to catch modal box). */
-  const [anchoredDropdownLayout, setAnchoredDropdownLayout] = useState<{
-    top: number;
-    left: number;
-    width: number;
-    maxScroll: number;
-  } | null>(null);
 
   /** Log past trips: all catches on an imported draft (add + edit), not live sessions. */
   const showImportCatchTime =
@@ -865,6 +1028,13 @@ export function CatchDetailsModal({
 
   const mapFallbackCenter = useMemo(() => tripMapDefaultCenterCoordinate(trip), [trip]);
   const styles = useMemo(() => createCatchDetailsStyles(colors), [colors]);
+  const recentSpeciesNames = useRecentSpeciesStore((s) => s.recentSpeciesNames);
+  const addRecentSpecies = useRecentSpeciesStore((s) => s.addRecentSpecies);
+  const orderedSpeciesOptions = useMemo(
+    () => orderSpeciesByRecent(recentSpeciesNames),
+    [recentSpeciesNames],
+  );
+  const hasSecondaryFly = Boolean((catchFlyName2 ?? '').trim());
 
   const resolvedFlyCatalog = useMemo((): FlyCatalog[] => {
     if (flyCatalogProp.length > 0) return flyCatalogProp;
@@ -883,69 +1053,84 @@ export function CatchDetailsModal({
   const resolvedFlyCatalogRef = useRef(resolvedFlyCatalog);
   resolvedFlyCatalogRef.current = resolvedFlyCatalog;
 
-  const filteredSpeciesOptions = useMemo(() => {
-    const q = catchSpeciesSearch.trim().toLowerCase();
-    if (!q) return SPECIES_OPTIONS;
-    const filtered = SPECIES_OPTIONS.filter((s) => s.toLowerCase().includes(q));
-    return filtered.includes('Other') ? filtered : [...filtered, 'Other'];
-  }, [catchSpeciesSearch]);
+  const primaryFlyImage = useMemo(
+    () =>
+      resolveFlyImageSource(
+        catchFlyName,
+        catchFlySize,
+        catchFlyColor,
+        primaryUserBoxFlyId,
+        primaryCatalogFlyId,
+        userFlies,
+        resolvedFlyCatalog,
+      ),
+    [
+      catchFlyName,
+      catchFlySize,
+      catchFlyColor,
+      primaryUserBoxFlyId,
+      primaryCatalogFlyId,
+      userFlies,
+      resolvedFlyCatalog,
+    ],
+  );
 
-  const measureOpenBelowField = useCallback((fieldRef: RefObject<View | null>, thenOpen: () => void) => {
-    const modal = catchModalContentRef.current;
-    const field = fieldRef.current;
-    if (!modal || !field) {
-      setAnchoredDropdownLayout(null);
-      thenOpen();
-      return;
-    }
-    modal.measureInWindow((mx, my, mw, mh) => {
-      field.measureInWindow((fx, fy, fw, fh) => {
-        const pad = Spacing.sm;
-        let left = fx - mx;
-        let width = Math.max(fw, 200);
-        const innerW = mw - pad * 2;
-        width = Math.min(width, innerW);
-        if (left + width > mw - pad) left = Math.max(pad, mw - pad - width);
-        if (left < pad) left = pad;
-        const top = fy - my + fh + 2;
-        const footerReserve = 56;
-        const available = mh - top - pad - footerReserve;
-        const maxScroll = Math.max(180, Math.min(360, available));
-        setAnchoredDropdownLayout({ top, left, width, maxScroll });
-        thenOpen();
-      });
-    });
-  }, []);
+  const dropperFlyImage = useMemo(
+    () =>
+      catchFlyName2 != null
+        ? resolveFlyImageSource(
+            catchFlyName2,
+            catchFlySize2,
+            catchFlyColor2,
+            dropperUserBoxFlyId,
+            dropperCatalogFlyId,
+            userFlies,
+            resolvedFlyCatalog,
+          )
+        : null,
+    [
+      catchFlyName2,
+      catchFlySize2,
+      catchFlyColor2,
+      dropperUserBoxFlyId,
+      dropperCatalogFlyId,
+      userFlies,
+      resolvedFlyCatalog,
+    ],
+  );
 
-  const openSpeciesDropdown = useCallback(() => {
-    Keyboard.dismiss();
-    setCatchFlyDropdownOpen(null);
-    setCatchPresentationDropdownOpen(false);
-    setCatchStructureDropdownOpen(false);
-    requestAnimationFrame(() => {
-      measureOpenBelowField(speciesFieldRef, () => setCatchSpeciesDropdownOpen(true));
-    });
-  }, [measureOpenBelowField]);
+  const applyFlySelectionFromPicker = useCallback(
+    (primary: FlyChangeData, dropper: FlyChangeData | null) => {
+      setCatchFlyName(primary.pattern ?? '');
+      setCatchFlySize(primary.size ?? null);
+      setCatchFlyColor(primary.color ?? null);
+      const ps = seedSelectionFromFlyChange(primary, userFliesRef.current, resolvedFlyCatalogRef.current);
+      setPrimaryUserBoxFlyId(ps.userBoxId);
+      setPrimaryCatalogFlyId(ps.catalogFlyId);
+      setPrimaryPatternManual(ps.manual);
 
-  const openPresentationDropdown = useCallback(() => {
-    Keyboard.dismiss();
-    setCatchFlyDropdownOpen(null);
-    setCatchSpeciesDropdownOpen(false);
-    setCatchStructureDropdownOpen(false);
-    requestAnimationFrame(() => {
-      measureOpenBelowField(presentationFieldRef, () => setCatchPresentationDropdownOpen(true));
-    });
-  }, [measureOpenBelowField]);
+      if (dropper?.pattern?.trim()) {
+        setCatchFlyName2(dropper.pattern);
+        setCatchFlySize2(dropper.size ?? null);
+        setCatchFlyColor2(dropper.color ?? null);
+        const ds = seedSelectionFromFlyChange(dropper, userFliesRef.current, resolvedFlyCatalogRef.current);
+        setDropperUserBoxFlyId(ds.userBoxId);
+        setDropperCatalogFlyId(ds.catalogFlyId);
+        setDropperPatternManual(ds.manual);
+        setCatchCaughtOnFly((current) => current ?? 'primary');
+      } else {
+        setCatchFlyName2(null);
+        setCatchFlySize2(null);
+        setCatchFlyColor2(null);
+        setDropperUserBoxFlyId(null);
+        setDropperCatalogFlyId(null);
+        setDropperPatternManual(false);
+        setCatchCaughtOnFly(null);
+      }
 
-  const openStructureDropdown = useCallback(() => {
-    Keyboard.dismiss();
-    setCatchFlyDropdownOpen(null);
-    setCatchSpeciesDropdownOpen(false);
-    setCatchPresentationDropdownOpen(false);
-    requestAnimationFrame(() => {
-      measureOpenBelowField(structureFieldRef, () => setCatchStructureDropdownOpen(true));
-    });
-  }, [measureOpenBelowField]);
+    },
+    [],
+  );
 
   /** Prefer the live row from `allEvents` so lat/lon match the store after sync (menu can hold a stale ref). */
   const editTargetCatch = useMemo(() => {
@@ -954,24 +1139,6 @@ export function CatchDetailsModal({
       allEvents.find((e) => e.id === editingEvent.id && e.event_type === 'catch') ?? editingEvent
     );
   }, [mode, editingEvent, allEvents]);
-
-  const catchFlyDropdownOptions: { label: string; value: string | number }[] =
-    catchFlyDropdownOpen === null
-      ? []
-      : catchFlyDropdownOpen === 'size' || catchFlyDropdownOpen === 'size2'
-        ? [{ label: '—', value: CLEAR_FLY_FIELD }, ...FLY_SIZES.map((s) => ({ label: `#${s}`, value: s }))]
-        : [{ label: '—', value: CLEAR_FLY_FIELD }, ...FLY_COLORS.map((c) => ({ label: c, value: c }))];
-
-  const applyPresentationForPattern = useCallback(
-    (pattern: string, size: number | null, color: string | null) => {
-      if (pattern.trim() && getPresentationForFly) {
-        setCatchPresentation(getPresentationForFly(pattern.trim(), size, color));
-      } else {
-        setCatchPresentation(null);
-      }
-    },
-    [getPresentationForFly],
-  );
 
   const resetFormForAdd = useCallback(() => {
     const p = seedPrimary;
@@ -991,7 +1158,6 @@ export function CatchDetailsModal({
     setDropperCatalogFlyId(ds.catalogFlyId);
     setDropperPatternManual(ds.manual);
     setCatchSpecies('');
-    setCatchSpeciesOther(false);
     setCatchSize('');
     setCatchWeightLb('');
     setCatchWeightOz('');
@@ -1000,15 +1166,14 @@ export function CatchDetailsModal({
     setCatchPhotoUris([]);
     initialEditRemoteUrlsRef.current = [];
     setPhotoExifMeta(null);
-    setCatchCaughtOnFly(null);
-    setCatchReleased(true);
+    setCatchCaughtOnFly(d?.pattern?.trim() ? 'primary' : null);
+    setCatchReleased(null);
     setCatchStructure(null);
+    setMoreDetailsOpen(false);
     setPinLat(null);
     setPinLon(null);
     setLatText('');
     setLonText('');
-    setCatchPresentation(null);
-    setFlyPatternPickerOpen(false);
   }, [seedPrimary, seedDropper]);
 
   const loadFormForEdit = useCallback(
@@ -1059,10 +1224,7 @@ export function CatchDetailsModal({
         setDropperCatalogFlyId(null);
         setDropperPatternManual(false);
       }
-      const speciesStr = data.species ?? '';
-      setCatchSpecies(speciesStr);
-      const presetSpecies = SPECIES_OPTIONS.slice(0, -1);
-      setCatchSpeciesOther(Boolean(speciesStr.trim() && !presetSpecies.includes(speciesStr)));
+      setCatchSpecies(data.species ?? '');
       setCatchSize(data.size_inches != null ? String(data.size_inches) : '');
       setCatchWeightLb(data.weight_lb != null ? String(data.weight_lb) : '');
       setCatchWeightOz(data.weight_oz != null ? String(data.weight_oz) : '');
@@ -1072,22 +1234,24 @@ export function CatchDetailsModal({
       initialEditRemoteUrlsRef.current = normalizeCatchPhotoUrls(data).filter(isRemoteStorageUrl);
       setPhotoExifMeta(null);
       setCatchCaughtOnFly(
-        data.caught_on_fly === 'dropper' ? 'dropper' : data.caught_on_fly === 'primary' ? 'primary' : null,
+        data.caught_on_fly === 'dropper'
+          ? 'dropper'
+          : data.caught_on_fly === 'primary'
+            ? 'primary'
+            : fd?.pattern2?.trim()
+              ? 'primary'
+              : null,
       );
-      const primaryPatternTrim = (fd?.pattern ?? '').trim();
-      if (!primaryPatternTrim) {
-        setCatchPresentation(null);
-      } else if (ps.manual) {
-        setCatchPresentation(data.presentation_method ?? null);
-      } else if (getPresentationForFly) {
-        setCatchPresentation(
-          getPresentationForFly(primaryPatternTrim, fd?.size ?? null, fd?.color ?? null),
-        );
-      } else {
-        setCatchPresentation(data.presentation_method ?? null);
-      }
       setCatchReleased(data.released ?? null);
       setCatchStructure(data.structure ?? null);
+      setMoreDetailsOpen(
+        Boolean(
+          data.structure ||
+            (data.depth_ft != null && Number.isFinite(data.depth_ft)) ||
+            data.note?.trim() ||
+            data.released != null,
+        ),
+      );
       const laRaw = ev.latitude;
       const loRaw = ev.longitude;
       const la =
@@ -1109,7 +1273,7 @@ export function CatchDetailsModal({
         setImportCatchAt(Number.isNaN(ts) ? new Date() : new Date(ts));
       }
     },
-    [allEvents, userFlies, resolvedFlyCatalog, trip.imported, getPresentationForFly],
+    [allEvents, userFlies, resolvedFlyCatalog, trip.imported],
   );
 
   /** Edit: load before paint so lat/lon fields and map show the catch immediately (avoids empty fields until interaction). */
@@ -1133,16 +1297,10 @@ export function CatchDetailsModal({
     if (!visible) {
       setShowImportDatePicker(false);
       setShowImportTimePicker(false);
-      setCatchSpeciesDropdownOpen(false);
-      setCatchPresentationDropdownOpen(false);
-      setCatchStructureDropdownOpen(false);
-      setAnchoredDropdownLayout(null);
+      setChangeFlyPickerOpen(false);
+      setMoreDetailsOpen(false);
     }
   }, [visible]);
-
-  useEffect(() => {
-    if (catchSpeciesDropdownOpen) setCatchSpeciesSearch('');
-  }, [catchSpeciesDropdownOpen]);
 
   useEffect(() => {
     if (!visible || mode !== 'add') return;
@@ -1239,11 +1397,14 @@ export function CatchDetailsModal({
     };
   }, [visible, mode, resetFormForAdd, initialAddPhotoUris, importPhotoMetaSeed, trip]);
 
-  /** Catalog/box primary fly → presentation from fly; manual “Other” pattern → no auto-fill (user picks or saved value). */
   useEffect(() => {
-    if (!visible || !catchFlyName.trim() || !getPresentationForFly || primaryPatternManual) return;
-    setCatchPresentation(getPresentationForFly(catchFlyName.trim(), catchFlySize, catchFlyColor));
-  }, [visible, catchFlyName, catchFlySize, catchFlyColor, getPresentationForFly, primaryPatternManual]);
+    if (!visible) return;
+    if (hasSecondaryFly) {
+      setCatchCaughtOnFly((current) => current ?? 'primary');
+    } else {
+      setCatchCaughtOnFly((current) => (current != null ? null : current));
+    }
+  }, [visible, hasSecondaryFly]);
 
   const syncPinFromText = useCallback(() => {
     const la = latText.trim() ? Number(latText.trim()) : NaN;
@@ -1327,28 +1488,9 @@ export function CatchDetailsModal({
       ? editTargetCatch.longitude ?? null
       : pinLon;
 
-  const handleCatchFlyDropdownSelect = (value: string | number) => {
-    if (value === CLEAR_FLY_FIELD) {
-      if (catchFlyDropdownOpen === 'size') setCatchFlySize(null);
-      else if (catchFlyDropdownOpen === 'color') setCatchFlyColor(null);
-      else if (catchFlyDropdownOpen === 'size2') setCatchFlySize2(null);
-      else if (catchFlyDropdownOpen === 'color2') setCatchFlyColor2(null);
-    } else if (catchFlyDropdownOpen === 'size') setCatchFlySize(value as number);
-    else if (catchFlyDropdownOpen === 'color') setCatchFlyColor(String(value));
-    else if (catchFlyDropdownOpen === 'size2') setCatchFlySize2(value as number);
-    else if (catchFlyDropdownOpen === 'color2') setCatchFlyColor2(String(value));
-    setCatchFlyDropdownOpen(null);
-  };
-
-  const openFlyPatternPicker = useCallback((which: 'primary' | 'dropper') => {
+  const openChangeFlyPicker = useCallback(() => {
     Keyboard.dismiss();
-    setCatchFlyDropdownOpen(null);
-    setCatchSpeciesDropdownOpen(false);
-    setCatchPresentationDropdownOpen(false);
-    setCatchStructureDropdownOpen(false);
-    setAnchoredDropdownLayout(null);
-    setFlyPatternPickerFor(which);
-    setFlyPatternPickerOpen(true);
+    setChangeFlyPickerOpen(true);
   }, []);
 
   const applyPhotoExifToPin = useCallback((meta: PhotoExifMetadata) => {
@@ -1549,6 +1691,14 @@ export function CatchDetailsModal({
   const handleSubmit = async () => {
     const { primary, dropper } = resolvePrimaryDropper();
     const species = catchSpecies.trim() || null;
+    const caughtOnFly = hasSecondaryFly ? (catchCaughtOnFly ?? 'primary') : null;
+    const presentationMethod = presentationForCatchRig(
+      primary,
+      dropper,
+      caughtOnFly,
+      userFlies,
+      getPresentationForFly,
+    );
     const sizeNum = catchSize.trim() ? parseFloat(catchSize.trim()) : null;
     const weightParsed = parseWeightLbOz(catchWeightLb, catchWeightOz);
     const depthNum = catchDepth.trim() ? parseFloat(catchDepth.trim()) : null;
@@ -1594,10 +1744,10 @@ export function CatchDetailsModal({
               ? { weight_lb: weightParsed.weight_lb, weight_oz: weightParsed.weight_oz }
               : {}),
             note: catchNote.trim() || undefined,
-            ...(catchCaughtOnFly != null ? { caught_on_fly: catchCaughtOnFly } : {}),
+            ...(caughtOnFly != null ? { caught_on_fly: caughtOnFly } : {}),
             quantity: 1,
             depth_ft: depthNum ?? undefined,
-            presentation_method: catchPresentation ?? undefined,
+            presentation_method: presentationMethod ?? undefined,
             released: catchReleased ?? undefined,
             structure: catchStructure ?? undefined,
           },
@@ -1608,6 +1758,7 @@ export function CatchDetailsModal({
           catchTimestampIso,
           conditionsSnapshot,
         });
+        if (species) addRecentSpecies(species);
         onClose();
       } else if (mode === 'edit' && editingEvent && onSubmitEdit) {
         const targetCatch = editTargetCatch ?? editingEvent;
@@ -1649,7 +1800,7 @@ export function CatchDetailsModal({
                 finalUrls.push(u);
                 continue;
               }
-              const useDropper = catchCaughtOnFly === 'dropper' && dropper?.pattern?.trim();
+              const useDropper = caughtOnFly === 'dropper' && dropper?.pattern?.trim();
               const p = await addPhoto(
                 {
                   userId,
@@ -1693,10 +1844,10 @@ export function CatchDetailsModal({
           photo_url: finalUrls[0] ?? null,
           photo_urls: finalUrls.length ? finalUrls : null,
           active_fly_event_id: priorCatch.active_fly_event_id,
-          caught_on_fly: catchCaughtOnFly,
+          caught_on_fly: caughtOnFly,
           quantity: quantityPreserved,
           depth_ft: depthNum != null && Number.isFinite(depthNum) ? depthNum : null,
-          presentation_method: catchPresentation,
+          presentation_method: presentationMethod,
           released: catchReleased,
           structure: catchStructure,
         };
@@ -1729,6 +1880,7 @@ export function CatchDetailsModal({
           eventOverrides,
         );
         await onSubmitEdit(nextEvents);
+        if (species) addRecentSpecies(species);
         onClose();
       }
     } catch (e) {
@@ -1782,6 +1934,7 @@ export function CatchDetailsModal({
   );
 
   return (
+    <>
     <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
       <View style={styles.catchModalBackdrop}>
         <Pressable
@@ -1875,247 +2028,173 @@ export function CatchDetailsModal({
                   ) : null}
                 </View>
               ) : null}
-              {catchFlyName2 != null ? (
-                <>
-                  <Text style={styles.flyFieldLabel}>Caught on</Text>
-                  <View style={styles.catchFlyRigHeaderRow}>
-                    <Pressable
-                      style={styles.catchFlyRigRadioPressable}
-                      onPress={() => setCatchCaughtOnFly('primary')}
-                      hitSlop={8}
-                      accessibilityRole="radio"
-                      accessibilityLabel="Fish caught on primary fly"
-                      accessibilityState={{ selected: catchCaughtOnFly === 'primary' }}
-                    >
-                      <MaterialIcons
-                        name={catchCaughtOnFly === 'primary' ? 'radio-button-checked' : 'radio-button-unchecked'}
-                        size={22}
-                        color={catchCaughtOnFly === 'primary' ? colors.primary : colors.textSecondary}
-                      />
-                    </Pressable>
-                    <Text style={[styles.flyFieldLabel, styles.flyFieldLabelInline]}>Primary fly</Text>
-                  </View>
-                </>
-              ) : (
-                <Text style={styles.flyFieldLabel}>Fly</Text>
-              )}
-              <View style={styles.catchFlyDropdownRowWrap}>
-                {primaryPatternManual ? (
-                  <View style={[styles.catchFlyDropdownCell, styles.catchFlyPatternManualCell]}>
-                    <TextInput
-                      style={styles.catchFlyPatternManualInput}
-                      placeholder="Pattern name"
-                      placeholderTextColor={colors.textTertiary}
-                      value={catchFlyName}
-                      onChangeText={setCatchFlyName}
-                      autoCorrect={false}
-                    />
-                    <Pressable
-                      onPress={() => openFlyPatternPicker('primary')}
-                      hitSlop={8}
-                      accessibilityLabel="Browse fly patterns"
-                    >
-                      <MaterialIcons name="list" size={22} color={colors.primary} />
-                    </Pressable>
-                  </View>
-                ) : (
+              <Text style={styles.flyFieldLabel}>
+                {hasSecondaryFly ? 'Caught on' : 'Fly'}
+              </Text>
+              <View style={styles.flySummaryCard}>
+                <View style={styles.flySummaryRow}>
                   <Pressable
-                    style={styles.catchFlyDropdownCell}
-                    onPress={() => openFlyPatternPicker('primary')}
+                    style={[
+                      styles.flySummaryRowMain,
+                      hasSecondaryFly && styles.flySummaryRowSelectable,
+                      hasSecondaryFly &&
+                        catchCaughtOnFly === 'primary' &&
+                        styles.flySummaryRowSelected,
+                    ]}
+                    onPress={hasSecondaryFly ? () => setCatchCaughtOnFly('primary') : undefined}
+                    accessibilityRole={hasSecondaryFly ? 'radio' : undefined}
+                    accessibilityLabel="Primary fly"
+                    accessibilityState={
+                      hasSecondaryFly ? { selected: catchCaughtOnFly === 'primary' } : undefined
+                    }
                   >
-                    <Text
-                      style={[
-                        styles.catchFlyDropdownValue,
-                        !catchFlyName.trim() && styles.catchFlyDropdownPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {catchFlyName.trim() ? catchFlyName : '—'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
+                    {hasSecondaryFly ? (
+                      <MaterialIcons
+                        name={
+                          catchCaughtOnFly === 'primary'
+                            ? 'radio-button-checked'
+                            : 'radio-button-unchecked'
+                        }
+                        size={22}
+                        color={
+                          catchCaughtOnFly === 'primary' ? colors.primary : colors.textSecondary
+                        }
+                      />
+                    ) : null}
+                    {primaryFlyImage ? (
+                      <Image
+                        source={primaryFlyImage}
+                        style={styles.flySummaryImage}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={styles.flySummaryImagePlaceholder}>
+                        <MaterialIcons name="looks" size={22} color={colors.textTertiary} />
+                      </View>
+                    )}
+                    <View style={styles.flySummaryTextCol}>
+                      {hasSecondaryFly ? (
+                        <Text style={styles.flySummaryRole}>Primary</Text>
+                      ) : null}
+                      <Text style={styles.flySummaryDetail} numberOfLines={2}>
+                        {formatFlySummary(catchFlyName, catchFlySize, catchFlyColor)}
+                      </Text>
+                    </View>
                   </Pressable>
-                )}
-                <Pressable
-                  style={styles.catchFlyDropdownCell}
-                  onPress={() => {
-                    setCatchSpeciesDropdownOpen(false);
-                    setCatchPresentationDropdownOpen(false);
-                    setCatchStructureDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                    setCatchFlyDropdownOpen('size');
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.catchFlyDropdownValue,
-                      catchFlySize == null && styles.catchFlyDropdownPlaceholder,
-                    ]}
-                    numberOfLines={1}
+                  <Pressable
+                    style={styles.changeFlyIconButton}
+                    onPress={openChangeFlyPicker}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Change fly"
                   >
-                    {catchFlySize != null ? `#${catchFlySize}` : '—'}
-                  </Text>
-                  <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-                </Pressable>
-                <Pressable
-                  style={styles.catchFlyDropdownCell}
-                  onPress={() => {
-                    setCatchSpeciesDropdownOpen(false);
-                    setCatchPresentationDropdownOpen(false);
-                    setCatchStructureDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                    setCatchFlyDropdownOpen('color');
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.catchFlyDropdownValue,
-                      !catchFlyColor && styles.catchFlyDropdownPlaceholder,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {catchFlyColor || '—'}
-                  </Text>
-                  <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-                </Pressable>
-              </View>
+                    <MaterialIcons name="edit" size={20} color={colors.primary} />
+                  </Pressable>
+                </View>
 
-              {catchFlyName2 != null ? (
-                <>
-                  <View style={styles.catchFlyRigHeaderRow}>
+                {hasSecondaryFly ? (
+                  <View style={styles.flySummaryRow}>
                     <Pressable
-                      style={styles.catchFlyRigRadioPressable}
+                      style={[
+                        styles.flySummaryRowMain,
+                        styles.flySummaryRowSelectable,
+                        catchCaughtOnFly === 'dropper' && styles.flySummaryRowSelected,
+                      ]}
                       onPress={() => setCatchCaughtOnFly('dropper')}
-                      hitSlop={8}
                       accessibilityRole="radio"
-                      accessibilityLabel="Fish caught on secondary fly"
+                      accessibilityLabel="Secondary fly"
                       accessibilityState={{ selected: catchCaughtOnFly === 'dropper' }}
                     >
                       <MaterialIcons
-                        name={catchCaughtOnFly === 'dropper' ? 'radio-button-checked' : 'radio-button-unchecked'}
+                        name={
+                          catchCaughtOnFly === 'dropper'
+                            ? 'radio-button-checked'
+                            : 'radio-button-unchecked'
+                        }
                         size={22}
-                        color={catchCaughtOnFly === 'dropper' ? colors.primary : colors.textSecondary}
+                        color={
+                          catchCaughtOnFly === 'dropper' ? colors.primary : colors.textSecondary
+                        }
                       />
-                    </Pressable>
-                    <Text
-                      style={[styles.flyFieldLabel, styles.flyFieldLabelInline]}
-                      numberOfLines={1}
-                    >
-                      Secondary fly
-                    </Text>
-                    <Pressable
-                      style={styles.removeSecondaryFlyButton}
-                      onPress={() => {
-                        setCatchFlyName2(null);
-                        setCatchFlySize2(null);
-                        setCatchFlyColor2(null);
-                        setDropperUserBoxFlyId(null);
-                        setDropperCatalogFlyId(null);
-                        setDropperPatternManual(false);
-                        setCatchCaughtOnFly(null);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Remove secondary fly"
-                    >
-                      <Text style={styles.removeSecondaryFlyButtonText} numberOfLines={1}>
-                        Remove secondary
-                      </Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.catchFlyDropdownRowWrap}>
-                    {dropperPatternManual ? (
-                      <View style={[styles.catchFlyDropdownCell, styles.catchFlyPatternManualCell]}>
-                        <TextInput
-                          style={styles.catchFlyPatternManualInput}
-                          placeholder="Pattern name"
-                          placeholderTextColor={colors.textTertiary}
-                          value={catchFlyName2}
-                          onChangeText={setCatchFlyName2}
-                          autoCorrect={false}
+                      {dropperFlyImage ? (
+                        <Image
+                          source={dropperFlyImage}
+                          style={styles.flySummaryImage}
+                          resizeMode="contain"
                         />
-                        <Pressable
-                          onPress={() => openFlyPatternPicker('dropper')}
-                          hitSlop={8}
-                          accessibilityLabel="Browse secondary fly patterns"
-                        >
-                          <MaterialIcons name="list" size={22} color={colors.primary} />
-                        </Pressable>
-                      </View>
-                    ) : (
-                      <Pressable
-                        style={styles.catchFlyDropdownCell}
-                        onPress={() => openFlyPatternPicker('dropper')}
-                      >
-                        <Text
-                          style={[
-                            styles.catchFlyDropdownValue,
-                            !(catchFlyName2 ?? '').trim() && styles.catchFlyDropdownPlaceholder,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {(catchFlyName2 ?? '').trim() ? catchFlyName2 : '—'}
+                      ) : (
+                        <View style={styles.flySummaryImagePlaceholder}>
+                          <MaterialIcons name="looks" size={22} color={colors.textTertiary} />
+                        </View>
+                      )}
+                      <View style={styles.flySummaryTextCol}>
+                        <Text style={styles.flySummaryRole}>Secondary</Text>
+                        <Text style={styles.flySummaryDetail} numberOfLines={2}>
+                          {formatFlySummary(catchFlyName2 ?? '', catchFlySize2, catchFlyColor2)}
                         </Text>
-                        <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-                      </Pressable>
-                    )}
-                    <Pressable
-                      style={styles.catchFlyDropdownCell}
-                      onPress={() => {
-                        setCatchSpeciesDropdownOpen(false);
-                        setCatchPresentationDropdownOpen(false);
-                        setCatchStructureDropdownOpen(false);
-                        setAnchoredDropdownLayout(null);
-                        setCatchFlyDropdownOpen('size2');
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.catchFlyDropdownValue,
-                          catchFlySize2 == null && styles.catchFlyDropdownPlaceholder,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {catchFlySize2 != null ? `#${catchFlySize2}` : '—'}
-                      </Text>
-                      <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
+                      </View>
                     </Pressable>
                     <Pressable
-                      style={styles.catchFlyDropdownCell}
-                      onPress={() => {
-                        setCatchSpeciesDropdownOpen(false);
-                        setCatchPresentationDropdownOpen(false);
-                        setCatchStructureDropdownOpen(false);
-                        setAnchoredDropdownLayout(null);
-                        setCatchFlyDropdownOpen('color2');
-                      }}
+                      style={styles.changeFlyIconButton}
+                      onPress={openChangeFlyPicker}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Change fly"
                     >
-                      <Text
-                        style={[
-                          styles.catchFlyDropdownValue,
-                          !catchFlyColor2 && styles.catchFlyDropdownPlaceholder,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {catchFlyColor2 || '—'}
-                      </Text>
-                      <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
+                      <MaterialIcons name="edit" size={20} color={colors.primary} />
                     </Pressable>
                   </View>
-                </>
-              ) : (
+                ) : null}
+              </View>
+              {!hasSecondaryFly ? (
                 <Pressable
                   style={styles.addSecondaryFlyButton}
-                  onPress={() => {
-                    setCatchFlyName2('');
-                    setCatchFlySize2(null);
-                    setCatchFlyColor2(null);
-                    setDropperUserBoxFlyId(null);
-                    setDropperCatalogFlyId(null);
-                    setDropperPatternManual(false);
-                  }}
+                  onPress={openChangeFlyPicker}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add secondary fly"
                 >
                   <Text style={styles.addSecondaryFlyButtonText}>Add secondary fly</Text>
                 </Pressable>
-              )}
+              ) : null}
+
+              <Text style={styles.flyFieldLabel}>Species</Text>
+              <ScrollView
+                horizontal
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator={false}
+                style={styles.speciesScroll}
+                contentContainerStyle={styles.speciesScrollContent}
+              >
+                {orderedSpeciesOptions.map((species) => {
+                  const selected = catchSpecies === species.name;
+                  const shortLabel = speciesCardShortLabel(species.name);
+                  return (
+                    <Pressable
+                      key={species.name}
+                      style={[styles.speciesCard, selected && styles.speciesCardActive]}
+                      onPress={() => setCatchSpecies(species.name)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={species.name}
+                    >
+                      <Image
+                        source={species.image}
+                        style={styles.speciesCardImage}
+                        resizeMode="contain"
+                      />
+                      <Text
+                        style={[
+                          styles.speciesCardLabel,
+                          selected && styles.speciesCardLabelActive,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {shortLabel}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
 
               <Text style={styles.flyFieldLabel}>Photos</Text>
               {catchPhotoUris.length < MAX_CATCH_PHOTOS ? (
@@ -2140,7 +2219,9 @@ export function CatchDetailsModal({
               >
                 {catchPhotoUris.map((uri, idx) => (
                   <View key={`${uri}-${idx}`} style={styles.catchPhotoPreviewWrap}>
-                    <Image source={{ uri }} style={styles.catchPhotoPreview} />
+                    <Pressable onPress={() => setZoomPhotoUri(uri)} accessibilityRole="imagebutton" accessibilityLabel="View photo">
+                      <Image source={{ uri }} style={styles.catchPhotoPreview} />
+                    </Pressable>
                     <Pressable
                       style={styles.catchPhotoRemove}
                       onPress={() => {
@@ -2203,125 +2284,97 @@ export function CatchDetailsModal({
                   </View>
                 </View>
               </View>
-              <Text style={styles.flyFieldLabel}>Species</Text>
-              <Pressable
-                ref={speciesFieldRef}
-                style={styles.catchFlyDropdownRow}
-                onPress={openSpeciesDropdown}
-                accessibilityRole="combobox"
-                accessibilityState={{ expanded: catchSpeciesDropdownOpen }}
-              >
-                <Text
-                  style={[
-                    styles.catchFlyDropdownValue,
-                    !catchSpecies && !catchSpeciesOther && styles.catchFlyDropdownPlaceholder,
-                  ]}
-                  numberOfLines={1}
+              <View style={styles.moreDetailsCard}>
+                <Pressable
+                  style={styles.moreDetailsHeader}
+                  onPress={() => setMoreDetailsOpen((open) => !open)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: moreDetailsOpen }}
+                  accessibilityLabel="More Details"
                 >
-                  {catchSpeciesOther
-                    ? catchSpecies.trim() || 'Other'
-                    : catchSpecies || 'Select species'}
-                </Text>
-                <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-              </Pressable>
-              {catchSpeciesOther ? (
-                <TextInput
-                  style={styles.catchModalInput}
-                  placeholder="Species name"
-                  placeholderTextColor={colors.textTertiary}
-                  value={catchSpecies}
-                  onChangeText={setCatchSpecies}
-                />
-              ) : null}
-              <View style={styles.presentationStructureRow}>
-                <View style={styles.presentationStructureCol}>
-                  <Text style={styles.flyFieldLabel}>Presentation</Text>
-                  <Pressable
-                    ref={presentationFieldRef}
-                    style={[styles.catchFlyDropdownRow, styles.catchFlyDropdownInPair]}
-                    onPress={openPresentationDropdown}
-                    accessibilityRole="combobox"
-                    accessibilityState={{ expanded: catchPresentationDropdownOpen }}
-                  >
-                    <Text
-                      style={[
-                        styles.catchFlyDropdownValue,
-                        catchPresentation == null && styles.catchFlyDropdownPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {catchPresentation != null
-                        ? presentationMethodLabel(catchPresentation)
-                        : 'Select presentation'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-                  </Pressable>
-                </View>
-                <View style={styles.presentationStructureCol}>
-                  <Text style={styles.flyFieldLabel}>Water structure</Text>
-                  <Pressable
-                    ref={structureFieldRef}
-                    style={[styles.catchFlyDropdownRow, styles.catchFlyDropdownInPair]}
-                    onPress={openStructureDropdown}
-                    accessibilityRole="combobox"
-                    accessibilityState={{ expanded: catchStructureDropdownOpen }}
-                  >
-                    <Text
-                      style={[
-                        styles.catchFlyDropdownValue,
-                        catchStructure == null && styles.catchFlyDropdownPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {catchStructure != null
-                        ? structureMethodLabel(catchStructure)
-                        : 'Select structure'}
-                    </Text>
-                    <MaterialIcons name="keyboard-arrow-down" size={16} color={colors.textSecondary} />
-                  </Pressable>
-                </View>
-              </View>
-              <View style={styles.releasedDepthRow}>
-                <View style={styles.releasedDepthLeft}>
-                  <Text style={styles.flyFieldLabel}>Released?</Text>
-                  <View style={styles.releasedDepthChipRow}>
-                    <Pressable
-                      style={[styles.chip, catchReleased === true && styles.chipActive]}
-                      onPress={() => setCatchReleased(true)}
-                    >
-                      <Text style={[styles.chipText, catchReleased === true && styles.chipTextActive]}>
-                        Released
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.chip, catchReleased === false && styles.chipActive]}
-                      onPress={() => setCatchReleased(false)}
-                    >
-                      <Text style={[styles.chipText, catchReleased === false && styles.chipTextActive]}>Kept</Text>
-                    </Pressable>
+                  <View style={styles.moreDetailsHeaderText}>
+                    <Text style={styles.moreDetailsTitle}>More Details</Text>
+                    {!moreDetailsOpen ? (
+                      <Text style={styles.moreDetailsHint}>Water, depth, released, notes</Text>
+                    ) : null}
                   </View>
-                </View>
-                <View style={styles.releasedDepthRight}>
-                  <Text style={styles.flyFieldLabel}>Catch Depth</Text>
-                  <TextInput
-                    style={[styles.catchModalInput, styles.catchDepthInput]}
-                    placeholder="e.g. 3"
-                    placeholderTextColor={colors.textTertiary}
-                    value={catchDepth}
-                    onChangeText={setCatchDepth}
-                    keyboardType="decimal-pad"
+                  <MaterialIcons
+                    name={moreDetailsOpen ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={22}
+                    color={colors.textSecondary}
                   />
-                </View>
+                </Pressable>
+                {moreDetailsOpen ? (
+                  <View style={styles.moreDetailsBody}>
+                    <View style={styles.structureSection}>
+                      <Text style={styles.flyFieldLabel}>Water structure</Text>
+                      <ScrollView
+                        horizontal
+                        nestedScrollEnabled
+                        showsHorizontalScrollIndicator={false}
+                        style={styles.horizontalChipScroll}
+                        contentContainerStyle={styles.horizontalChipRow}
+                      >
+                        {STRUCTURE_OPTIONS.map((opt) => (
+                          <Pressable
+                            key={opt.value}
+                            style={[styles.chip, catchStructure === opt.value && styles.chipActive]}
+                            onPress={() => setCatchStructure(opt.value)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: catchStructure === opt.value }}
+                          >
+                            <Text
+                              style={[
+                                styles.chipText,
+                                catchStructure === opt.value && styles.chipTextActive,
+                              ]}
+                            >
+                              {opt.label}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    </View>
+                    <Text style={styles.flyFieldLabel}>Catch depth (ft)</Text>
+                    <TextInput
+                      style={[styles.catchModalInput, styles.catchDepthInput]}
+                      placeholder="e.g. 3"
+                      placeholderTextColor={colors.textTertiary}
+                      value={catchDepth}
+                      onChangeText={setCatchDepth}
+                      keyboardType="decimal-pad"
+                    />
+                    <Text style={styles.flyFieldLabel}>Released</Text>
+                    <View style={styles.releasedDepthChipRow}>
+                      <Pressable
+                        style={[styles.chip, catchReleased === true && styles.chipActive]}
+                        onPress={() => setCatchReleased(true)}
+                      >
+                        <Text style={[styles.chipText, catchReleased === true && styles.chipTextActive]}>
+                          Released
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.chip, catchReleased === false && styles.chipActive]}
+                        onPress={() => setCatchReleased(false)}
+                      >
+                        <Text style={[styles.chipText, catchReleased === false && styles.chipTextActive]}>
+                          Kept
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.flyFieldLabel}>Notes</Text>
+                    <TextInput
+                      style={[styles.catchModalInput, styles.catchModalNoteInput]}
+                      placeholder="Optional notes…"
+                      placeholderTextColor={colors.textTertiary}
+                      value={catchNote}
+                      onChangeText={setCatchNote}
+                      multiline
+                    />
+                  </View>
+                ) : null}
               </View>
-              <Text style={styles.flyFieldLabel}>Notes</Text>
-              <TextInput
-                style={[styles.catchModalInput, styles.catchModalNoteInput]}
-                placeholder="Optional note"
-                placeholderTextColor={colors.textTertiary}
-                value={catchNote}
-                onChangeText={setCatchNote}
-                multiline
-              />
 
               {mode === 'add' ? (
                 <>
@@ -2414,308 +2467,6 @@ export function CatchDetailsModal({
               </>
             ) : null}
 
-            {catchFlyDropdownOpen !== null ? (
-              <View style={styles.pickerOverlayHost} pointerEvents="box-none">
-                <Pressable
-                  style={styles.pickerBackdrop}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setCatchFlyDropdownOpen(null);
-                    setCatchSpeciesDropdownOpen(false);
-                    setCatchPresentationDropdownOpen(false);
-                    setCatchStructureDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                  }}
-                />
-                <View style={styles.catchFlyPickerSheet}>
-                  <ScrollView style={styles.catchFlyPickerList} keyboardShouldPersistTaps="handled">
-                    {catchFlyDropdownOptions.map((opt) => {
-                      const isSelected =
-                        (catchFlyDropdownOpen === 'size' &&
-                          (opt.value === CLEAR_FLY_FIELD
-                            ? catchFlySize == null
-                            : opt.value === catchFlySize)) ||
-                        (catchFlyDropdownOpen === 'color' &&
-                          (opt.value === CLEAR_FLY_FIELD
-                            ? catchFlyColor == null
-                            : opt.value === catchFlyColor)) ||
-                        (catchFlyDropdownOpen === 'size2' &&
-                          (opt.value === CLEAR_FLY_FIELD
-                            ? catchFlySize2 == null
-                            : opt.value === catchFlySize2)) ||
-                        (catchFlyDropdownOpen === 'color2' &&
-                          (opt.value === CLEAR_FLY_FIELD
-                            ? catchFlyColor2 == null
-                            : opt.value === catchFlyColor2));
-                      return (
-                        <Pressable
-                          key={String(opt.value)}
-                          style={[styles.catchFlyPickerOption, isSelected && styles.catchFlyPickerOptionActive]}
-                          onPress={() => handleCatchFlyDropdownSelect(opt.value)}
-                        >
-                          <Text
-                            style={[
-                              styles.catchFlyPickerOptionText,
-                              isSelected && styles.catchFlyPickerOptionTextActive,
-                            ]}
-                          >
-                            {opt.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            ) : null}
-
-            {catchSpeciesDropdownOpen ? (
-              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
-                <Pressable
-                  style={styles.pickerBackdrop}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setCatchSpeciesDropdownOpen(false);
-                    setCatchPresentationDropdownOpen(false);
-                    setCatchStructureDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                  }}
-                />
-                <View
-                  style={[
-                    styles.anchoredPickerSheet,
-                    anchoredDropdownLayout
-                      ? {
-                          top: anchoredDropdownLayout.top,
-                          left: anchoredDropdownLayout.left,
-                          width: anchoredDropdownLayout.width,
-                          maxHeight: anchoredDropdownLayout.maxScroll + 58,
-                        }
-                      : { top: 120, left: Spacing.lg, right: Spacing.lg, maxHeight: 340 },
-                  ]}
-                >
-                  <TextInput
-                    style={styles.anchoredSearchInput}
-                    placeholder="Search species…"
-                    placeholderTextColor={colors.textTertiary}
-                    value={catchSpeciesSearch}
-                    onChangeText={setCatchSpeciesSearch}
-                    autoCorrect={false}
-                    autoCapitalize="none"
-                  />
-                  <ScrollView
-                    style={{ height: anchoredDropdownLayout?.maxScroll ?? 260 }}
-                    contentContainerStyle={styles.anchoredPickerScrollContent}
-                    keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled
-                    showsVerticalScrollIndicator
-                  >
-                    {filteredSpeciesOptions.map((species) => {
-                      const isOther = species === 'Other';
-                      const isSelected = isOther
-                        ? catchSpeciesOther
-                        : !catchSpeciesOther && catchSpecies === species;
-                      return (
-                        <Pressable
-                          key={species}
-                          style={[
-                            styles.anchoredPickerOption,
-                            isSelected && styles.anchoredPickerOptionActive,
-                          ]}
-                          onPress={() => {
-                            if (isOther) {
-                              setCatchSpecies('');
-                              setCatchSpeciesOther(true);
-                            } else {
-                              setCatchSpecies(species);
-                              setCatchSpeciesOther(false);
-                            }
-                            setCatchSpeciesDropdownOpen(false);
-                            setAnchoredDropdownLayout(null);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.anchoredPickerOptionText,
-                              isSelected && styles.anchoredPickerOptionTextActive,
-                            ]}
-                          >
-                            {species}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            ) : null}
-
-            {catchPresentationDropdownOpen ? (
-              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
-                <Pressable
-                  style={styles.pickerBackdrop}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setCatchPresentationDropdownOpen(false);
-                    setCatchStructureDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                  }}
-                />
-                <View
-                  style={[
-                    styles.anchoredPickerSheet,
-                    anchoredDropdownLayout
-                      ? {
-                          top: anchoredDropdownLayout.top,
-                          left: anchoredDropdownLayout.left,
-                          width: anchoredDropdownLayout.width,
-                          height: anchoredDropdownLayout.maxScroll,
-                          maxHeight: anchoredDropdownLayout.maxScroll,
-                        }
-                      : { top: 120, left: Spacing.lg, right: Spacing.lg, height: 300, maxHeight: 300 },
-                  ]}
-                >
-                  <ScrollView
-                    style={styles.anchoredPickerScrollFill}
-                    contentContainerStyle={styles.anchoredPickerScrollContent}
-                    keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled
-                    showsVerticalScrollIndicator
-                  >
-                    <Pressable
-                      style={[
-                        styles.anchoredPickerOption,
-                        catchPresentation == null && styles.anchoredPickerOptionActive,
-                      ]}
-                      onPress={() => {
-                        setCatchPresentation(null);
-                        setCatchPresentationDropdownOpen(false);
-                        setAnchoredDropdownLayout(null);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.anchoredPickerOptionText,
-                          catchPresentation == null && styles.anchoredPickerOptionTextActive,
-                        ]}
-                      >
-                        None
-                      </Text>
-                    </Pressable>
-                    {PRESENTATION_OPTIONS.map((opt) => {
-                      const isSelected = catchPresentation === opt.value;
-                      return (
-                        <Pressable
-                          key={opt.value}
-                          style={[
-                            styles.anchoredPickerOption,
-                            isSelected && styles.anchoredPickerOptionActive,
-                          ]}
-                          onPress={() => {
-                            setCatchPresentation(opt.value);
-                            setCatchPresentationDropdownOpen(false);
-                            setAnchoredDropdownLayout(null);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.anchoredPickerOptionText,
-                              isSelected && styles.anchoredPickerOptionTextActive,
-                            ]}
-                          >
-                            {opt.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            ) : null}
-
-            {catchStructureDropdownOpen ? (
-              <View style={styles.pickerOverlayHostAnchored} pointerEvents="box-none">
-                <Pressable
-                  style={styles.pickerBackdrop}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setCatchStructureDropdownOpen(false);
-                    setCatchPresentationDropdownOpen(false);
-                    setAnchoredDropdownLayout(null);
-                  }}
-                />
-                <View
-                  style={[
-                    styles.anchoredPickerSheet,
-                    anchoredDropdownLayout
-                      ? {
-                          top: anchoredDropdownLayout.top,
-                          left: anchoredDropdownLayout.left,
-                          width: anchoredDropdownLayout.width,
-                          height: anchoredDropdownLayout.maxScroll,
-                          maxHeight: anchoredDropdownLayout.maxScroll,
-                        }
-                      : { top: 120, left: Spacing.lg, right: Spacing.lg, height: 300, maxHeight: 300 },
-                  ]}
-                >
-                  <ScrollView
-                    style={styles.anchoredPickerScrollFill}
-                    contentContainerStyle={styles.anchoredPickerScrollContent}
-                    keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled
-                    showsVerticalScrollIndicator
-                  >
-                    <Pressable
-                      style={[
-                        styles.anchoredPickerOption,
-                        catchStructure == null && styles.anchoredPickerOptionActive,
-                      ]}
-                      onPress={() => {
-                        setCatchStructure(null);
-                        setCatchStructureDropdownOpen(false);
-                        setAnchoredDropdownLayout(null);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.anchoredPickerOptionText,
-                          catchStructure == null && styles.anchoredPickerOptionTextActive,
-                        ]}
-                      >
-                        None
-                      </Text>
-                    </Pressable>
-                    {STRUCTURE_OPTIONS.map((opt) => {
-                      const isSelected = catchStructure === opt.value;
-                      return (
-                        <Pressable
-                          key={opt.value}
-                          style={[
-                            styles.anchoredPickerOption,
-                            isSelected && styles.anchoredPickerOptionActive,
-                          ]}
-                          onPress={() => {
-                            setCatchStructure(opt.value);
-                            setCatchStructureDropdownOpen(false);
-                            setAnchoredDropdownLayout(null);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.anchoredPickerOptionText,
-                              isSelected && styles.anchoredPickerOptionTextActive,
-                            ]}
-                          >
-                            {opt.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            ) : null}
-
             <View style={styles.catchModalActions}>
               <Pressable
                 style={styles.catchModalCancel}
@@ -2748,117 +2499,49 @@ export function CatchDetailsModal({
                 )}
               </Pressable>
             </View>
-
-            {flyPatternPickerOpen ? (
-              <View style={styles.catchPatternPickerOverlay} pointerEvents="box-none">
-                <TripFlyPatternPickerModal
-                  presentation="embedded"
-                  visible
-                  onRequestClose={() => setFlyPatternPickerOpen(false)}
-                  userFlies={userFlies}
-                  catalog={resolvedFlyCatalog}
-                  title={flyPatternPickerFor === 'primary' ? 'Select pattern' : 'Select secondary pattern'}
-                  searchPlaceholder="Search patterns…"
-                  showNoPatternRow
-                  noPatternRowActive={
-                    flyPatternPickerFor === 'primary'
-                      ? !catchFlyName.trim() &&
-                        primaryUserBoxFlyId == null &&
-                        primaryCatalogFlyId == null &&
-                        !primaryPatternManual
-                      : !(catchFlyName2 ?? '').trim() &&
-                        dropperUserBoxFlyId == null &&
-                        dropperCatalogFlyId == null &&
-                        !dropperPatternManual
-                  }
-                  onSelectNoPattern={() => {
-                    if (flyPatternPickerFor === 'primary') {
-                      setCatchFlyName('');
-                      setCatchFlySize(null);
-                      setCatchFlyColor(null);
-                      setPrimaryUserBoxFlyId(null);
-                      setPrimaryCatalogFlyId(null);
-                      setPrimaryPatternManual(false);
-                      setCatchPresentation(null);
-                    } else {
-                      setCatchFlyName2('');
-                      setCatchFlySize2(null);
-                      setCatchFlyColor2(null);
-                      setDropperUserBoxFlyId(null);
-                      setDropperCatalogFlyId(null);
-                      setDropperPatternManual(false);
-                    }
-                  }}
-                  selectedUserBoxFlyId={
-                    flyPatternPickerFor === 'primary' ? primaryUserBoxFlyId : dropperUserBoxFlyId
-                  }
-                  selectedCatalogFlyId={
-                    flyPatternPickerFor === 'primary' ? primaryCatalogFlyId : dropperCatalogFlyId
-                  }
-                  otherActive={
-                    flyPatternPickerFor === 'primary' ? primaryPatternManual : dropperPatternManual
-                  }
-                  onSelectUserFly={(fly) => {
-                    if (flyPatternPickerFor === 'primary') {
-                      setCatchFlyName(fly.name);
-                      setCatchFlySize(fly.size ?? null);
-                      setCatchFlyColor(fly.color ?? null);
-                      setPrimaryUserBoxFlyId(fly.id);
-                      setPrimaryCatalogFlyId(null);
-                      setPrimaryPatternManual(false);
-                      applyPresentationForPattern(fly.name, fly.size ?? null, fly.color ?? null);
-                    } else {
-                      setCatchFlyName2(fly.name);
-                      setCatchFlySize2(fly.size ?? null);
-                      setCatchFlyColor2(fly.color ?? null);
-                      setDropperUserBoxFlyId(fly.id);
-                      setDropperCatalogFlyId(null);
-                      setDropperPatternManual(false);
-                    }
-                  }}
-                  onSelectCatalogFly={(item) => {
-                    if (flyPatternPickerFor === 'primary') {
-                      setCatchFlyName(item.name);
-                      setCatchFlySize(null);
-                      setCatchFlyColor(null);
-                      setPrimaryCatalogFlyId(item.id);
-                      setPrimaryUserBoxFlyId(null);
-                      setPrimaryPatternManual(false);
-                      applyPresentationForPattern(item.name, null, null);
-                    } else {
-                      setCatchFlyName2(item.name);
-                      setCatchFlySize2(null);
-                      setCatchFlyColor2(null);
-                      setDropperCatalogFlyId(item.id);
-                      setDropperUserBoxFlyId(null);
-                      setDropperPatternManual(false);
-                    }
-                  }}
-                  initialOtherPatternName={
-                    flyPatternPickerFor === 'primary'
-                      ? catchFlyName
-                      : (catchFlyName2 ?? '')
-                  }
-                  onSelectOther={(customName) => {
-                    if (flyPatternPickerFor === 'primary') {
-                      setCatchFlyName(customName);
-                      setPrimaryUserBoxFlyId(null);
-                      setPrimaryCatalogFlyId(null);
-                      setPrimaryPatternManual(true);
-                      setCatchPresentation(null);
-                    } else {
-                      setCatchFlyName2(customName);
-                      setDropperUserBoxFlyId(null);
-                      setDropperCatalogFlyId(null);
-                      setDropperPatternManual(true);
-                    }
-                  }}
-                />
-              </View>
-            ) : null}
           </View>
         </View>
       </View>
+      <ChangeFlyPickerModal
+        visible={changeFlyPickerOpen}
+        onClose={() => setChangeFlyPickerOpen(false)}
+        userFlies={userFlies}
+        flyCatalog={resolvedFlyCatalog}
+        seedKey={`catch-fly-${mode}-${editingEvent?.id ?? 'add'}`}
+        initialPrimary={{
+          pattern: catchFlyName,
+          size: catchFlySize,
+          color: catchFlyColor,
+          fly_id: primaryCatalogFlyId ?? undefined,
+          user_fly_box_id: primaryUserBoxFlyId ?? undefined,
+        }}
+        initialDropper={
+          catchFlyName2 != null
+            ? {
+                pattern: catchFlyName2,
+                size: catchFlySize2,
+                color: catchFlyColor2,
+                fly_id: dropperCatalogFlyId ?? undefined,
+                user_fly_box_id: dropperUserBoxFlyId ?? undefined,
+              }
+            : null
+        }
+        title="Select fly"
+        onConfirm={(primary, dropper) => {
+          applyFlySelectionFromPicker(primary, dropper);
+          setChangeFlyPickerOpen(false);
+        }}
+        userId={userId}
+        isConnected={isConnected}
+        tripId={trip.id}
+        onUserFliesUpdated={onUserFliesUpdated}
+      />
     </Modal>
+    <SinglePhotoZoomModal
+      visible={zoomPhotoUri != null}
+      uri={zoomPhotoUri}
+      onClose={() => setZoomPhotoUri(null)}
+    />
+    </>
   );
 }

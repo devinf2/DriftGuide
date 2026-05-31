@@ -76,8 +76,19 @@ export const FLY_NAMES = COMMON_FLIES.map(f => f.name);
 
 export const FLY_SIZES = [8, 10, 12, 14, 16, 18, 20, 22, 24];
 
+/** Two-row size picker: common sizes first, then small. */
+export const FLY_SIZE_ROWS: readonly (readonly number[])[] = [
+  [8, 10, 12, 14, 16],
+  [18, 20, 22, 24],
+];
+
+/** Two-row color picker: neutrals, then brights. */
 export const FLY_COLORS = [
-  'Black', 'Natural', 'Olive', 'Tan', 'Gray',
-  'Red', 'Copper', 'Yellow', 'Brown', 'White',
-  'Dark', 'Chartreuse', 'Orange', 'Purple',
+  'Black', 'White', 'Gray', 'Brown', 'Tan', 'Olive', 'Blue',
+  'Yellow', 'Orange', 'Red', 'Copper', 'Purple', 'Pink',
+] as const;
+
+export const FLY_COLOR_ROWS: readonly (readonly string[])[] = [
+  FLY_COLORS.slice(0, 7),
+  FLY_COLORS.slice(7),
 ];

@@ -4,6 +4,7 @@ import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { syncTripToCloud } from '@/src/services/sync';
+import { prepareTripEventsForCloudSync } from '@/src/services/tripOutboxSync';
 import { flushPendingCatches } from '@/src/services/mapCatchLocalStore';
 import { syncPendingUserCatches } from '@/src/services/userCatchService';
 import { refreshAllIfStale } from '@/src/services/waterwayCache';
@@ -43,7 +44,8 @@ export function SyncOnConnectivity() {
         await retryPendingSyncs();
         const { activeTrip, events } = useTripStore.getState();
         if (activeTrip && events) {
-          await syncTripToCloud(activeTrip, events);
+          const prepared = await prepareTripEventsForCloudSync(activeTrip, events);
+          await syncTripToCloud(activeTrip, prepared);
         }
         await processPendingPhotos();
         await flushPendingFlyOps();
@@ -76,7 +78,10 @@ export function SyncOnConnectivity() {
           await flushPendingCatches();
           await retryPendingSyncs();
           const { activeTrip: at, events: ev } = useTripStore.getState();
-          if (at && ev) await syncTripToCloud(at, ev);
+          if (at && ev) {
+            const prepared = await prepareTripEventsForCloudSync(at, ev);
+            await syncTripToCloud(at, prepared);
+          }
           await processPendingPhotos();
           await flushPendingFlyOps();
           await refreshAllIfStale(WATERWAY_REFRESH_MAX_AGE_MS, uid);

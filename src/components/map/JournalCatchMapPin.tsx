@@ -1,13 +1,15 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { layoutSizeToPixelSize } from '@/src/utils/photoDisplayUrl';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useMemo } from 'react';
+import { PixelRatio, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 const SIZE = 32;
 const BORDER = 2;
 const INNER = SIZE - BORDER * 2;
+const MAP_PIN_PIXEL_SIZE = layoutSizeToPixelSize(SIZE, PixelRatio.get());
 
 type Props = {
   photoUrl?: string | null;
@@ -49,23 +51,32 @@ function createPinStyles(colors: ThemeColors) {
   });
 }
 
-/** Compact catch marker for Mapbox PointAnnotation: circular photo or fish icon. */
+/** Compact catch marker: circular photo or fish icon. */
 export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createPinStyles(colors), [colors]);
   const uri = photoUrl?.trim();
   const hasPhoto = Boolean(uri);
+  const bumpSnapshot = () => {
+    onImageLoaded?.();
+    if (!onImageLoaded) return;
+    requestAnimationFrame(() => {
+      onImageLoaded();
+      requestAnimationFrame(onImageLoaded);
+    });
+  };
   return (
     <View style={styles.ring} collapsable={false}>
       {hasPhoto ? (
-        <Image
-          source={{ uri: uri! }}
+        <OfflineTripPhotoImage
+          remoteUri={uri!}
+          maxPixelSize={MAP_PIN_PIXEL_SIZE}
           style={styles.image}
           contentFit="cover"
-          cachePolicy="memory-disk"
           priority="high"
-          onLoadEnd={onImageLoaded}
-          onError={onImageLoaded}
+          onLoad={bumpSnapshot}
+          onLoadEnd={bumpSnapshot}
+          onError={bumpSnapshot}
         />
       ) : (
         <View style={styles.iconInner}>
@@ -73,5 +84,27 @@ export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
         </View>
       )}
     </View>
+  );
+}
+
+type MarkerProps = {
+  photoUrl?: string | null;
+  title?: string;
+  onPress?: () => void;
+  style?: StyleProp<ViewStyle>;
+};
+
+/** Catch pin wrapped for Mapbox MarkerView (live view — photos load reliably). */
+export function JournalCatchMapMarker({ photoUrl, title, onPress, style }: MarkerProps) {
+  return (
+    <Pressable
+      style={style}
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={title ?? 'Catch'}
+    >
+      <JournalCatchMapPin photoUrl={photoUrl} />
+    </Pressable>
   );
 }

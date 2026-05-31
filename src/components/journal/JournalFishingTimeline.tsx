@@ -11,20 +11,19 @@ import {
   Text,
   TextInput,
   View,
-  type TextStyle,
-  type ViewStyle,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { v4 as uuidv4 } from 'uuid';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { FLY_NAMES } from '@/src/constants/fishingTypes';
-import { fetchFlies, fetchFlyCatalog, getFliesFromCache, loadFlyCatalogFromCache } from '@/src/services/flyService';
+import { fetchFliesOrCache, getFlyCatalogOrBundled } from '@/src/services/flyService';
 import { CatchDetailsModal } from '@/src/components/catch/CatchDetailsModal';
 import {
   ChangeFlyPickerModal,
   mergeFlyPickerSelection,
   splitFlyChangeData,
 } from '@/src/components/fly/ChangeFlyPickerModal';
+import { FlyChangeViewModal } from '@/src/components/fly/FlyChangeViewModal';
 import { BorderRadius, Colors, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import {
   deleteJournalTripEvent,
@@ -35,9 +34,9 @@ import {
   upsertJournalTripEvent,
 } from '@/src/services/sync';
 import {
-  coerceTripEventDataObject,
+  buildTimelineDisplayRows,
+  createBlankCatchEvent,
   findActiveFlyEventIdBefore,
-  formatCatchWeightLabel,
   getTripEventDescription,
   sortEventsByTime,
   timestampBetween,
@@ -45,81 +44,23 @@ import {
   upsertEventSorted,
 } from '@/src/utils/journalTimeline';
 import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinModal';
-import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Trip, TripEvent } from '@/src/types';
+import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Photo, Trip, TripEvent } from '@/src/types';
 import type { EventSyncStatus } from '@/src/types/sync';
-import { TimelineCatchPhotoStrip } from '@/src/components/catch/TimelineCatchPhotoStrip';
-import { formatEventTime } from '@/src/utils/formatters';
-import { tripLifecycleNoteTimelineIcon } from '@/src/utils/timelineTripNoteIcon';
+import { TripDashboardTimelineRows } from '@/src/components/trip/TripDashboardTimelineRows';
+import {
+  createTripDashboardTimelineTitleStyles,
+} from '@/src/components/trip/tripDashboardTimelineStyles';
+import { buildAlbumPhotoUrlsByCatchId } from '@/src/utils/catchPhotos';
+import { getTripFliesWithPhotos, formatFlySizeColorDetail } from '@/src/utils/getTripFliesWithPhotos';
+import {
+  resolveFlyImageSourceFromPhotoUrl,
+} from '@/src/utils/resolveFlyPhotoUrl';
+import { displayFlyName } from '@/src/utils/flyValidation';
 
 type RowAction = { label: string; destructive?: boolean; onPress: () => void };
 
 const TIMELINE_EDIT_HELP =
-  'Tap ⋮ on a row to edit, insert notes, fish, or fly changes, adjust start/end locations from Trip started or Trip ended, or delete.';
-
-function formatCatchLabel(value: string): string {
-  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function CatchDetailsBlock({
-  data,
-  detailStyles,
-}: {
-  data: CatchData;
-  detailStyles: { wrap: ViewStyle; line: TextStyle };
-}) {
-  const lines: string[] = [];
-  if (data.note?.trim()) lines.push(data.note.trim());
-  const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
-  if (w) lines.push(`Weight: ${w}`);
-  if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
-  if (data.structure) lines.push(`Structure: ${formatCatchLabel(data.structure)}`);
-  if (data.presentation_method) lines.push(`Presentation: ${formatCatchLabel(data.presentation_method)}`);
-  if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
-  if (lines.length === 0) return null;
-  return (
-    <View style={detailStyles.wrap}>
-      {lines.map((line, i) => (
-        <Text key={i} style={detailStyles.line}>
-          {line}
-        </Text>
-      ))}
-    </View>
-  );
-}
-
-const timelineSyncDotStyles = StyleSheet.create({
-  col: { paddingTop: 4, width: 14, alignItems: 'center' },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-});
-
-function labelForSyncStatus(s: EventSyncStatus): string {
-  switch (s) {
-    case 'synced':
-      return 'Synced to cloud';
-    case 'pending':
-      return 'Waiting to upload';
-    case 'syncing':
-      return 'Uploading';
-    case 'error':
-      return 'Upload failed, will retry';
-    default:
-      return '';
-  }
-}
-
-function TimelineSyncDot({ status, palette }: { status: EventSyncStatus; palette: ThemeColors }) {
-  const color =
-    status === 'error' ? palette.error : status === 'synced' ? palette.success : palette.warning;
-  return (
-    <View
-      style={timelineSyncDotStyles.col}
-      accessibilityRole="text"
-      accessibilityLabel={labelForSyncStatus(status)}
-    >
-      <View style={[timelineSyncDotStyles.dot, { backgroundColor: color }]} />
-    </View>
-  );
-}
+  'Tap ⋮ on a row to edit, insert notes, fish, or fly changes, adjust start/end locations from Trip started or Trip ended, or delete. Catch rows expand for details when tapped.';
 
 export interface JournalFishingTimelineProps {
   trip: Trip;
@@ -145,6 +86,8 @@ export interface JournalFishingTimelineProps {
   colorTokens?: ThemeColors;
   /** Cloud backup state per row (own-trip pending sync). Omit to hide the column. */
   eventSyncStatusForEvent?: (event: TripEvent) => EventSyncStatus;
+  /** Trip album rows — same fetch as Photos tab; timeline thumbs prefer these URLs. */
+  tripAlbumPhotos?: Photo[];
 }
 
 export function JournalFishingTimeline({
@@ -162,16 +105,26 @@ export function JournalFishingTimeline({
   compactAttributionLabels = false,
   colorTokens,
   eventSyncStatusForEvent,
+  tripAlbumPhotos = [],
 }: JournalFishingTimelineProps) {
   const palette = colorTokens ?? Colors;
+  const useDashboardTimeline = colorTokens != null;
   const styles = useMemo(() => createJournalFishingTimelineStyles(palette), [palette]);
-  const catchDetailStyles = useMemo(
-    () => ({ wrap: styles.timelineCatchDetails, line: styles.timelineCatchDetailLine }),
-    [styles],
+  const dashboardScrollStyles = useMemo(
+    () => createTripDashboardTimelineTitleStyles(palette),
+    [palette],
+  );
+  const dashboardTimelineTitleStyles = dashboardScrollStyles;
+  const albumPhotoUrlsByCatchId = useMemo(
+    () => buildAlbumPhotoUrlsByCatchId(tripAlbumPhotos),
+    [tripAlbumPhotos],
   );
 
   const sorted = useMemo(() => sortEventsByTime(events), [events]);
-  const useRecorderColumn = attributionLabelForEvent != null;
+  const timelineDisplayRows = useMemo(
+    () => buildTimelineDisplayRows(sorted, { newestFirst: useDashboardTimeline }),
+    [sorted, useDashboardTimeline],
+  );
 
   const [rowActions, setRowActions] = useState<{ event: TripEvent; index: number } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -179,6 +132,8 @@ export function JournalFishingTimeline({
   const [catchModal, setCatchModal] = useState<TripEvent | null>(null);
   const [noteModal, setNoteModal] = useState<TripEvent | null>(null);
   const [flyModal, setFlyModal] = useState<TripEvent | null>(null);
+  const [flyViewEvent, setFlyViewEvent] = useState<TripEvent | null>(null);
+  const [expandedCatchIds, setExpandedCatchIds] = useState<Set<string>>(() => new Set());
   const [aiModal, setAiModal] = useState<TripEvent | null>(null);
   const [timelineHelpVisible, setTimelineHelpVisible] = useState(false);
   const [userFlies, setUserFlies] = useState<Fly[]>([]);
@@ -191,19 +146,11 @@ export function JournalFishingTimeline({
 
   useEffect(() => {
     if (!userId) return;
-    if (isConnected) {
-      fetchFlies(userId).then(setUserFlies).catch(() => setUserFlies([]));
-    } else {
-      void getFliesFromCache(userId).then(setUserFlies);
-    }
+    void fetchFliesOrCache(userId).then(setUserFlies);
   }, [userId, isConnected]);
 
   useEffect(() => {
-    fetchFlyCatalog()
-      .then(setFlyCatalog)
-      .catch(async () => {
-        setFlyCatalog(await loadFlyCatalogFromCache());
-      });
+    void getFlyCatalogOrBundled().then(setFlyCatalog);
   }, []);
 
   const reloadFromCloud = useCallback(async () => {
@@ -293,6 +240,15 @@ export function JournalFishingTimeline({
 
   const closeRowMenu = useCallback(() => setRowActions(null), []);
 
+  const toggleCatchExpanded = useCallback((eventId: string) => {
+    setExpandedCatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  }, []);
+
   const insertNote = useCallback(
     async (index: number, placement: 'above' | 'below') => {
       closeRowMenu();
@@ -337,31 +293,7 @@ export function JournalFishingTimeline({
           ? timestampBetween(prevTs, nextTs, trip)
           : timestampBetween(prevTs, nextTs, trip);
 
-      const activeFly = findActiveFlyEventIdBefore(events, ts);
-      const newEvent: TripEvent = {
-        id: uuidv4(),
-        trip_id: trip.id,
-        event_type: 'catch',
-        timestamp: ts,
-        data: {
-          species: null,
-          size_inches: null,
-          weight_lb: null,
-          weight_oz: null,
-          note: null,
-          photo_url: null,
-          active_fly_event_id: activeFly,
-          caught_on_fly: null,
-          quantity: 1,
-          depth_ft: null,
-          presentation_method: null,
-          released: null,
-          structure: null,
-        } as CatchData,
-        conditions_snapshot: null,
-        latitude: null,
-        longitude: null,
-      };
+      const newEvent = createBlankCatchEvent(trip.id, ts, events);
       const next = upsertEventSorted(events, newEvent);
       applyEventsAndTotals(next);
       const ok = await persist(next, newEvent, 'upsert');
@@ -446,17 +378,10 @@ export function JournalFishingTimeline({
     [events, applyEventsAndTotals, persist, closeRowMenu],
   );
 
-  const flyChanges = events.filter((e) => e.event_type === 'fly_change');
-  const uniqueFlies = [
-    ...new Set(
-      flyChanges.flatMap((e) => {
-        const d = coerceTripEventDataObject(e);
-        const p1 = typeof d.pattern === 'string' ? d.pattern : '';
-        const p2 = typeof d.pattern2 === 'string' ? d.pattern2.trim() : '';
-        return p2 ? [p1, p2].filter(Boolean) : [p1].filter(Boolean);
-      }),
-    ),
-  ];
+  const tripFliesWithPhotos = useMemo(
+    () => getTripFliesWithPhotos(events, userFlies, flyCatalog),
+    [events, userFlies, flyCatalog],
+  );
 
   const rowMenuActions: RowAction[] = useMemo(() => {
     if (!rowActions) return [];
@@ -474,8 +399,8 @@ export function JournalFishingTimeline({
       });
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
-      actions.push({ label: 'Add fish above', onPress: () => void insertFish(index, 'above') });
-      actions.push({ label: 'Add fish below', onPress: () => void insertFish(index, 'below') });
+      actions.push({ label: 'Add catch above', onPress: () => void insertFish(index, 'above') });
+      actions.push({ label: 'Add catch below', onPress: () => void insertFish(index, 'below') });
       actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChange(index, 'above') });
       actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChange(index, 'below') });
     } else if (event.event_type === 'note') {
@@ -502,23 +427,31 @@ export function JournalFishingTimeline({
       actions.push({ label: 'Edit note…', onPress: () => { closeRowMenu(); setNoteModal(event); } });
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
+      actions.push({ label: 'Add catch above', onPress: () => void insertFish(index, 'above') });
+      actions.push({ label: 'Add catch below', onPress: () => void insertFish(index, 'below') });
       actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChange(index, 'above') });
       actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChange(index, 'below') });
     } else if (event.event_type === 'fly_change') {
       actions.push({ label: 'Edit fly change…', onPress: () => { closeRowMenu(); setFlyModal(event); } });
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
+      actions.push({ label: 'Add catch above', onPress: () => void insertFish(index, 'above') });
+      actions.push({ label: 'Add catch below', onPress: () => void insertFish(index, 'below') });
       actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChange(index, 'above') });
       actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChange(index, 'below') });
     } else if (event.event_type === 'ai_query') {
       actions.push({ label: 'Edit AI entry…', onPress: () => { closeRowMenu(); setAiModal(event); } });
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
+      actions.push({ label: 'Add catch above', onPress: () => void insertFish(index, 'above') });
+      actions.push({ label: 'Add catch below', onPress: () => void insertFish(index, 'below') });
       actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChange(index, 'above') });
       actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChange(index, 'below') });
     } else {
       actions.push({ label: 'Add note above', onPress: () => void insertNote(index, 'above') });
       actions.push({ label: 'Add note below', onPress: () => void insertNote(index, 'below') });
+      actions.push({ label: 'Add catch above', onPress: () => void insertFish(index, 'above') });
+      actions.push({ label: 'Add catch below', onPress: () => void insertFish(index, 'below') });
       actions.push({ label: 'Add fly change above', onPress: () => void insertFlyChange(index, 'above') });
       actions.push({ label: 'Add fly change below', onPress: () => void insertFlyChange(index, 'below') });
     }
@@ -533,23 +466,63 @@ export function JournalFishingTimeline({
 
   return (
     <View style={styles.root}>
-      <ScrollView style={styles.tabContent} contentContainerStyle={styles.tabContentInner}>
-        {trip.status === 'completed' && uniqueFlies.length > 0 ? (
-          <View style={styles.section}>
+      <ScrollView
+        style={styles.tabContent}
+        contentContainerStyle={
+          useDashboardTimeline ? styles.dashboardTimelineOuter : styles.tabContentInner
+        }
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+      >
+        {trip.status === 'completed' && tripFliesWithPhotos.length > 0 ? (
+          <View style={useDashboardTimeline ? styles.dashboardFlySection : styles.section}>
             <Text style={styles.sectionTitle}>Flies Used</Text>
-            <View style={styles.flyChips}>
-              {uniqueFlies.map((fly, i) => (
-                <View key={i} style={styles.flyChip}>
-                  <Text style={styles.flyChipText}>{fly}</Text>
-                </View>
-              ))}
-            </View>
+            <ScrollView
+              horizontal
+              nestedScrollEnabled
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.flyChipsScroll}
+            >
+              {tripFliesWithPhotos.map((fly) => {
+                const imageSource = resolveFlyImageSourceFromPhotoUrl(fly.pattern, fly.photoUrl);
+                const sizeColor = formatFlySizeColorDetail(fly.size, fly.color);
+                return (
+                  <View key={fly.key} style={styles.flyChip}>
+                    {imageSource ? (
+                      <Image source={imageSource} style={styles.flyChipImage} resizeMode="contain" />
+                    ) : (
+                      <View style={styles.flyChipImagePlaceholder}>
+                        <MaterialCommunityIcons name="hook" size={14} color={palette.textTertiary} />
+                      </View>
+                    )}
+                    <View style={styles.flyChipTextCol}>
+                      <Text style={styles.flyChipText} numberOfLines={2}>
+                        {displayFlyName(fly.pattern)}
+                      </Text>
+                      {sizeColor ? (
+                        <Text style={styles.flyChipDetail} numberOfLines={1}>
+                          {sizeColor}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
           </View>
         ) : null}
 
-        <View style={styles.section}>
+        <View style={useDashboardTimeline ? styles.dashboardTimelineBlock : styles.section}>
           <View style={styles.timelineSectionHeader}>
-            <Text style={styles.sectionTitle}>Timeline</Text>
+            <Text
+              style={
+                useDashboardTimeline
+                  ? dashboardTimelineTitleStyles.timelineTitle
+                  : styles.sectionTitle
+              }
+            >
+              Timeline
+            </Text>
             {editMode ? (
               <Pressable
                 onPress={() => setTimelineHelpVisible(true)}
@@ -565,101 +538,24 @@ export function JournalFishingTimeline({
           {sorted.length === 0 ? (
             <Text style={styles.emptyHint}>No events recorded for this trip.</Text>
           ) : (
-            sorted.map((event, index) => {
-              const noteTextForIcon =
-                event.event_type === 'note'
-                  ? (() => {
-                      const o = coerceTripEventDataObject(event);
-                      return typeof o.text === 'string' ? o.text : '';
-                    })()
-                  : '';
-              const lifecycleIcon =
-                event.event_type === 'note'
-                  ? tripLifecycleNoteTimelineIcon(noteTextForIcon, palette)
-                  : null;
-              const recorderLabel = useRecorderColumn
-                ? (attributionLabelForEvent?.(event)?.trim() || 'Angler')
-                : '';
-              const attributionUri = useRecorderColumn
-                ? attributionAvatarUriForEvent?.(event)?.trim() || null
-                : null;
-              const attributionInitial =
-                recorderLabel.length > 0 ? recorderLabel.charAt(0).toUpperCase() : '?';
-              // Match recorderLabel fallback so a missing/blank callback string does not hide the name row while an avatar still shows.
-              const showNameLine =
-                useRecorderColumn && !compactAttributionLabels && recorderLabel.length > 0;
-
-              return (
-                <View key={event.id} style={styles.timelineItem}>
-                  <Text style={styles.timelineTime}>{formatEventTime(event.timestamp)}</Text>
-                  {useRecorderColumn ? (
-                    <View style={styles.timelineAttributionAvatarCol}>
-                      {attributionUri ? (
-                        <Image
-                          source={{ uri: attributionUri }}
-                          style={styles.timelineAttributionAvatar}
-                          contentFit="cover"
-                          accessibilityIgnoresInvertColors
-                        />
-                      ) : (
-                        <View
-                          style={[
-                            styles.timelineAttributionAvatar,
-                            styles.timelineAttributionAvatarPlaceholder,
-                          ]}
-                        >
-                          <Text style={styles.timelineAttributionAvatarLetter}>{attributionInitial}</Text>
-                        </View>
-                      )}
-                    </View>
-                  ) : null}
-                  <View style={styles.timelineContent}>
-                    <View style={styles.timelineDot}>
-                      {event.event_type === 'catch' ? (
-                        <MaterialCommunityIcons name="fish" size={14} color={palette.primaryLight} />
-                      ) : event.event_type === 'fly_change' ? (
-                        <MaterialCommunityIcons name="hook" size={14} color={palette.secondaryLight} />
-                      ) : event.event_type === 'ai_query' ? (
-                        <MaterialIcons name="smart-toy" size={14} color={palette.info} />
-                      ) : lifecycleIcon ? (
-                        <MaterialIcons name={lifecycleIcon.name} size={14} color={lifecycleIcon.color} />
-                      ) : (
-                        <MaterialIcons name="edit-note" size={14} color={palette.textSecondary} />
-                      )}
-                    </View>
-                    <View style={styles.timelineTextBlock}>
-                      {showNameLine ? (
-                        <Text style={styles.timelineAttribution}>{recorderLabel}</Text>
-                      ) : null}
-                      <Text style={styles.timelineText}>{getTripEventDescription(event)}</Text>
-                      {event.event_type === 'catch' ? (
-                        <CatchDetailsBlock data={event.data as CatchData} detailStyles={catchDetailStyles} />
-                      ) : null}
-                      {event.event_type === 'catch' ? (
-                        <TimelineCatchPhotoStrip
-                          data={event.data as CatchData}
-                          onPress={() => onCatchPhotoPress?.(event)}
-                          imageStyle={styles.timelineCatchThumb}
-                        />
-                      ) : null}
-                    </View>
-                    {eventSyncStatusForEvent ? (
-                      <TimelineSyncDot status={eventSyncStatusForEvent(event)} palette={palette} />
-                    ) : null}
-                    {editMode ? (
-                      <Pressable
-                        style={styles.rowMenuBtn}
-                        onPress={() => openRowMenu(event, index)}
-                        hitSlop={12}
-                        disabled={saving}
-                      >
-                        <MaterialIcons name="more-vert" size={22} color={palette.textSecondary} />
-                      </Pressable>
-                    ) : null}
-                  </View>
-                </View>
-              );
-            })
+            <TripDashboardTimelineRows
+              rows={timelineDisplayRows}
+              colors={palette}
+              userFlies={userFlies}
+              flyCatalog={flyCatalog}
+              albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
+              expandedCatchIds={expandedCatchIds}
+              onToggleCatchExpanded={toggleCatchExpanded}
+              onCatchPhotoPress={onCatchPhotoPress}
+              onCatchEditPress={editMode ? (ev) => setCatchModal(ev) : undefined}
+              onFlyViewPress={setFlyViewEvent}
+              onRowMenuPress={(event, index) => openRowMenu(event, index)}
+              showRowMenu={editMode}
+              attributionLabelForEvent={attributionLabelForEvent}
+              attributionAvatarUriForEvent={attributionAvatarUriForEvent}
+              compactAttributionLabels={compactAttributionLabels}
+              eventSyncStatusForEvent={eventSyncStatusForEvent}
+            />
           )}
         </View>
       </ScrollView>
@@ -748,6 +644,22 @@ export function JournalFishingTimeline({
           setNoteModal(null);
         }}
       />
+      <FlyChangeViewModal
+        visible={flyViewEvent != null}
+        onClose={() => setFlyViewEvent(null)}
+        data={flyViewEvent ? (flyViewEvent.data as FlyChangeData) : null}
+        userFlies={userFlies}
+        flyCatalog={flyCatalog}
+        onEdit={
+          editMode && flyViewEvent
+            ? () => {
+                const ev = flyViewEvent;
+                setFlyViewEvent(null);
+                setFlyModal(ev);
+              }
+            : undefined
+        }
+      />
       <ChangeFlyPickerModal
         visible={flyModal != null}
         onClose={() => setFlyModal(null)}
@@ -766,6 +678,10 @@ export function JournalFishingTimeline({
           void persist(nextEvents, updated, 'upsert');
           setFlyModal(null);
         }}
+        userId={userId}
+        isConnected={isConnected}
+        tripId={trip.id}
+        onUserFliesUpdated={setUserFlies}
       />
       <EditAiModal
         visible={aiModal != null}
@@ -788,6 +704,20 @@ function createJournalFishingTimelineStyles(c: ThemeColors) {
     root: { flex: 1 },
     tabContent: { flex: 1 },
     tabContentInner: { padding: Spacing.lg, gap: Spacing.md },
+    dashboardTimelineOuter: {
+      flexGrow: 1,
+      paddingBottom: Spacing.lg,
+    },
+    dashboardFlySection: {
+      gap: Spacing.sm,
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.lg,
+    },
+    dashboardTimelineBlock: {
+      flex: 1,
+      paddingHorizontal: Spacing.lg,
+      marginTop: Spacing.sm,
+    },
     section: { gap: Spacing.sm },
     sectionTitle: {
       fontSize: FontSize.xs,
@@ -834,16 +764,42 @@ function createJournalFishingTimelineStyles(c: ThemeColors) {
     },
     timelineHelpDismissText: { fontSize: FontSize.sm, fontWeight: '600', color: c.primaryLight },
     emptyHint: { fontSize: FontSize.sm, color: c.text, textAlign: 'center', opacity: 0.75 },
-    flyChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+    flyChipsScroll: { gap: Spacing.sm, paddingVertical: Spacing.xs },
     flyChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
       backgroundColor: c.surfaceElevated,
-      borderRadius: BorderRadius.full,
+      borderRadius: BorderRadius.md,
       paddingHorizontal: Spacing.md,
       paddingVertical: Spacing.sm,
       borderWidth: 1,
       borderColor: c.border,
+      maxWidth: 200,
     },
+    flyChipImage: {
+      width: 28,
+      height: 28,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: c.background,
+    },
+    flyChipImagePlaceholder: {
+      width: 28,
+      height: 28,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: c.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    flyChipTextCol: { flexShrink: 1, minWidth: 0, gap: 2 },
     flyChipText: { fontSize: FontSize.sm, fontWeight: '500', color: c.text },
+    flyChipDetail: { fontSize: FontSize.xs, color: c.textSecondary },
+    timelineFlyThumb: {
+      width: 22,
+      height: 22,
+      borderRadius: 4,
+      backgroundColor: c.background,
+    },
     timelineItem: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start', alignSelf: 'stretch' },
     timelineTime: { fontSize: FontSize.xs, color: c.text, width: 65, paddingTop: 2, opacity: 0.75 },
     timelineAttributionAvatarCol: { paddingTop: 2 },
@@ -865,7 +821,21 @@ function createJournalFishingTimelineStyles(c: ThemeColors) {
       color: c.textInverse,
     },
     timelineContent: { flex: 1, minWidth: 0, flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start' },
+    timelineFlyPressable: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      alignItems: 'flex-start',
+    },
     timelineDot: { width: 20, alignItems: 'center', paddingTop: 2 },
+    timelineDotCatchPhoto: { width: 24, overflow: 'hidden' },
+    timelineCatchNodeImage: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: c.surfaceElevated,
+    },
     timelineTextBlock: { flex: 1, minWidth: 0, flexShrink: 1, gap: Spacing.sm },
     timelineAttribution: {
       fontSize: FontSize.xs,
@@ -875,9 +845,9 @@ function createJournalFishingTimelineStyles(c: ThemeColors) {
       opacity: 0.9,
     },
     timelineText: { fontSize: FontSize.sm, color: c.text, fontWeight: '500' },
-    timelineCatchThumb: { width: 72, height: 72, borderRadius: BorderRadius.sm, backgroundColor: c.surfaceElevated },
     timelineCatchDetails: { marginTop: Spacing.xs, gap: 2 },
     timelineCatchDetailLine: { fontSize: FontSize.xs, color: c.text, opacity: 0.85 },
+    rowExpandBtn: { padding: Spacing.xs, paddingTop: 2 },
     rowMenuBtn: { padding: Spacing.xs },
     actionOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
     actionSheet: {

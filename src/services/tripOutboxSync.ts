@@ -6,7 +6,7 @@ import {
   updatePendingTripEventPhotoUrl,
   type PendingPhoto,
 } from '@/src/services/pendingPhotoStorage';
-import { patchPendingTripPayload, type PendingTripPayload } from '@/src/services/pendingSyncStorage';
+import { patchPendingTripPayload, patchPendingTripEvents, type PendingTripPayload } from '@/src/services/pendingSyncStorage';
 import { addPhoto } from '@/src/services/photoService';
 import {
   syncTripToCloud,
@@ -17,6 +17,8 @@ import {
 } from '@/src/services/sync';
 import { useTripStore } from '@/src/stores/tripStore';
 import { deleteSandboxPendingPhotoFile } from '@/src/services/persistentPhotoUri';
+import { processPendingFlyOpsForTripId } from '@/src/services/flyService';
+import { remapTripEventsFlyBoxIds } from '@/src/utils/flyChangeRemap';
 
 let outboxChain: Promise<void> = Promise.resolve();
 
@@ -85,21 +87,41 @@ function allEventsSyncedState(events: TripEvent[], status: EventSyncStatus): Rec
   return m;
 }
 
+/** Upload pending photos + fly box creates for a trip, remap fly_change events. */
+export async function prepareTripEventsForCloudSync(
+  trip: Trip,
+  events: TripEvent[],
+): Promise<TripEvent[]> {
+  try {
+    await processPendingPhotosForTripId(trip.id);
+  } catch (e) {
+    console.warn('[prepareTripEventsForCloudSync] processPendingPhotosForTripId', e);
+  }
+
+  try {
+    const remap = await processPendingFlyOpsForTripId(trip.id, trip.user_id, events);
+    if (remap.size === 0) return events;
+    useTripStore.getState().resolvePendingFlyBoxInEvents(trip.id, remap);
+    const remapped = remapTripEventsFlyBoxIds(events, remap);
+    await patchPendingTripEvents(trip.id, remapped);
+    return remapped;
+  } catch (e) {
+    console.warn('[prepareTripEventsForCloudSync] processPendingFlyOpsForTripId', e);
+    return events;
+  }
+}
+
 /**
- * Push one pending trip bundle: photos for trip → trip/events/catches → optional deferred survey last.
+ * Push one pending trip bundle: photos for trip → fly box creates → trip/events/catches → optional deferred survey last.
  */
 export async function syncPendingTripBundle(payload: PendingTripPayload): Promise<boolean> {
-  const { trip, events, surveyPendingCloud, deferredSurvey, tripNotesPreSurvey } = payload;
+  let { trip, events, surveyPendingCloud, deferredSurvey, tripNotesPreSurvey } = payload;
 
   await patchPendingTripPayload(trip.id, {
     eventSyncState: allEventsSyncedState(events, 'syncing'),
   });
 
-  try {
-    await processPendingPhotosForTripId(trip.id);
-  } catch (e) {
-    console.warn('[syncPendingTripBundle] processPendingPhotosForTripId', e);
-  }
+  events = await prepareTripEventsForCloudSync(trip, events);
 
   if (surveyPendingCloud && deferredSurvey) {
     const tripBase: Trip = {

@@ -1,5 +1,33 @@
 import { isPointInBoundingBox } from '@/src/types/boundingBox';
-import { getDownloadedWaterways } from '@/src/services/waterwayCache';
+import { getDownloadedWaterways, type DownloadedWaterway } from '@/src/services/waterwayCache';
+
+/**
+ * Returns the saved offline bundle covering this place, if any.
+ */
+export async function findOfflineDownloadForPlace(
+  lat: number | null,
+  lng: number | null,
+  locationId?: string | null,
+): Promise<DownloadedWaterway | null> {
+  if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  const waterways = await getDownloadedWaterways();
+
+  for (const w of waterways) {
+    if (w.downloadBbox && isPointInBoundingBox(lat, lng, w.downloadBbox)) {
+      return w;
+    }
+    if (locationId) {
+      if (w.locationId === locationId || w.locationIds.includes(locationId)) {
+        return w;
+      }
+    }
+  }
+
+  return null;
+}
 
 /**
  * True if coordinates fall inside any saved offline region bbox, or (legacy) the location
@@ -10,22 +38,5 @@ export async function isPlaceCoveredByOfflineDownloads(
   lng: number | null,
   locationId?: string | null,
 ): Promise<boolean> {
-  if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return false;
-  }
-
-  const waterways = await getDownloadedWaterways();
-
-  for (const w of waterways) {
-    if (w.downloadBbox && isPointInBoundingBox(lat, lng, w.downloadBbox)) {
-      return true;
-    }
-    if (locationId) {
-      if (w.locationId === locationId || w.locationIds.includes(locationId)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return (await findOfflineDownloadForPlace(lat, lng, locationId)) != null;
 }

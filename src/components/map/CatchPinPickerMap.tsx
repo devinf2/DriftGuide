@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ExpandableMapFrame, type ExpandableMapMode } from '@/src/components/map/ExpandableMapFrame';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
@@ -85,6 +86,8 @@ export type CatchPinPickerMapProps = {
   onCatalogMarkerPress?: (id: string) => void;
   /** Highlights a catalog pin after selection (optional). */
   selectedCatalogMarkerId?: string | null;
+  /** When true (default), shows an expand control for a full-screen map modal. */
+  expandable?: boolean;
 };
 
 /**
@@ -112,6 +115,10 @@ function createCatchPinPickerStyles(colors: ThemeColors) {
     mapBodyFlex: {
       flex: 1,
       minHeight: 160,
+    },
+    mapFramePreview: {
+      flex: 1,
+      minHeight: 0,
     },
     hint: {
       fontSize: FontSize.xs,
@@ -178,6 +185,7 @@ export function CatchPinPickerMap({
   catalogMarkers,
   onCatalogMarkerPress,
   selectedCatalogMarkerId = null,
+  expandable = true,
 }: CatchPinPickerMapProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createCatchPinPickerStyles(colors), [colors]);
@@ -280,8 +288,16 @@ export function CatchPinPickerMap({
   const resolvedStyleURL = mapStyleProp ?? mapboxStyleURLForBasemap(basemapId);
   const showBasemap = showBasemapSwitcher && mapStyleProp == null;
 
-  const mapBody = (
-    <View style={height === undefined ? styles.mapBodyFlex : styles.mapBodyFixed}>
+  const renderMapBody = (mode: ExpandableMapMode) => (
+    <View
+      style={
+        mode === 'fullscreen'
+          ? styles.mapBodyFlex
+          : height === undefined
+            ? styles.mapBodyFlex
+            : styles.mapBodyFixed
+      }
+    >
       <MapView
         style={StyleSheet.absoluteFill}
         styleURL={resolvedStyleURL}
@@ -347,8 +363,16 @@ export function CatchPinPickerMap({
           </View>
         </View>
       ) : null}
-      {showBasemap ? <MapBasemapSwitcher compact /> : null}
+      {showBasemap ? <MapBasemapSwitcher compact={mode === 'preview'} /> : null}
     </View>
+  );
+
+  const mapSection = expandable ? (
+    <ExpandableMapFrame enabled previewContainerStyle={styles.mapFramePreview}>
+      {({ mode }) => renderMapBody(mode)}
+    </ExpandableMapFrame>
+  ) : (
+    renderMapBody('preview')
   );
 
   const wrapStyle =
@@ -359,7 +383,7 @@ export function CatchPinPickerMap({
   return (
     <View style={wrapStyle}>
       {showHint && hintPosition === 'above' ? <Text style={styles.hint}>{resolvedHint}</Text> : null}
-      {mapBody}
+      {mapSection}
       {showHint && hintPosition === 'below' ? <Text style={[styles.hint, styles.hintBelow]}>{resolvedHint}</Text> : null}
     </View>
   );

@@ -351,6 +351,21 @@ export default function FriendsScreen() {
     );
   };
 
+  const confirmRemoveFriend = (f: FriendshipRow, label: string) => {
+    Alert.alert(
+      'Remove friend?',
+      `${label} will be removed from your friends list.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => void remove(f).then(() => refresh(myId)),
+        },
+      ],
+    );
+  };
+
   const hasFriendCode = Boolean(profile?.friend_code?.trim());
 
   const handleAcceptSessionInvite = async (inv: SessionInvite) => {
@@ -539,7 +554,7 @@ export default function FriendsScreen() {
                           </Text>
                         ) : null}
                       </View>
-                      <Pressable onPress={() => remove(f).then(() => refresh(myId))} hitSlop={8}>
+                      <Pressable onPress={() => confirmRemoveFriend(f, label)} hitSlop={8}>
                         <Text style={{ color: colors.error, fontWeight: '600' }}>Remove</Text>
                       </Pressable>
                     </View>

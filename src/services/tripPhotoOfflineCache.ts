@@ -19,6 +19,13 @@ export const MAX_PINNED_TRIPS = 20;
 type Manifest = Record<string, string>;
 
 let manifestMemory: Manifest | null = null;
+/** Avoid repeated filesystem checks for the same remote URL within a session. */
+const resolvedUriMemory = new Map<string, string>();
+
+function cacheResolvedUri(remoteUrl: string, resolved: string): string {
+  resolvedUriMemory.set(remoteUrl, resolved);
+  return resolved;
+}
 
 function cacheDirUri(): string | null {
   const base = documentDirectory;
@@ -54,6 +61,7 @@ async function writeManifest(m: Manifest): Promise<void> {
 /** Call after manifest-changing ops if other modules need fresh reads without reload. */
 export function invalidateTripPhotoManifestCache(): void {
   manifestMemory = null;
+  resolvedUriMemory.clear();
 }
 
 export async function getPinnedTripIds(): Promise<string[]> {
@@ -183,15 +191,18 @@ export async function clearTripPhotoOfflineCache(): Promise<void> {
 export async function resolveTripPhotoUri(remoteUrl: string): Promise<string> {
   if (!remoteUrl || !remoteUrl.startsWith('http')) return remoteUrl;
 
+  const cached = resolvedUriMemory.get(remoteUrl);
+  if (cached) return cached;
+
   const manifest = await readManifest();
   const fname = manifest[remoteUrl];
-  if (!fname) return remoteUrl;
+  if (!fname) return cacheResolvedUri(remoteUrl, remoteUrl);
 
   const dir = cacheDirUri();
-  if (!dir) return remoteUrl;
+  if (!dir) return cacheResolvedUri(remoteUrl, remoteUrl);
 
   const fileUri = `${dir}${fname}`;
   const info = await getInfoAsync(fileUri);
-  if (info.exists) return fileUri;
-  return remoteUrl;
+  if (info.exists) return cacheResolvedUri(remoteUrl, fileUri);
+  return cacheResolvedUri(remoteUrl, remoteUrl);
 }

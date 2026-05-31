@@ -8,7 +8,8 @@ import {
 } from 'react';
 import { Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
+import { ExpandableMapFrame, type ExpandableMapMode } from '@/src/components/map/ExpandableMapFrame';
+import { JournalCatchMapMarker, JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
@@ -21,8 +22,8 @@ import {
 } from '@/src/constants/mapDefaults';
 import { Colors, FontSize, Spacing } from '@/src/constants/theme';
 import { dedupeConsecutiveLngLat, matchWalkingRoute } from '@/src/services/mapboxWalkingMatch';
-import type { CatchData, Trip, TripEvent } from '@/src/types';
-import { getCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
+import type { CatchData, Photo, Trip, TripEvent } from '@/src/types';
+import { buildAlbumPhotoUrlsByCatchId, resolveCatchHeroPhotoUrl } from '@/src/utils/catchPhotos';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
@@ -50,7 +51,11 @@ function loadMapbox(): Record<string, unknown> | null {
 }
 
 /** Chronological route: start → catches (by time) → end. */
-export function buildJournalWaypoints(trip: Trip, events: TripEvent[]): JournalWaypoint[] {
+export function buildJournalWaypoints(
+  trip: Trip,
+  events: TripEvent[],
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
+): JournalWaypoint[] {
   const waypoints: JournalWaypoint[] = [];
 
   const { startLat: startLatResolved, startLon: startLonResolved, endLat: endLatResolved, endLon: endLonResolved } =
@@ -83,7 +88,7 @@ export function buildJournalWaypoints(trip: Trip, events: TripEvent[]): JournalW
       title: species ? `Catch · ${species}` : 'Catch',
       pinColor: Colors.primaryLight,
       kind: 'catch',
-      photoUrl: getCatchHeroPhotoUrl(data),
+      photoUrl: resolveCatchHeroPhotoUrl(e.id, data, albumPhotoUrlsByCatchId),
       catchEventId: e.id,
     });
   }
@@ -109,8 +114,9 @@ function mergeJournalWaypointsWithPlacement(
   trip: Trip,
   events: TripEvent[],
   placement: { kind: 'start' | 'end'; lat: number; lng: number } | null,
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
 ): JournalWaypoint[] {
-  const base = buildJournalWaypoints(trip, events);
+  const base = buildJournalWaypoints(trip, events, albumPhotoUrlsByCatchId);
   if (!placement) return base;
   const pinColor = placement.kind === 'start' ? Colors.primary : Colors.secondary;
   const wp: JournalWaypoint = {
@@ -162,6 +168,10 @@ type Props = {
   placementLongitude?: number;
   placementFocusKey?: number;
   onPlacementCoordinateChange?: (lat: number, lng: number) => void;
+  /** When true (default), shows an expand control for a full-screen map modal. */
+  expandable?: boolean;
+  /** When set, catch pin photos use the same album rows as the Photos tab. */
+  tripAlbumPhotos?: Photo[];
 };
 
 /**
@@ -212,8 +222,14 @@ export function JournalTripRouteMapView({
   placementLongitude,
   placementFocusKey = 0,
   onPlacementCoordinateChange,
+  expandable = true,
+  tripAlbumPhotos = [],
 }: Props) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
+  const albumPhotoUrlsByCatchId = useMemo(
+    () => buildAlbumPhotoUrlsByCatchId(tripAlbumPhotos),
+    [tripAlbumPhotos],
+  );
   const rawMod = useMemo(() => loadMapbox(), []);
   /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
   const pointAnnotationLayerBelowId = useMemo(() => getAnnotationsLayerID('PointAnnotations'), []);
@@ -238,8 +254,8 @@ export function JournalTripRouteMapView({
       placementKind != null && placementLatitude != null && placementLongitude != null
         ? { kind: placementKind, lat: placementLatitude, lng: placementLongitude }
         : null;
-    return mergeJournalWaypointsWithPlacement(trip, events, placement);
-  }, [trip, events, placementKind, placementLatitude, placementLongitude]);
+    return mergeJournalWaypointsWithPlacement(trip, events, placement, albumPhotoUrlsByCatchId);
+  }, [trip, events, placementKind, placementLatitude, placementLongitude, albumPhotoUrlsByCatchId]);
   const pathLngLat = useMemo(() => {
     const raw = waypoints.map((w) => [w.lng, w.lat] as [number, number]);
     return dedupeConsecutiveLngLat(raw);
@@ -369,7 +385,7 @@ export function JournalTripRouteMapView({
     );
   }
 
-  const { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } = mod;
+  const { MapView, Camera, PointAnnotation, MarkerView, ShapeSource, LineLayer } = mod;
   if (!MapView || !Camera || !PointAnnotation || !ShapeSource || !LineLayer) {
     return (
       <View style={[styles.placeholder, containerStyle]}>
@@ -387,8 +403,8 @@ export function JournalTripRouteMapView({
       ? waypoints.filter((w) => w.kind !== placementKind)
       : waypoints;
 
-  return (
-    <View style={[styles.fill, containerStyle]}>
+  const renderMapBody = (mode: ExpandableMapMode) => (
+    <>
       <MapView
         style={styles.map}
         styleURL={mapboxStyleURLForBasemap(basemapId)}
@@ -399,7 +415,7 @@ export function JournalTripRouteMapView({
         onCameraChanged={isPlacing ? (e: unknown) => handlePlacementCamera(e) : undefined}
       >
         <Camera
-          ref={cameraRef}
+          ref={mode === 'preview' ? cameraRef : undefined}
           key={isPlacing ? `place-${placementFocusKey}` : 'route'}
           defaultSettings={
             isPlacing && placementLatitude != null && placementLongitude != null
@@ -417,11 +433,6 @@ export function JournalTripRouteMapView({
         />
         {routeFeature ? (
           <ShapeSource id="journalTripRoute" shape={routeFeature}>
-            {/*
-              PointAnnotation renders to a dedicated style layer (see getAnnotationsLayerID).
-              `slot="bottom"` is not enough — that slot can still stack above that layer.
-              Place the glow directly under the point-annotation layer, then stack the core on top of the glow.
-            */}
             <LineLayer
               id="journalRouteGlow"
               belowLayerID={pointAnnotationLayerBelowId}
@@ -448,12 +459,32 @@ export function JournalTripRouteMapView({
         ) : null}
         {annotationsWaypoints.map((w) =>
           w.kind === 'catch' ? (
-            <JournalCatchPointAnnotation
-              key={w.id}
-              w={w}
-              PointAnnotation={PointAnnotation}
-              onCatchWaypointPress={onCatchWaypointPress}
-            />
+            MarkerView ? (
+              <MarkerView
+                key={w.id}
+                coordinate={[w.lng, w.lat]}
+                anchor={{ x: 0.5, y: 0.5 }}
+                allowOverlap
+                allowOverlapWithPuck
+              >
+                <JournalCatchMapMarker
+                  photoUrl={w.photoUrl}
+                  title={w.title}
+                  onPress={
+                    onCatchWaypointPress && w.catchEventId
+                      ? () => onCatchWaypointPress(w.catchEventId!)
+                      : undefined
+                  }
+                />
+              </MarkerView>
+            ) : (
+              <JournalCatchPointAnnotation
+                key={w.id}
+                w={w}
+                PointAnnotation={PointAnnotation}
+                onCatchWaypointPress={onCatchWaypointPress}
+              />
+            )
           ) : (
             <PointAnnotation key={w.id} id={w.id} coordinate={[w.lng, w.lat]} title={w.title}>
               <View collapsable={false} pointerEvents="box-none">
@@ -479,9 +510,19 @@ export function JournalTripRouteMapView({
         </View>
       ) : null}
 
-      <MapBasemapSwitcher />
-    </View>
+      <MapBasemapSwitcher compact={mode === 'preview'} />
+    </>
   );
+
+  if (expandable) {
+    return (
+      <ExpandableMapFrame enabled previewContainerStyle={[styles.fill, containerStyle]}>
+        {({ mode }) => <View style={styles.fill}>{renderMapBody(mode)}</View>}
+      </ExpandableMapFrame>
+    );
+  }
+
+  return <View style={[styles.fill, containerStyle]}>{renderMapBody('preview')}</View>;
 }
 
 const styles = StyleSheet.create({

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
+  PixelRatio,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +16,7 @@ import { fetchPhotosVisibleForTripIds } from '@/src/services/photoService';
 import { fetchProfile } from '@/src/services/friendsService';
 import { listSessionMembers, listTripsInSession } from '@/src/services/sharedSessionService';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { layoutSizeToPixelSize } from '@/src/utils/photoDisplayUrl';
 import type { Photo, Trip } from '@/src/types';
 
 type PhotosMode = 'group' | string;
@@ -253,6 +255,10 @@ export function SharedTripPhotosSection({
   });
 
   const thumbSize = DEFAULT_PHOTO_SIZE;
+  const thumbPixelSize = useMemo(
+    () => layoutSizeToPixelSize(thumbSize, PixelRatio.get()),
+    [thumbSize],
+  );
   const showAddTile = Boolean(onAddPhoto) && photosMode === trip.id;
 
   return (
@@ -385,6 +391,7 @@ export function SharedTripPhotosSection({
               <Pressable key={photo.id} onPress={() => onPhotoPress(photo)}>
                 <OfflineTripPhotoImage
                   remoteUri={photo.url}
+                  maxPixelSize={thumbPixelSize}
                   style={{
                     width: thumbSize,
                     height: thumbSize,

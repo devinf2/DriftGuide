@@ -27,6 +27,7 @@ import {
   useState,
 } from 'react';
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { PinchZoomPhotoViewport } from '@/src/components/PinchZoomPhotoViewport';
 import { getPinnedTripIds } from '@/src/services/tripPhotoOfflineCache';
 import {
   ActivityIndicator,
@@ -1029,39 +1030,28 @@ export const ProfilePhotoLibrarySection = forwardRef<ProfilePhotoLibraryHandle, 
                   }}
                   renderItem={({ item }) => (
                     <View style={[styles.photoPagerPage, { width: winWidth, height: photoModalHeroHeight }]}>
-                      <OfflineTripPhotoImage
-                        remoteUri={item.url}
-                        style={{ width: winWidth, height: photoModalHeroHeight }}
-                        contentFit="contain"
-                      />
+                      <PinchZoomPhotoViewport width={winWidth} height={photoModalHeroHeight}>
+                        <OfflineTripPhotoImage
+                          remoteUri={item.url}
+                          style={{ width: winWidth, height: photoModalHeroHeight }}
+                          contentFit="contain"
+                        />
+                      </PinchZoomPhotoViewport>
                     </View>
                   )}
                 />
-              ) : Platform.OS === 'ios' ? (
-                <ScrollView
-                  style={[styles.fullScreenZoomViewport, { width: winWidth, height: photoModalHeroHeight }]}
-                  contentContainerStyle={{ width: winWidth, height: photoModalHeroHeight }}
-                  minimumZoomScale={1}
-                  maximumZoomScale={4}
-                  centerContent
-                  bouncesZoom
-                  showsHorizontalScrollIndicator={false}
-                  showsVerticalScrollIndicator={false}
-                >
-                  <View style={{ width: winWidth, height: photoModalHeroHeight }}>
-                    <OfflineTripPhotoImage
-                      remoteUri={viewerPhoto.url}
-                      style={{ width: winWidth, height: photoModalHeroHeight }}
-                      contentFit="contain"
-                    />
-                  </View>
-                </ScrollView>
               ) : (
-                <OfflineTripPhotoImage
-                  remoteUri={viewerPhoto.url}
-                  style={[styles.fullScreenImage, { width: winWidth, height: photoModalHeroHeight }]}
-                  contentFit="contain"
-                />
+                <PinchZoomPhotoViewport
+                  width={winWidth}
+                  height={photoModalHeroHeight}
+                  style={styles.fullScreenZoomViewport}
+                >
+                  <OfflineTripPhotoImage
+                    remoteUri={viewerPhoto.url}
+                    style={{ width: winWidth, height: photoModalHeroHeight }}
+                    contentFit="contain"
+                  />
+                </PinchZoomPhotoViewport>
               )}
               <View style={styles.photoInfo}>
                 {filteredPhotos.length > 1 ? (
@@ -1445,9 +1435,6 @@ function createProfilePhotoLibraryStyles(colors: ThemeColors) {
   },
   fullScreenScrollContent: {
     flexGrow: 1,
-  },
-  fullScreenImage: {
-    marginTop: Spacing.sm,
   },
   /** Horizontal pager in full-screen viewer (`filteredPhotos.length > 1`). */
   photoPager: {

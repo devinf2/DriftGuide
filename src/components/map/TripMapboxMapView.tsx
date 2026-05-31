@@ -1,4 +1,5 @@
-import { JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
+import { ExpandableMapFrame, type ExpandableMapMode } from '@/src/components/map/ExpandableMapFrame';
+import { JournalCatchMapMarker, JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
@@ -123,6 +124,32 @@ function TripMapboxMarkerViewItem({
   );
 }
 
+function TripMapboxCatchMarkerViewItem({
+  m,
+  MarkerView,
+  styles,
+}: {
+  m: MapboxMapMarker;
+  MarkerView: ComponentType<Record<string, unknown>>;
+  styles: ReturnType<typeof createTripMapboxMapStyles>;
+}) {
+  return (
+    <MarkerView
+      coordinate={m.coordinate}
+      anchor={{ x: 0.5, y: 0.5 }}
+      allowOverlap
+      allowOverlapWithPuck
+    >
+      <JournalCatchMapMarker
+        photoUrl={m.catchPhotoUrl}
+        title={m.title}
+        onPress={m.onPress ? () => runMarkerPressOnce(m.coordinate, () => m.onPress?.()) : undefined}
+        style={styles.markerViewPressable}
+      />
+    </MarkerView>
+  );
+}
+
 function TripMapboxMarkerItem({
   m,
   PointAnnotation,
@@ -231,6 +258,8 @@ type TripMapboxMapViewProps = {
    * Map tab only: (i) immediately left of centered Mapbox logo; layers above trailing (+).
    */
   mapTabControlLayout?: boolean;
+  /** When true (default), shows an expand control for a full-screen map modal. */
+  expandable?: boolean;
 };
 
 /**
@@ -255,6 +284,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       trailingFab = null,
       reservePlanTripFabSpacing = false,
       mapTabControlLayout = false,
+      expandable = true,
     },
     ref,
   ) {
@@ -411,10 +441,10 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     const resolvedStyleURL = mapStyle ?? mapboxStyleURLForBasemap(basemapId);
     const showBasemap = showBasemapSwitcher && mapStyle == null;
 
-    return (
-      <View style={[styles.fill, containerStyle]}>
+    const renderMapBody = (mode: ExpandableMapMode) => (
+      <>
         <MapView
-          ref={mapViewRef}
+          ref={mode === 'preview' ? mapViewRef : undefined}
           style={styles.map}
           styleURL={resolvedStyleURL}
           compassEnabled={compassEnabled}
@@ -435,14 +465,21 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           onMapIdle={(state: unknown) => handleMapIdle(state as MapCameraStatePayload)}
         >
           <Camera
-            ref={cameraRef}
+            ref={mode === 'preview' ? cameraRef : undefined}
             key={cameraKey ?? `${centerCoordinate[0]},${centerCoordinate[1]},${zoomLevel}`}
             defaultSettings={defaultSettings}
             minZoomLevel={MAP_MIN_ZOOM}
             maxZoomLevel={MAP_MAX_ZOOM}
           />
           {markers.map((m) =>
-            m.useMarkerView && MarkerView ? (
+            m.catchPhotoUrl !== undefined && MarkerView ? (
+              <TripMapboxCatchMarkerViewItem
+                key={m.id}
+                m={m}
+                MarkerView={MarkerView}
+                styles={styles}
+              />
+            ) : m.useMarkerView && MarkerView ? (
               <TripMapboxMarkerViewItem key={m.id} m={m} MarkerView={MarkerView} styles={styles} colors={colors} />
             ) : (
               <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} colors={colors} />
@@ -464,8 +501,18 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             {trailingFab}
           </View>
         ) : null}
-      </View>
+      </>
     );
+
+    if (expandable) {
+      return (
+        <ExpandableMapFrame enabled previewContainerStyle={containerStyle}>
+          {({ mode }) => <View style={styles.fill}>{renderMapBody(mode)}</View>}
+        </ExpandableMapFrame>
+      );
+    }
+
+    return <View style={[styles.fill, containerStyle]}>{renderMapBody('preview')}</View>;
   },
 );
 

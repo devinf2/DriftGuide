@@ -213,6 +213,10 @@ export interface FlyChangeData {
   fly_id?: string | null;
   fly_color_id?: string | null;
   fly_size_id?: string | null;
+  /** User fly box row (user_fly_box.id) for stable photo/metadata lookup */
+  user_fly_box_id?: string | null;
+  /** Snapshot of resolved photo at time of fly change (historical accuracy) */
+  photo_url?: string | null;
   /** Second fly (e.g. dropper); hopper-dropper rig */
   pattern2?: string | null;
   size2?: number | null;
@@ -220,6 +224,8 @@ export interface FlyChangeData {
   fly_id2?: string | null;
   fly_color_id2?: string | null;
   fly_size_id2?: string | null;
+  user_fly_box_id2?: string | null;
+  photo_url2?: string | null;
 }
 
 export interface CatchData {

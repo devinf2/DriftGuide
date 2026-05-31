@@ -1,5 +1,13 @@
 import { format, formatDistanceToNow, differenceInMinutes, differenceInHours } from 'date-fns';
 
+/** Live trip timer label (mm:ss). */
+export function formatStopwatchFromMs(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 /** Human-readable duration from milliseconds (floored to whole minutes). */
 export function formatDurationFromMs(ms: number): string {
   const totalMinutes = Math.floor(ms / 60000);

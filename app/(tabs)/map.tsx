@@ -515,6 +515,7 @@ export default function MapTabScreen() {
                 trailingFab={addLocationFab}
                 reservePlanTripFabSpacing
                 mapTabControlLayout
+                expandable={false}
               />
               {addingLocation ? (
                 <View style={styles.centerPinWrap} pointerEvents="none">

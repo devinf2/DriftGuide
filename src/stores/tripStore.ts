@@ -36,7 +36,7 @@ import {
   getSeason,
   getTimeOfDay,
 } from '@/src/services/ai';
-import { fetchFlies, getFliesFromCache } from '@/src/services/flyService';
+import { fetchFlies, getFliesForUser } from '@/src/services/flyService';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
 import { getCachedConditions } from '@/src/services/waterwayCache';
@@ -51,6 +51,8 @@ import {
   catchDataWithAppendedPhotoUrl,
   normalizeCatchPhotoUrls,
 } from '@/src/utils/catchPhotos';
+import { remapTripEventsFlyBoxIds } from '@/src/utils/flyChangeRemap';
+import type { FlyBoxRemapEntry } from '@/src/utils/flyChangeRemap';
 
 const IN_TRIP_SYNC_DEBOUNCE_MS = 5000;
 let inTripSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +122,8 @@ interface TripState {
   appendCatchEventPhotoUrl: (tripId: string, eventId: string, photoUrl: string) => void;
   /** After a pending upload: swap local file URI for remote URL in catch photo_urls (or append if not found). */
   resolveCatchEventPhotoUpload: (tripId: string, eventId: string, localUri: string, remoteUrl: string) => void;
+  /** After pending fly box sync: swap pg_* IDs and local photo URIs in fly_change events. */
+  resolvePendingFlyBoxInEvents: (tripId: string, idMap: Map<string, FlyBoxRemapEntry>) => void;
   removeCatch: () => void;
   changeFly: (primary: FlyChangeData, dropper?: FlyChangeData | null, latitude?: number | null, longitude?: number | null) => void;
   /** Update an existing fly_change row (timeline edit). Syncs current rig if that event is active. */
@@ -774,7 +778,11 @@ export const useTripStore = create<TripState>()(
           inTripSyncTimer = null;
           const { activeTrip, events, isOnline } = get();
           if (activeTrip && events && isOnline) {
-            syncTripToCloud(activeTrip, events).catch(() => {});
+            void (async () => {
+              const { prepareTripEventsForCloudSync } = await import('@/src/services/tripOutboxSync');
+              const prepared = await prepareTripEventsForCloudSync(activeTrip, events);
+              await syncTripToCloud(activeTrip, prepared);
+            })().catch(() => {});
           }
         }, IN_TRIP_SYNC_DEBOUNCE_MS);
       },
@@ -934,6 +942,36 @@ export const useTripStore = create<TripState>()(
         get().scheduleInTripSync();
       },
 
+      resolvePendingFlyBoxInEvents: (tripId, idMap) => {
+        if (idMap.size === 0) return;
+        const { activeTrip, isTripPaused } = get();
+        if (!activeTrip || activeTrip.id !== tripId || isTripPaused) return;
+
+        const remapFly = (fly: FlyChangeData | null): FlyChangeData | null => {
+          if (!fly) return null;
+          const boxId = fly.user_fly_box_id;
+          if (!boxId || !idMap.has(boxId)) return fly;
+          const entry = idMap.get(boxId)!;
+          let photo = fly.photo_url;
+          if (entry.localPhotoUri && photo === entry.localPhotoUri) {
+            photo = entry.serverFly.photo_url ?? photo;
+          }
+          return {
+            ...fly,
+            user_fly_box_id: entry.serverFly.id,
+            fly_id: entry.serverFly.fly_id ?? fly.fly_id,
+            photo_url: photo ?? entry.serverFly.photo_url ?? null,
+          };
+        };
+
+        set((state) => ({
+          events: remapTripEventsFlyBoxIds(state.events, idMap),
+          currentFly: remapFly(state.currentFly),
+          currentFly2: remapFly(state.currentFly2),
+        }));
+        get().scheduleInTripSync();
+      },
+
       removeCatch: () => {
         const { events, fishCount, isTripPaused } = get();
         if (fishCount <= 0 || isTripPaused) return;
@@ -963,6 +1001,8 @@ export const useTripStore = create<TripState>()(
           fly_id: primary.fly_id ?? undefined,
           fly_color_id: primary.fly_color_id ?? undefined,
           fly_size_id: primary.fly_size_id ?? undefined,
+          user_fly_box_id: primary.user_fly_box_id ?? undefined,
+          photo_url: primary.photo_url ?? undefined,
           ...(dropper && {
             pattern2: dropper.pattern,
             size2: dropper.size ?? null,
@@ -970,6 +1010,8 @@ export const useTripStore = create<TripState>()(
             fly_id2: dropper.fly_id ?? null,
             fly_color_id2: dropper.fly_color_id ?? null,
             fly_size_id2: dropper.fly_size_id ?? null,
+            user_fly_box_id2: dropper.user_fly_box_id ?? null,
+            photo_url2: dropper.photo_url ?? null,
           }),
         };
         const flyEvent: TripEvent = {
@@ -1016,6 +1058,8 @@ export const useTripStore = create<TripState>()(
           fly_id: primary.fly_id ?? undefined,
           fly_color_id: primary.fly_color_id ?? undefined,
           fly_size_id: primary.fly_size_id ?? undefined,
+          user_fly_box_id: primary.user_fly_box_id ?? undefined,
+          photo_url: primary.photo_url ?? undefined,
           ...(dropper
             ? {
                 pattern2: dropper.pattern,
@@ -1024,6 +1068,8 @@ export const useTripStore = create<TripState>()(
                 fly_id2: dropper.fly_id ?? null,
                 fly_color_id2: dropper.fly_color_id ?? null,
                 fly_size_id2: dropper.fly_size_id ?? null,
+                user_fly_box_id2: dropper.user_fly_box_id ?? null,
+                photo_url2: dropper.photo_url ?? null,
               }
             : {}),
         };
@@ -1232,7 +1278,7 @@ export const useTripStore = create<TripState>()(
             const parentId = location?.parent_location_id ?? undefined;
             const cached = locationId ? await getCachedConditions(locationId, parentId) : null;
             const cachedWeather = cached?.weather ?? weatherData ?? null;
-            const userFlies = await getFliesFromCache(activeTrip.user_id);
+            const userFlies = await getFliesForUser(activeTrip.user_id);
             const recommendation = enrichTryNextWithSuggestedDropper(
               getFallbackRecommendation(
                 activeTrip.fishing_type,
