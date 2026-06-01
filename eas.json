@@ -24,5 +24,13 @@
         "buildType": "app-bundle"
       }
     }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "devinfreeman22@hotmail.com",
+        "appleTeamId": "4FXXR327LJ"
+      }
+    }
   }
 }
