@@ -9,6 +9,7 @@ import {
   Alert,
   Platform,
   Image,
+  TextInput,
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +23,7 @@ import { FLY_PRESENTATION_LABELS, COMMON_FLIES_BY_NAME } from '@/src/constants/f
 import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 import type { Fly, FlyCatalog } from '@/src/types';
 import { resolveFlyImageSourceForFly } from '@/src/utils/resolveFlyPhotoUrl';
+import { resolveUserFlyPresentation } from '@/src/utils/groupFliesByPresentation';
 import {
   fetchFlies,
   fetchFliesOrCache,
@@ -35,13 +37,16 @@ import {
 } from '@/src/services/pendingFlyOpsStorage';
 import { AddFlySheet } from '@/src/components/fly/AddFlySheet';
 import { FlyCatalogAddModal } from '@/src/components/fly/FlyCatalogAddModal';
+import { FlyImagePreviewModal } from '@/src/components/fly/FlyImagePreviewModal';
 import { displayFlyName } from '@/src/utils/flyValidation';
+import type { ImageSourcePropType } from 'react-native';
 
 function FlyRow({
   fly,
   catalog,
   onEdit,
   onDelete,
+  onPreview,
   readOnly,
   colors,
   styles,
@@ -50,6 +55,7 @@ function FlyRow({
   catalog: FlyCatalog[];
   onEdit: () => void;
   onDelete: () => void;
+  onPreview?: (imageSource: ImageSourcePropType) => void;
   readOnly?: boolean;
   colors: ThemeColors;
   styles: any;
@@ -75,35 +81,48 @@ function FlyRow({
   const imageSource = useBundledFallback
     ? getBundledFlyImageSource(fly.name) ?? resolveFlyImageSourceForFly(fly, catalog)
     : resolveFlyImageSourceForFly(fly, catalog);
+
+  const previewable = Boolean(imageSource && onPreview);
+
   return (
     <View style={styles.flyRow}>
-      {imageSource ? (
-        <Image
-          source={imageSource}
-          style={styles.flyRowImage}
-          resizeMode="contain"
-          onError={() => setUseBundledFallback(true)}
-        />
-      ) : (
-        <View style={styles.flyRowImagePlaceholder}>
-          <Ionicons name="fish-outline" size={24} color={colors.textTertiary} />
+      <Pressable
+        style={styles.flyRowPreview}
+        onPress={previewable ? () => onPreview!(imageSource!) : undefined}
+        disabled={!previewable}
+        accessibilityRole={previewable ? 'button' : undefined}
+        accessibilityLabel={
+          previewable ? `View ${displayFlyName(fly.name)} full screen` : undefined
+        }
+      >
+        {imageSource ? (
+          <Image
+            source={imageSource}
+            style={styles.flyRowImage}
+            resizeMode="contain"
+            onError={() => setUseBundledFallback(true)}
+          />
+        ) : (
+          <View style={styles.flyRowImagePlaceholder}>
+            <Ionicons name="fish-outline" size={24} color={colors.textTertiary} />
+          </View>
+        )}
+        <View style={styles.flyRowMain}>
+          <View style={styles.flyRowNameRow}>
+            <Text style={styles.flyRowName} numberOfLines={1}>{displayFlyName(fly.name)}</Text>
+            {qty > 1 ? <Text style={styles.flyRowQuantity}>×{qty}</Text> : null}
+          </View>
+          <View style={styles.flyRowMeta}>
+            {presentationLabel ? (
+              <Text style={styles.flyRowPresentation}>{presentationLabel}</Text>
+            ) : null}
+            {detail ? <Text style={styles.flyRowDetail}>{detail}</Text> : null}
+            {(fly.use_count ?? 0) > 0 && (
+              <Text style={styles.flyRowUses}>{fly.use_count} uses</Text>
+            )}
+          </View>
         </View>
-      )}
-      <View style={styles.flyRowMain}>
-        <View style={styles.flyRowNameRow}>
-          <Text style={styles.flyRowName} numberOfLines={1}>{displayFlyName(fly.name)}</Text>
-          {qty > 1 ? <Text style={styles.flyRowQuantity}>×{qty}</Text> : null}
-        </View>
-        <View style={styles.flyRowMeta}>
-          {presentationLabel ? (
-            <Text style={styles.flyRowPresentation}>{presentationLabel}</Text>
-          ) : null}
-          {detail ? <Text style={styles.flyRowDetail}>{detail}</Text> : null}
-          {(fly.use_count ?? 0) > 0 && (
-            <Text style={styles.flyRowUses}>{fly.use_count} uses</Text>
-          )}
-        </View>
-      </View>
+      </Pressable>
       {!readOnly ? (
         <View style={styles.flyRowActions}>
           <Pressable style={styles.iconButton} onPress={onEdit} hitSlop={8}>
@@ -151,6 +170,35 @@ export default function FlyBoxScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingFly, setEditingFly] = useState<Fly | null>(null);
   const [catalog, setCatalog] = useState<FlyCatalog[]>([]);
+  const [search, setSearch] = useState('');
+  const [previewFly, setPreviewFly] = useState<{
+    fly: Fly;
+    imageSource: ImageSourcePropType;
+  } | null>(null);
+
+  const searchQuery = search.trim().toLowerCase();
+
+  const filteredFlies = useMemo(() => {
+    if (!searchQuery) return flies;
+    return flies.filter((fly) => {
+      const common = COMMON_FLIES_BY_NAME[fly.name];
+      const displayColor = fly.color ?? common?.color ?? '';
+      const displaySize = fly.size ?? common?.size;
+      const presentation = resolveUserFlyPresentation(fly, catalog);
+      const presentationLabel = presentation ? FLY_PRESENTATION_LABELS[presentation] : '';
+      const haystack = [
+        fly.name,
+        displayColor,
+        displaySize != null ? String(displaySize) : '',
+        displaySize != null ? `#${displaySize}` : '',
+        presentation ?? '',
+        presentationLabel,
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(searchQuery);
+    });
+  }, [flies, searchQuery, catalog]);
 
   const loadFlies = useCallback(async () => {
     if (!resolvedOwnerId) return;
@@ -235,6 +283,29 @@ export default function FlyBoxScreen() {
     }
   }, [router]);
 
+  const openPreview = useCallback((fly: Fly, imageSource: ImageSourcePropType) => {
+    setPreviewFly({ fly, imageSource });
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewFly(null);
+  }, []);
+
+  const previewSubtitle = useMemo(() => {
+    if (!previewFly) return null;
+    const common = COMMON_FLIES_BY_NAME[previewFly.fly.name];
+    const displaySize = previewFly.fly.size ?? common?.size ?? null;
+    const displayColor = previewFly.fly.color ?? common?.color ?? null;
+    const presentation = resolveUserFlyPresentation(previewFly.fly, catalog);
+    const presentationLabel = presentation ? FLY_PRESENTATION_LABELS[presentation] : null;
+    return [
+      presentationLabel,
+      [displaySize != null ? `#${displaySize}` : null, displayColor].filter(Boolean).join(' · ') || null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }, [previewFly, catalog]);
+
   const handleDelete = (fly: Fly) => {
     Alert.alert(
       'Remove fly',
@@ -301,6 +372,22 @@ export default function FlyBoxScreen() {
             : 'Keep inventory of your flies for quick switching on trips. The AI will use your fly box in recommendations.'}
         </Text>
 
+        {!loading && flies.length > 0 ? (
+          <View style={styles.searchWrap}>
+            <Ionicons name="search" size={18} color={colors.textTertiary} />
+            <TextInput
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search flies…"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="while-editing"
+            />
+          </View>
+        ) : null}
+
         {loading ? (
           <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
         ) : flies.length === 0 ? (
@@ -311,15 +398,22 @@ export default function FlyBoxScreen() {
               {readOnly ? 'No flies in this box yet.' : 'Tap Add Fly to build your tackle box'}
             </Text>
           </View>
+        ) : filteredFlies.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="search-outline" size={48} color={colors.textTertiary} />
+            <Text style={styles.emptyText}>No matches</Text>
+            <Text style={styles.emptySubtext}>Try a different name, size, or color.</Text>
+          </View>
         ) : (
           <View style={styles.list}>
-            {flies.map((fly) => (
+            {filteredFlies.map((fly) => (
               <FlyRow
                 key={fly.id}
                 fly={fly}
                 catalog={catalog}
                 onEdit={() => openEdit(fly)}
                 onDelete={() => handleDelete(fly)}
+                onPreview={(imageSource) => openPreview(fly, imageSource)}
                 readOnly={readOnly}
                 colors={colors}
                 styles={styles}
@@ -358,6 +452,14 @@ export default function FlyBoxScreen() {
           />
         </>
       ) : null}
+
+      <FlyImagePreviewModal
+        visible={previewFly != null}
+        onClose={closePreview}
+        imageSource={previewFly?.imageSource ?? null}
+        title={previewFly ? displayFlyName(previewFly.fly.name) : null}
+        subtitle={previewSubtitle}
+      />
     </View>
   );
 }
@@ -410,6 +512,23 @@ function createFlyBoxStyles(colors: ThemeColors) {
     marginBottom: Spacing.lg,
     lineHeight: 20,
   },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: colors.surface,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: Platform.OS === 'ios' ? Spacing.sm : Spacing.xs,
+    paddingHorizontal: Spacing.xs,
+    fontSize: FontSize.md,
+    color: colors.text,
+  },
   loader: { marginVertical: Spacing.xxl },
   empty: {
     alignItems: 'center',
@@ -439,6 +558,12 @@ function createFlyBoxStyles(colors: ThemeColors) {
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
       android: { elevation: 2 },
     }),
+  },
+  flyRowPreview: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
   },
   flyRowImage: {
     width: 48,

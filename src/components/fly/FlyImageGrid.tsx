@@ -2,6 +2,7 @@ import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } fr
 import { Ionicons } from '@expo/vector-icons';
 import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import type { FlyPresentation } from '@/src/types';
 import { FlyImageTile } from '@/src/components/fly/FlyImageTile';
 
 export type FlyImageGridItem = {
@@ -10,6 +11,7 @@ export type FlyImageGridItem = {
   photoUrl?: string | null;
   size?: number | null;
   color?: string | null;
+  presentation?: FlyPresentation | null;
 };
 
 export type FlyImageGridProps = {

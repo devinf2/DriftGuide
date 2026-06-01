@@ -14,11 +14,29 @@ export const FLY_TYPE_LABELS: Record<FlyType, string> = {
 
 /** Fly fishing presentation: how the fly behaves in the water. */
 export const FLY_PRESENTATION_LABELS: Record<FlyPresentation, string> = {
-  dry: 'Dry (floats on surface)',
+  dry: 'Dry (on surface)',
   emerger: 'Emerger (surface film)',
   wet: 'Wet (just below surface)',
   nymph: 'Nymph (subsurface)',
   streamer: 'Streamer (subsurface, stripped)',
+};
+
+/** Display order for presentation sections in fly pickers. */
+export const FLY_PRESENTATION_ORDER: FlyPresentation[] = [
+  'dry',
+  'emerger',
+  'wet',
+  'nymph',
+  'streamer',
+];
+
+/** Short section titles for fly picker grids. */
+export const FLY_PRESENTATION_SHORT_LABELS: Record<FlyPresentation, string> = {
+  dry: 'Dry',
+  emerger: 'Emerger',
+  wet: 'Wet',
+  nymph: 'Nymph',
+  streamer: 'Streamer',
 };
 
 export const COMMON_SPECIES = [

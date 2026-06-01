@@ -19,8 +19,13 @@ import { mergeTryNextWithSyntheticDropperIfMissing } from '@/src/services/ai';
 import { fetchFliesOrCache } from '@/src/services/flyService';
 import { AddFlySheet } from '@/src/components/fly/AddFlySheet';
 import { FlyCatalogAddModal } from '@/src/components/fly/FlyCatalogAddModal';
-import { FlyImageGrid, type FlyImageGridItem } from '@/src/components/fly/FlyImageGrid';
+import { type FlyImageGridItem } from '@/src/components/fly/FlyImageGrid';
+import { FlyPresentationSectionedGrid } from '@/src/components/fly/FlyPresentationSectionedGrid';
 import { FlyImageTile } from '@/src/components/fly/FlyImageTile';
+import {
+  resolveCatalogFlyPresentation,
+  resolveUserFlyPresentation,
+} from '@/src/utils/groupFliesByPresentation';
 import { displayFlyName, isFlySelectionValid } from '@/src/utils/flyValidation';
 import {
   isSameFlyChangeSelection,
@@ -433,8 +438,9 @@ export function ChangeFlyPickerModal({
           photoUrl: isUserFlyPhotoUrl(f.photo_url) ? f.photo_url : null,
           size: f.size,
           color: f.color,
+          presentation: resolveUserFlyPresentation(f, flyCatalog),
         })),
-    [userFlies, flySearchQuery],
+    [userFlies, flySearchQuery, flyCatalog],
   );
 
   const catalogGridItems: FlyImageGridItem[] = useMemo(() => {
@@ -444,6 +450,7 @@ export function ChangeFlyPickerModal({
         key: c.id,
         name: c.name,
         photoUrl: c.photo_url,
+        presentation: resolveCatalogFlyPresentation(c),
       }));
   }, [flyCatalog, flySearchQuery]);
 
@@ -972,8 +979,8 @@ export function ChangeFlyPickerModal({
                   />
                 </View>
 
-                <FlyImageGrid
-                  title="My fly box"
+                <FlyPresentationSectionedGrid
+                  sectionTitle="My fly box"
                   items={boxGridItems}
                   selectedKey={selectedBoxKey}
                   onSelect={(item) => applyUserFly(item, effectiveActiveSlot)}
@@ -982,8 +989,8 @@ export function ChangeFlyPickerModal({
                   emptyMessage={flySearchQuery ? 'No matches in your box' : 'No flies in your box yet'}
                 />
 
-                <FlyImageGrid
-                  title="Catalog"
+                <FlyPresentationSectionedGrid
+                  sectionTitle="Catalog"
                   items={catalogGridItems}
                   selectedKey={selectedCatalogKey}
                   onSelect={(item) => applyCatalogFly(item, effectiveActiveSlot)}

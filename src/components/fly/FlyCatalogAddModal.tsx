@@ -15,7 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { FlyCatalog } from '@/src/types';
-import { FlyImageGrid, type FlyImageGridItem } from '@/src/components/fly/FlyImageGrid';
+import { FlyPresentationSectionedGrid } from '@/src/components/fly/FlyPresentationSectionedGrid';
+import type { FlyImageGridItem } from '@/src/components/fly/FlyImageGrid';
+import { resolveCatalogFlyPresentation } from '@/src/utils/groupFliesByPresentation';
 
 export type FlyCatalogAddModalProps = {
   visible: boolean;
@@ -52,6 +54,7 @@ export function FlyCatalogAddModal({
         key: c.id,
         name: c.name,
         photoUrl: c.photo_url,
+        presentation: resolveCatalogFlyPresentation(c),
       }));
   }, [catalog, search]);
 
@@ -102,7 +105,7 @@ export function FlyCatalogAddModal({
         </View>
 
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <FlyImageGrid
+          <FlyPresentationSectionedGrid
             items={gridItems}
             onSelect={handleSelect}
             emptyMessage={search.trim() ? 'No matches' : 'No flies in catalog'}

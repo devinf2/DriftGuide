@@ -32,6 +32,7 @@ import { createFly, updateFly, appendOptimisticFlyToCache } from '@/src/services
 import { enqueuePendingFlyCreate } from '@/src/services/pendingFlyOpsStorage';
 import { uploadFlyPhoto } from '@/src/services/photoService';
 import { FlyCatalogAddModal } from '@/src/components/fly/FlyCatalogAddModal';
+import { FlyImagePreviewModal } from '@/src/components/fly/FlyImagePreviewModal';
 import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 import { isFlyInputValid, resolveFlyNameForSave } from '@/src/utils/flyValidation';
 
@@ -140,6 +141,10 @@ export function AddFlySheet({
   const [customPatternMode, setCustomPatternMode] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [previewImage, setPreviewImage] = useState<{
+    source: ImageSourcePropType;
+    title: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -186,6 +191,7 @@ export function AddFlySheet({
       setCustomPatternMode(false);
     }
     setCatalogPickerVisible(false);
+    setPreviewImage(null);
   }, [visible, editingFly, initialCatalogFly, openAsCustom, catalog]);
 
   const userPhotoUri =
@@ -229,6 +235,28 @@ export function AddFlySheet({
       setPhotoUri(result.assets[0].uri);
       setClearPhoto(false);
     }
+  };
+
+  const openFlyImagePreview = () => {
+    if (!flyImageSource) return;
+    setPreviewImage({ source: flyImageSource, title: patternLabel });
+  };
+
+  const handleUserPhotoPress = () => {
+    if (userPhotoUri) {
+      setPreviewImage({ source: { uri: userPhotoUri }, title: 'Your photo' });
+      return;
+    }
+    void pickImage();
+  };
+
+  const handleUserPhotoLongPress = () => {
+    if (userPhotoUri) void pickImage();
+  };
+
+  const clearUserPhoto = () => {
+    if (photoUri) setPhotoUri(null);
+    else setClearPhoto(true);
   };
 
   const handleSave = async () => {
@@ -401,24 +429,50 @@ export function AddFlySheet({
             {!customPatternMode ? (
               <View style={styles.photoColumn}>
                 <Text style={styles.photoLabel}>Fly image</Text>
-                <View style={styles.photoTile}>
+                <Pressable
+                  style={({ pressed }) => [styles.photoTile, pressed && flyImageSource && styles.photoTilePressed]}
+                  onPress={openFlyImagePreview}
+                  disabled={!flyImageSource}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    flyImageSource ? `View ${patternLabel} catalog image full screen` : 'No catalog image'
+                  }
+                >
                   {flyImageSource ? (
-                    <Image source={flyImageSource} style={styles.sideImage} resizeMode="contain" />
+                    <Image
+                      source={flyImageSource}
+                      style={styles.sideImage}
+                      resizeMode="contain"
+                      pointerEvents="none"
+                    />
                   ) : (
-                    <View style={styles.sidePlaceholder}>
+                    <View style={styles.sidePlaceholder} pointerEvents="none">
                       <Ionicons name="fish-outline" size={28} color={colors.textTertiary} />
                     </View>
                   )}
-                </View>
+                </Pressable>
               </View>
             ) : null}
             <View style={styles.photoColumn}>
               <Text style={styles.photoLabel}>{customPatternMode ? 'Photo' : 'Your photo'}</Text>
-              <Pressable style={styles.photoTile} onPress={pickImage}>
+              <Pressable
+                style={({ pressed }) => [styles.photoTile, pressed && styles.photoTilePressed]}
+                onPress={handleUserPhotoPress}
+                onLongPress={userPhotoUri ? handleUserPhotoLongPress : undefined}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  userPhotoUri ? 'View your fly photo full screen' : 'Add your fly photo'
+                }
+              >
                 {userPhotoUri ? (
-                  <Image source={{ uri: userPhotoUri }} style={styles.sideImage} resizeMode="contain" />
+                  <Image
+                    source={{ uri: userPhotoUri }}
+                    style={styles.sideImage}
+                    resizeMode="contain"
+                    pointerEvents="none"
+                  />
                 ) : (
-                  <View style={styles.sidePlaceholder}>
+                  <View style={styles.sidePlaceholder} pointerEvents="none">
                     <Ionicons name="camera-outline" size={28} color={colors.primary} />
                     <Text style={styles.heroHint}>Add photo</Text>
                   </View>
@@ -426,11 +480,10 @@ export function AddFlySheet({
                 {userPhotoUri ? (
                   <Pressable
                     style={styles.heroClear}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      if (photoUri) setPhotoUri(null);
-                      else setClearPhoto(true);
-                    }}
+                    onPress={clearUserPhoto}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove your photo"
                   >
                     <Ionicons name="close-circle" size={24} color={colors.error} />
                   </Pressable>
@@ -507,6 +560,13 @@ export function AddFlySheet({
           onSelectOther={handleSelectOtherPattern}
           title="Change pattern"
         />
+
+        <FlyImagePreviewModal
+          visible={previewImage != null}
+          onClose={() => setPreviewImage(null)}
+          imageSource={previewImage?.source ?? null}
+          title={previewImage?.title ?? null}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -553,6 +613,9 @@ function createStyles(colors: ThemeColors, photoTileSize: number) {
       position: 'relative',
       width: photoTileSize,
       height: photoTileSize,
+    },
+    photoTilePressed: {
+      opacity: 0.85,
     },
     sideImage: {
       width: photoTileSize,
