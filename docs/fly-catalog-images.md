@@ -2,7 +2,7 @@
 
 Track bundled fly photos in `assets/images/flies/` and registrations in `src/constants/flyImages.ts`.
 
-**Progress: 47 / 144** (Buckskin Caddis, CDC Caddis, CDC Midge, Cluster Midge, Rubber Legs Hopper, Slate Drake removed from catalog)
+**Progress: 108 / 127** (Batwing Emerger, Buckskin Caddis, CDC Caddis, CDC Midge, Cluster Midge, Copper Tiger, Fiery Brown, Hot Spot Frenchie, Invicta, Killer Kebari, Kuwabara Kebari, Little Black Stone, Midges (generic), Montana Nymph, One-Feather Kebari, Partridge and Green/Orange/Yellow consolidated to Partridge, Rainbow Egg, Red Copper John consolidated to Copper John, Rubber Legs Hopper, Shuttlecock Emerger, Slate Drake, Soft Hackle Emerger, Turd removed from catalog)
 
 | Status | Meaning |
 |--------|--------|
@@ -58,97 +58,79 @@ Track bundled fly photos in `assets/images/flies/` and registrations in `src/con
 - [x] X-Caddis
 - [x] Yellow Sally
 
-## Emerger (11)
+## Emerger (7)
 
-- [ ] Barr's Emerger
-- [ ] Batwing Emerger
-- [ ] CDC Emerger
-- [ ] Klinkhammer
-- [ ] Midges (generic)
-- [ ] Quigley's Film Critic
-- [ ] RS2
-- [ ] Shuttlecock Emerger
-- [ ] Soft Hackle Emerger
-- [ ] Sparkle Pupa
-- [ ] WD-40
+- [x] Barr's Emerger
+- [x] CDC Emerger
+- [x] Klinkhammer
+- [x] Quigley's Film Critic
+- [x] RS2
+- [x] Sparkle Pupa
+- [x] WD-40
 
-## Wet (20)
+## Wet (13)
 
-- [ ] Alexandra
-- [ ] Amano Kebari
-- [ ] Bloody Butcher
-- [ ] Fiery Brown
-- [ ] Idaho Killer Kebari
-- [ ] Invicta
-- [ ] Ishigaki Kebari
-- [ ] Killer Kebari
-- [ ] Kuwabara Kebari
-- [ ] Leadwing Coachman Wet
-- [ ] March Brown Wet
-- [ ] Oki Kebari
-- [ ] One-Feather Kebari
-- [ ] Partridge and Green
-- [ ] Partridge and Orange
-- [ ] Partridge and Yellow
-- [ ] Reverse Hackle Kebari
-- [ ] Sakasa Kebari
-- [ ] Soft Hackle
-- [ ] Takayama Sakasa Kebari
+- [x] Alexandra
+- [x] Amano Kebari
+- [x] Bloody Butcher
+- [x] Idaho Killer Kebari
+- [x] Ishigaki Kebari
+- [x] Leadwing Coachman Wet
+- [x] March Brown Wet
+- [x] Oki Kebari
+- [x] Partridge
+- [x] Reverse Hackle Kebari
+- [x] Sakasa Kebari
+- [x] Soft Hackle
+- [x] Takayama Sakasa Kebari
 
-## Nymph (48)
+## Nymph (41)
 
-- [ ] BH Hare's Ear Nymph
-- [ ] BH Pheasant Tail
+- [x] BH Hare's Ear Nymph
+- [x] BH Pheasant Tail
 - [ ] BH Prince Nymph
-- [ ] Bird's Nest
-- [ ] Black Beauty
-- [ ] Blowtorch
-- [ ] Brassie
-- [ ] Copper John
-- [ ] Copper Tiger
-- [ ] Craven's Juju Baetis
-- [ ] Egg
-- [ ] Electric Prince
-- [ ] Flashback Pheasant Tail
-- [ ] Frenchie
-- [ ] Girdle Bug
-- [ ] Gold Ribbed Hare's Ear
-- [ ] Golden Stone Nymph
-- [ ] Hares Ear Nymph
-- [ ] Higa's SOS
-- [ ] Hot Spot Frenchie
-- [ ] Iron Lotus
-- [ ] Jigged Frenchie
-- [ ] Jigged Prince
-- [ ] Juju Baetis
-- [ ] Lightning Bug
-- [ ] Little Black Stone
-- [ ] Montana Nymph
-- [ ] Mop Fly
-- [ ] Pat's Rubber Legs
-- [ ] Perdigon
-- [ ] Pheasant Tail Nymph
-- [ ] Poison Tung
-- [ ] Prince Nymph
-- [ ] Psycho Prince
-- [ ] Rainbow Egg
-- [ ] Rainbow Warrior
-- [ ] Red Copper John
-- [ ] San Juan Worm
-- [ ] Sexy Walt's
-- [ ] Spanish Bullet
-- [ ] Squirmy Worm
-- [ ] Top Secret Midge
-- [ ] Tungsten Jig PT
-- [ ] Turd
-- [ ] Twenty Incher
-- [ ] Walt's Worm
+- [x] Bird's Nest
+- [x] Black Beauty
+- [x] Blowtorch
+- [x] Brassie
+- [x] Copper John
+- [x] Craven's Juju Baetis
+- [x] Egg
+- [x] Electric Prince
+- [x] Flashback Pheasant Tail
+- [x] Frenchie
+- [x] Girdle Bug
+- [x] Gold Ribbed Hare's Ear
+- [x] Golden Stone Nymph
+- [x] Hares Ear Nymph
+- [x] Higa's SOS
+- [x] Iron Lotus
+- [x] Jigged Frenchie
+- [x] Jigged Prince
+- [x] Juju Baetis
+- [x] Lightning Bug
+- [x] Mop Fly
+- [x] Pat's Rubber Legs
+- [x] Perdigon
+- [x] Pheasant Tail Nymph
+- [x] Poison Tung
+- [x] Prince Nymph
+- [x] Psycho Prince
+- [x] Rainbow Warrior
+- [x] San Juan Worm
+- [x] Sexy Walt's Hare's Ear
+- [x] Spanish Bullet
+- [x] Squirmy Worm
+- [x] Top Secret Midge
+- [x] Tungsten Jig (drop PT)
+- [x] 20 Incher
+- [x] Sexy Walt's Worm
 - [x] Zebra Midge
-- [ ] Zug Bug
+- [x] Zug Bug
 
-## Streamer (19)
+## Streamer (20)
 
-- [ ] Black Nose Dace
+- [ ] Black Nose Dace -
 - [ ] Bow River Bugger
 - [ ] Circus Peanut
 - [ ] Conehead Woolly Bugger
@@ -158,12 +140,13 @@ Track bundled fly photos in `assets/images/flies/` and registrations in `src/con
 - [ ] Mickey Finn
 - [ ] Muddler Minnow
 - [ ] Sculpzilla
+- [x] Shimmer Bugger
 - [ ] Slumpbuster
 - [ ] Sparkle Minnow
 - [ ] Thin Mint
 - [ ] Trophy Dungeon
 - [ ] Woolhead Sculpin
-- [ ] Woolly Bugger
+- [x] Woolly Bugger
 - [ ] Woolly Sculpin
 - [ ] Zonker
 - [ ] Zoo Cougar

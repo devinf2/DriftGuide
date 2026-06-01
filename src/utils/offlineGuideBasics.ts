@@ -7,7 +7,7 @@ export function fliesForSeason(season: string): string[] {
     case 'summer':
       return ['Elk Hair Caddis', 'Stimulator', 'Hopper patterns', 'Pheasant Tail Nymph', 'Copper John', 'Woolly Bugger'];
     case 'fall':
-      return ['Blue Wing Olive', 'Midges (generic)', 'Streamers / Woolly Bugger', 'Prince Nymph', 'Zebra Midge'];
+      return ['Blue Wing Olive', 'Griffiths Gnat', 'Streamers / Woolly Bugger', 'Prince Nymph', 'Zebra Midge'];
     default:
       return ['Zebra Midge', 'Griffiths Gnat', 'Pheasant Tail Nymph', 'Woolly Bugger', 'San Juan Worm', 'Prince Nymph'];
   }
