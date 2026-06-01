@@ -29,7 +29,8 @@
     "production": {
       "ios": {
         "appleId": "devinfreeman22@hotmail.com",
-        "appleTeamId": "4FXXR327LJ"
+        "appleTeamId": "4FXXR327LJ",
+        "ascAppId": "6761431687"
       }
     }
   }
