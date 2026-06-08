@@ -751,9 +751,9 @@ export default function TripDashboardScreen() {
     setTripPhotoViewerIndex(null);
     setFullScreenPhoto({
       url: hero,
-      ...buildCatchViewerSlideFields(event, data, activeTrip?.location?.name ?? undefined),
+      ...buildCatchViewerSlideFields(event, data, activeTrip?.location?.name ?? undefined, events),
     });
-  }, [activeTrip?.location?.name, albumPhotoUrlsByCatchId]);
+  }, [activeTrip?.location?.name, albumPhotoUrlsByCatchId, events]);
 
   const handleTripPhotoPress = useCallback((photo: Photo) => {
     const i = tripPhotos.findIndex((p) => p.id === photo.id);
@@ -851,7 +851,12 @@ export default function TripDashboardScreen() {
       };
 
       const catchOptions =
-        conditionsSnapshot !== undefined ? { conditionsSnapshot } : undefined;
+        catchTimestampIso || conditionsSnapshot !== undefined
+          ? {
+              ...(catchTimestampIso ? { timestampIso: catchTimestampIso } : {}),
+              ...(conditionsSnapshot !== undefined ? { conditionsSnapshot } : {}),
+            }
+          : undefined;
 
       const hasPhotos = photoUris.length > 0;
       let durablePhotoUris: string[] = [];
@@ -1377,6 +1382,7 @@ export default function TripDashboardScreen() {
             onUserFliesUpdated={setUserFlies}
             allEvents={events}
             editingEvent={catchUIMode != null && catchUIMode !== 'add' ? catchUIMode : null}
+            albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
             seedPrimary={currentFly}
             seedDropper={currentFly2}
             getPresentationForFly={getPresentationForFly}

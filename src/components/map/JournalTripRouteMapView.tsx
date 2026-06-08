@@ -9,6 +9,11 @@ import {
 import { Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { ExpandableMapFrame, type ExpandableMapMode } from '@/src/components/map/ExpandableMapFrame';
+import {
+  flyCameraToUserLocation,
+  MapLocateButton,
+  type CameraControl,
+} from '@/src/components/map/MapLocateButton';
 import { JournalCatchMapMarker, JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { LabeledEndpointMapPin } from '@/src/components/map/LabeledEndpointMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
@@ -234,14 +239,33 @@ export function JournalTripRouteMapView({
   /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
   const pointAnnotationLayerBelowId = useMemo(() => getAnnotationsLayerID('PointAnnotations'), []);
   const tokenApplied = useRef(false);
-  const cameraRef = useRef<{
-    fitBounds?: (
-      ne: [number, number],
-      sw: [number, number],
-      padding?: number | number[],
-      duration?: number,
-    ) => void;
-  } | null>(null);
+  const cameraRef = useRef<
+    | (CameraControl & {
+        fitBounds?: (
+          ne: [number, number],
+          sw: [number, number],
+          padding?: number | number[],
+          duration?: number,
+        ) => void;
+      })
+    | null
+  >(null);
+  /** Fullscreen modal mounts its own Camera; track it so the locate button works there too. */
+  const fullscreenCameraRef = useRef<CameraControl | null>(null);
+  const [locating, setLocating] = useState(false);
+  /** Reveal the location puck after a successful locate. */
+  const [locatedOnce, setLocatedOnce] = useState(false);
+
+  const handleLocate = useCallback(async (mode: ExpandableMapMode) => {
+    const camera = mode === 'fullscreen' ? fullscreenCameraRef.current : cameraRef.current;
+    setLocating(true);
+    try {
+      const ok = await flyCameraToUserLocation(camera);
+      if (ok) setLocatedOnce(true);
+    } finally {
+      setLocating(false);
+    }
+  }, []);
 
   const isPlacing =
     placementKind != null &&
@@ -274,8 +298,10 @@ export function JournalTripRouteMapView({
       MapView?: React.ComponentType<Record<string, unknown>>;
       Camera?: React.ComponentType<Record<string, unknown>>;
       PointAnnotation?: React.ComponentType<Record<string, unknown>>;
+      MarkerView?: React.ComponentType<Record<string, unknown>>;
       ShapeSource?: React.ComponentType<Record<string, unknown>>;
       LineLayer?: React.ComponentType<Record<string, unknown>>;
+      UserLocation?: React.ComponentType<Record<string, unknown>>;
     };
     return ns;
   }, [rawMod]);
@@ -385,7 +411,7 @@ export function JournalTripRouteMapView({
     );
   }
 
-  const { MapView, Camera, PointAnnotation, MarkerView, ShapeSource, LineLayer } = mod;
+  const { MapView, Camera, PointAnnotation, MarkerView, ShapeSource, LineLayer, UserLocation } = mod;
   if (!MapView || !Camera || !PointAnnotation || !ShapeSource || !LineLayer) {
     return (
       <View style={[styles.placeholder, containerStyle]}>
@@ -415,7 +441,7 @@ export function JournalTripRouteMapView({
         onCameraChanged={isPlacing ? (e: unknown) => handlePlacementCamera(e) : undefined}
       >
         <Camera
-          ref={mode === 'preview' ? cameraRef : undefined}
+          ref={mode === 'fullscreen' ? fullscreenCameraRef : cameraRef}
           key={isPlacing ? `place-${placementFocusKey}` : 'route'}
           defaultSettings={
             isPlacing && placementLatitude != null && placementLongitude != null
@@ -497,6 +523,7 @@ export function JournalTripRouteMapView({
             </PointAnnotation>
           ),
         )}
+        {locatedOnce && UserLocation ? <UserLocation visible /> : null}
       </MapView>
 
       {isPlacing && placementKind != null ? (
@@ -511,6 +538,14 @@ export function JournalTripRouteMapView({
       ) : null}
 
       <MapBasemapSwitcher compact={mode === 'preview'} />
+
+      <MapLocateButton
+        // Opposite the bottom-left basemap switcher.
+        side="right"
+        bottom={Spacing.lg}
+        busy={locating}
+        onPress={() => void handleLocate(mode)}
+      />
     </>
   );
 

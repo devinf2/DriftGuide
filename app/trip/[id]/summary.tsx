@@ -75,7 +75,7 @@ import { layoutSizeToPixelSize, supabasePhotoThumbUrl } from '@/src/utils/photoD
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
-import { buildShareTripUrl, getShareTripPageBaseUrl } from '@/src/constants/shareLinks';
+import { buildShareTripUrl } from '@/src/constants/shareLinks';
 
 const SHARE_TRIP_MAX_PHOTO_URLS = 6;
 
@@ -159,6 +159,10 @@ export default function TripSummaryScreen() {
   const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
   const [summaryHeaderMenuVisible, setSummaryHeaderMenuVisible] = useState(false);
+  // Action to run once the header menu Modal has fully dismissed. On iOS, presenting
+  // the native Share sheet (or another Modal) while this Modal is still animating out
+  // silently fails, so we defer the action to the Modal's onDismiss callback.
+  const pendingMenuActionRef = useRef<(() => void) | null>(null);
   const [photoVisSaving, setPhotoVisSaving] = useState(false);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [reviewRating, setReviewRating] = useState<number | null>(null);
@@ -466,9 +470,9 @@ export default function TripSummaryScreen() {
     setTripPhotoViewerIndex(null);
     setFullScreenPhoto({
       url: hero,
-      ...buildCatchViewerSlideFields(event, data, trip?.location?.name ?? undefined),
+      ...buildCatchViewerSlideFields(event, data, trip?.location?.name ?? undefined, events),
     });
-  }, [trip?.location?.name, albumPhotoUrlsByCatchId]);
+  }, [trip?.location?.name, albumPhotoUrlsByCatchId, events]);
 
   const handleMapCatchWaypointPress = useCallback(
     (catchEventId: string) => {
@@ -481,7 +485,7 @@ export default function TripSummaryScreen() {
         setTripPhotoViewerIndex(null);
         setFullScreenPhoto({
           url: hero,
-          ...buildCatchViewerSlideFields(ev, data, trip?.location?.name ?? undefined),
+          ...buildCatchViewerSlideFields(ev, data, trip?.location?.name ?? undefined, events),
         });
       } else {
         setMapCatchDetailEvent(ev);
@@ -596,18 +600,30 @@ export default function TripSummaryScreen() {
     [trip, profile],
   );
 
+  // Close the header menu, then run `action`. On iOS the action is deferred to the
+  // Modal's onDismiss (see pendingMenuActionRef) so it doesn't collide with the
+  // dismissing Modal; on Android there is no presentation conflict so we run it now.
+  const closeMenuThenRun = useCallback((action: () => void) => {
+    if (Platform.OS === 'ios') {
+      pendingMenuActionRef.current = action;
+      setSummaryHeaderMenuVisible(false);
+    } else {
+      setSummaryHeaderMenuVisible(false);
+      action();
+    }
+  }, []);
+
+  const runPendingMenuAction = useCallback(() => {
+    const action = pendingMenuActionRef.current;
+    pendingMenuActionRef.current = null;
+    action?.();
+  }, []);
+
   const handleShareTripLink = useCallback(async () => {
     if (!trip?.id) return;
-    if (!getShareTripPageBaseUrl()) {
-      Alert.alert(
-        'Share link unavailable',
-        'Set EXPO_PUBLIC_SHARE_TRIP_BASE_URL to your deployed share-trip function URL (see .env.example).',
-      );
-      return;
-    }
+    // Web preview URL is optional: when EXPO_PUBLIC_SHARE_TRIP_BASE_URL is unset we still
+    // share the app deep link so the share sheet always opens with something usable.
     const webPageUrl = buildShareTripUrl(trip.id);
-    if (!webPageUrl) return;
-
     const appLink = `driftguide://trip/${trip.id}`;
     const place = trip.location?.name?.trim();
     const httpsPhotos = tripPhotos
@@ -616,13 +632,9 @@ export default function TripSummaryScreen() {
       .slice(0, SHARE_TRIP_MAX_PHOTO_URLS);
 
     const buildMessageTextOnly = (): string => {
-      const lines: string[] = [
-        webPageUrl,
-        '',
-        `Open in DriftGuide: ${appLink}`,
-        '',
-        place ? `Trip: ${place}` : 'DriftGuide trip',
-      ];
+      const lines: string[] = [];
+      if (webPageUrl) lines.push(webPageUrl, '');
+      lines.push(`Open in DriftGuide: ${appLink}`, '', place ? `Trip: ${place}` : 'DriftGuide trip');
       if (effectivePhotoVisibility === 'public' && httpsPhotos.length > 0) {
         lines.push('', 'Photos:', ...httpsPhotos);
       }
@@ -645,7 +657,7 @@ export default function TripSummaryScreen() {
         const more = httpsPhotos.slice(1, 4);
         lines.push('', 'More photos:', ...more);
       }
-      lines.push('', 'Trip preview (opens in browser):', webPageUrl);
+      if (webPageUrl) lines.push('', 'Trip preview (opens in browser):', webPageUrl);
       return lines.join('\n');
     };
 
@@ -937,25 +949,20 @@ export default function TripSummaryScreen() {
         transparent
         animationType="fade"
         onRequestClose={() => setSummaryHeaderMenuVisible(false)}
+        onDismiss={runPendingMenuAction}
       >
         <View style={styles.summaryHeaderMenuOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setSummaryHeaderMenuVisible(false)} />
           <View style={[styles.summaryHeaderMenuSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
             <Pressable
               style={styles.summaryHeaderMenuRow}
-              onPress={() => {
-                setSummaryHeaderMenuVisible(false);
-                setPeopleSheetVisible(true);
-              }}
+              onPress={() => closeMenuThenRun(() => setPeopleSheetVisible(true))}
             >
               <Text style={styles.summaryHeaderMenuLabel}>Invite friends</Text>
             </Pressable>
             <Pressable
               style={styles.summaryHeaderMenuRow}
-              onPress={() => {
-                setSummaryHeaderMenuVisible(false);
-                void handleShareTripLink();
-              }}
+              onPress={() => closeMenuThenRun(() => void handleShareTripLink())}
             >
               <Text style={styles.summaryHeaderMenuLabel}>Share trip link</Text>
             </Pressable>

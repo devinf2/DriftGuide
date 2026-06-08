@@ -1,4 +1,9 @@
 import { ExpandableMapFrame, type ExpandableMapMode } from '@/src/components/map/ExpandableMapFrame';
+import {
+  flyCameraToUserLocation,
+  MapLocateButton,
+  type CameraControl,
+} from '@/src/components/map/MapLocateButton';
 import { JournalCatchMapMarker, JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
@@ -19,6 +24,7 @@ import {
     useImperativeHandle,
     useMemo,
     useRef,
+    useState,
     type ComponentType,
     type ReactElement,
     type ReactNode,
@@ -230,6 +236,7 @@ function loadMapbox(): Record<string, unknown> | null {
   }
 }
 
+
 type TripMapboxMapViewProps = {
   mapStyle?: string;
   /** When true (default), shows Terrain / Satellite / Hybrid and uses the persisted basemap unless `mapStyle` is set. */
@@ -242,6 +249,11 @@ type TripMapboxMapViewProps = {
   cameraKey?: string;
   markers: MapboxMapMarker[];
   showUserLocation: boolean;
+  /**
+   * Show a "center on my location" FAB (default true). Tapping it requests location permission,
+   * animates to the user's GPS position, and reveals the location puck.
+   */
+  showLocateButton?: boolean;
   compassEnabled?: boolean;
   onCameraChanged?: (state: MapCameraStatePayload) => void;
   onMapIdle?: (state: MapCameraStatePayload) => void;
@@ -277,6 +289,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       cameraKey,
       markers,
       showUserLocation,
+      showLocateButton = true,
       compassEnabled = true,
       onCameraChanged,
       onMapIdle,
@@ -297,16 +310,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
     const mapViewRef = useRef<{
       getVisibleBounds?: () => Promise<[[number, number], [number, number]]>;
     } | null>(null);
-    const cameraRef = useRef<{
-      zoomTo?: (z: number, duration?: number) => void;
-      setCamera?: (config: {
-        type: 'CameraStop';
-        centerCoordinate: [number, number];
-        zoomLevel: number;
-        animationDuration: number;
-        animationMode: 'flyTo' | 'easeTo' | 'moveTo';
-      }) => void;
-    } | null>(null);
+    const cameraRef = useRef<CameraControl | null>(null);
+    /** Fullscreen modal mounts its own Camera; track it so the locate button works there too. */
+    const fullscreenCameraRef = useRef<CameraControl | null>(null);
+    const [locating, setLocating] = useState(false);
+    /** Reveal the puck after a successful locate even if the caller passed showUserLocation=false. */
+    const [locatedOnce, setLocatedOnce] = useState(false);
 
     const mod = useMemo(() => {
       if (!rawMod) return null;
@@ -375,6 +384,17 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       },
       [onCameraChanged],
     );
+
+    const handleLocate = useCallback(async (mode: ExpandableMapMode) => {
+      const camera = mode === 'fullscreen' ? fullscreenCameraRef.current : cameraRef.current;
+      setLocating(true);
+      try {
+        const ok = await flyCameraToUserLocation(camera);
+        if (ok) setLocatedOnce(true);
+      } finally {
+        setLocating(false);
+      }
+    }, []);
 
     const mapTabOrnaments = useMemo(() => {
       if (!mapTabControlLayout) return null;
@@ -465,7 +485,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           onMapIdle={(state: unknown) => handleMapIdle(state as MapCameraStatePayload)}
         >
           <Camera
-            ref={mode === 'preview' ? cameraRef : undefined}
+            ref={mode === 'fullscreen' ? fullscreenCameraRef : cameraRef}
             key={cameraKey ?? `${centerCoordinate[0]},${centerCoordinate[1]},${zoomLevel}`}
             defaultSettings={defaultSettings}
             minZoomLevel={MAP_MIN_ZOOM}
@@ -485,7 +505,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
               <TripMapboxMarkerItem key={m.id} m={m} PointAnnotation={PointAnnotation} colors={colors} />
             ),
           )}
-          {showUserLocation ? <UserLocation visible /> : null}
+          {showUserLocation || locatedOnce ? <UserLocation visible /> : null}
         </MapView>
         {showBasemap ? (
           <MapBasemapSwitcher
@@ -500,6 +520,15 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           >
             {trailingFab}
           </View>
+        ) : null}
+        {showLocateButton ? (
+          <MapLocateButton
+            // Sit opposite the basemap switcher so it never overlaps the bottom controls.
+            side={mapTabControlLayout ? 'left' : 'right'}
+            bottom={Spacing.lg + planTripFabClearance}
+            busy={locating}
+            onPress={() => void handleLocate(mode)}
+          />
         ) : null}
       </>
     );

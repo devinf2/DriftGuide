@@ -19,7 +19,7 @@ import {
   type OfflineTripSummary,
 } from '@/src/services/sync';
 import { mergeCachedCatchesFromRows } from '@/src/services/mapCatchLocalStore';
-import { deleteDriftguideOfflinePack } from '@/src/services/mapboxOfflineRegion';
+import { deleteDriftguideOfflinePacksForBase } from '@/src/services/mapboxOfflineRegion';
 
 const DOWNLOADED_WATERWAYS_KEY = 'downloaded_waterways';
 
@@ -302,7 +302,7 @@ export async function removeDownloadedWaterway(primaryLocationId: string): Promi
   const w = data[primaryLocationId];
   if (w?.mapPackName) {
     try {
-      await deleteDriftguideOfflinePack(w.mapPackName);
+      await deleteDriftguideOfflinePacksForBase(w.mapPackName);
     } catch (e) {
       console.warn('[waterwayCache] delete map pack', e);
     }

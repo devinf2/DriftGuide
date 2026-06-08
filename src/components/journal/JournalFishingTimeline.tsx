@@ -24,6 +24,7 @@ import {
   splitFlyChangeData,
 } from '@/src/components/fly/ChangeFlyPickerModal';
 import { FlyChangeViewModal } from '@/src/components/fly/FlyChangeViewModal';
+import { enqueueJournalEdits } from '@/src/services/pendingJournalEditsStorage';
 import { BorderRadius, Colors, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import {
   deleteJournalTripEvent,
@@ -185,12 +186,20 @@ export function JournalFishingTimeline({
 
   const submitJournalCatchEdit = useCallback(
     async (nextEvents: TripEvent[]) => {
-      if (!isConnected) {
-        Alert.alert('Offline', 'Connect to the internet to save changes.');
-        throw new Error('offline');
-      }
       const total_fish = totalFishFromEvents(nextEvents);
       const t = { ...trip, total_fish };
+      if (!isConnected) {
+        // Apply locally and queue the events that changed (catch + any spawned fly change).
+        applyEventsAndTotals(nextEvents);
+        const prevById = new Map(events.map((e) => [e.id, JSON.stringify(e)]));
+        const ops = nextEvents
+          .filter((e) => prevById.get(e.id) !== JSON.stringify(e))
+          .map((e) => ({ eventId: e.id, mode: 'upsert' as const }));
+        if (ops.length > 0) {
+          await enqueueJournalEdits(t, ops, nextEvents);
+        }
+        return;
+      }
       applyEventsAndTotals(nextEvents);
       const ok = await syncTripToCloud(t, nextEvents);
       if (!ok) {
@@ -198,14 +207,26 @@ export function JournalFishingTimeline({
         throw new Error('save failed');
       }
     },
-    [isConnected, trip, applyEventsAndTotals, reloadFromCloud],
+    [isConnected, trip, events, applyEventsAndTotals, reloadFromCloud],
   );
 
   const persist = useCallback(
     async (nextEvents: TripEvent[], touched: TripEvent, mode: 'upsert' | 'delete') => {
       if (!isConnected) {
-        Alert.alert('Offline', 'Connect to the internet to edit your journal.');
-        return false;
+        // Local state was already applied by the caller; queue the change and flush on reconnect.
+        const total_fish = totalFishFromEvents(nextEvents);
+        try {
+          await enqueueJournalEdits(
+            { ...trip, total_fish },
+            [{ eventId: touched.id, mode }],
+            nextEvents,
+          );
+          return true;
+        } catch (e) {
+          console.warn('[persist] enqueue offline edit failed', e);
+          Alert.alert('Could not save', 'Your change could not be queued for sync. Try again.');
+          return false;
+        }
       }
       setSaving(true);
       try {
@@ -629,6 +650,7 @@ export function JournalFishingTimeline({
         flyCatalog={flyCatalog}
         allEvents={events}
         editingEvent={catchModal}
+        albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
         onSubmitEdit={submitJournalCatchEdit}
       />
       <EditNoteModal

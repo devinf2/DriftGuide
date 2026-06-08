@@ -2,6 +2,7 @@ import type { CatchData, Photo, TripEvent } from '@/src/types';
 import type { TripViewerPhotoSlide } from '@/src/components/trip/TripFullScreenPhotoViewerModal';
 import { formatTripDate } from '@/src/utils/formatters';
 import { formatCatchSpeciesLabel, getCatchViewerDetailLines } from '@/src/utils/journalTimeline';
+import { formatCatchFlyLabel } from '@/src/utils/getFlyForCatch';
 
 function dedupePreserveOrder(urls: string[]): string[] {
   const seen = new Set<string>();
@@ -138,10 +139,12 @@ export function buildCatchViewerSlideFields(
   event: TripEvent,
   data: CatchData,
   locationName?: string,
+  events: TripEvent[] = [],
 ): Omit<TripViewerPhotoSlide, 'remoteUri'> {
   const detailLines = getCatchViewerDetailLines(data);
   return {
     location: locationName,
+    fly: formatCatchFlyLabel(data, events),
     date: formatTripDate(event.timestamp),
     species: formatCatchSpeciesLabel(data) ?? undefined,
     caption: data.note?.trim() || undefined,

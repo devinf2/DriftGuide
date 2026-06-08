@@ -11,6 +11,7 @@ import {
   Modal,
   Platform,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   TextInput,
   useWindowDimensions,
@@ -108,6 +109,8 @@ export type AddFlySheetProps = {
   /** When adding during an active trip, tie pending sync to this trip. */
   tripId?: string | null;
   onSaved: (fly: Fly) => void;
+  /** iOS: fires after the sheet finishes dismissing — lets callers sequence a following modal transition. */
+  onDismiss?: () => void;
   title?: string;
 };
 
@@ -122,6 +125,7 @@ export function AddFlySheet({
   openAsCustom = false,
   tripId = null,
   onSaved,
+  onDismiss,
   title,
 }: AddFlySheetProps) {
   const { colors } = useAppTheme();
@@ -219,22 +223,40 @@ export function AddFlySheet({
     [selectedCatalogFly, editingFly, name, userPhotoUri, size, color, saving],
   );
 
-  const pickImage = async () => {
+  const pickImageFrom = async (source: 'camera' | 'library') => {
+    const editOpts = { allowsEditing: true, aspect: [1, 1] as [number, number], quality: 0.8 };
+    if (source === 'camera') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow camera access to take a fly photo.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync(editOpts);
+      if (!result.canceled && result.assets[0]) {
+        setPhotoUri(result.assets[0].uri);
+        setClearPhoto(false);
+      }
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission needed', 'Allow access to photos to add a fly image.');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], ...editOpts });
     if (!result.canceled && result.assets[0]) {
       setPhotoUri(result.assets[0].uri);
       setClearPhoto(false);
     }
+  };
+
+  const promptAddPhoto = () => {
+    Keyboard.dismiss();
+    Alert.alert('Fly photo', undefined, [
+      { text: 'Take Photo', onPress: () => void pickImageFrom('camera') },
+      { text: 'Choose from Library', onPress: () => void pickImageFrom('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const openFlyImagePreview = () => {
@@ -247,11 +269,11 @@ export function AddFlySheet({
       setPreviewImage({ source: { uri: userPhotoUri }, title: 'Your photo' });
       return;
     }
-    void pickImage();
+    promptAddPhoto();
   };
 
   const handleUserPhotoLongPress = () => {
-    if (userPhotoUri) void pickImage();
+    if (userPhotoUri) promptAddPhoto();
   };
 
   const clearUserPhoto = () => {
@@ -261,6 +283,7 @@ export function AddFlySheet({
 
   const handleSave = async () => {
     if (!canSave) return;
+    Keyboard.dismiss();
     const nameVal = resolveFlyNameForSave(name, Boolean(userPhotoUri), selectedCatalogFly?.name);
     const sizeNum = size === '' ? null : Number(size);
     setSaving(true);
@@ -368,7 +391,7 @@ export function AddFlySheet({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose} onDismiss={onDismiss}>
       <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[styles.header, { paddingTop: Math.max(insets.top, Spacing.md) }]}>
           <Pressable onPress={onClose} hitSlop={12}>
@@ -500,7 +523,10 @@ export function AddFlySheet({
                 key: String(s),
                 label: `#${s}`,
                 selected: size === s,
-                onPress: () => setSize(size === s ? '' : s),
+                onPress: () => {
+                  Keyboard.dismiss();
+                  setSize(size === s ? '' : s);
+                },
               })),
             )}
           />
@@ -514,7 +540,10 @@ export function AddFlySheet({
                 key: c,
                 label: c,
                 selected: color.trim() === c,
-                onPress: () => setColor(color.trim() === c ? '' : c),
+                onPress: () => {
+                  Keyboard.dismiss();
+                  setColor(color.trim() === c ? '' : c);
+                },
               })),
             )}
           />
@@ -527,13 +556,19 @@ export function AddFlySheet({
                 key: p,
                 label: FLY_PRESENTATION_LABELS[p],
                 selected: presentation === p,
-                onPress: () => setPresentation(presentation === p ? null : p),
+                onPress: () => {
+                  Keyboard.dismiss();
+                  setPresentation(presentation === p ? null : p);
+                },
               })),
               FLY_PRESENTATIONS.slice(3).map((p) => ({
                 key: p,
                 label: FLY_PRESENTATION_LABELS[p],
                 selected: presentation === p,
-                onPress: () => setPresentation(presentation === p ? null : p),
+                onPress: () => {
+                  Keyboard.dismiss();
+                  setPresentation(presentation === p ? null : p);
+                },
               })),
             ]}
           />

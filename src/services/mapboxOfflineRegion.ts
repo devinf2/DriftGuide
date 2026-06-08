@@ -18,9 +18,24 @@ import {
 } from '@/src/constants/offlineSampleRegion';
 import { mapboxCreatePackBoundsFromBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
+import { resolveOfflineMaxZoom } from '@/src/utils/offlineTileEstimate';
 
 /** Prefix for app-created offline tile packs (list/delete in Profile). */
 export const DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX = 'driftguide-map-';
+
+/**
+ * A download can cover several styles (e.g. terrain + satellite). The first style keeps the base
+ * pack name; extra styles get a `-s<index>` suffix so all of a region's packs share the base name
+ * and can be listed/deleted together. (rnmapbox serves cached tiles by style+region, not by name,
+ * so the names are bookkeeping only.)
+ */
+export function offlineStylePackName(baseName: string, index: number): string {
+  return index === 0 ? baseName : `${baseName}-s${index}`;
+}
+
+function isSiblingPackName(name: string, baseName: string): boolean {
+  return name === baseName || name.startsWith(`${baseName}-s`);
+}
 
 export type DriftguideOfflineMapPack = {
   name: string;
@@ -120,6 +135,37 @@ export async function deleteDriftguideOfflinePack(name: string): Promise<void> {
   await om.deletePack(name);
 }
 
+/**
+ * Delete every pack belonging to a region (the base pack and any `-s<index>` style siblings).
+ * Use when removing a downloaded region so multi-style packs don't leave orphaned tiles.
+ */
+export async function deleteDriftguideOfflinePacksForBase(baseName: string): Promise<void> {
+  if (!baseName.startsWith(DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX)) {
+    throw new Error('Invalid offline pack name');
+  }
+  const om = loadOfflineManager();
+  if (!om?.deletePack) {
+    throw new Error('Mapbox offline is not available (native build required).');
+  }
+  let names: string[] = [baseName];
+  if (om.getPacks) {
+    try {
+      const packs = await om.getPacks();
+      const found = packs.map(packNameFromNative).filter((n) => isSiblingPackName(n, baseName));
+      if (found.length) names = found;
+    } catch {
+      // fall back to deleting just the base name
+    }
+  }
+  for (const n of names) {
+    try {
+      await om.deletePack(n);
+    } catch (e) {
+      console.warn('[mapboxOfflineRegion] deletePack', n, e);
+    }
+  }
+}
+
 export function isMapboxOfflineAvailable(): boolean {
   return loadOfflineManager() != null;
 }
@@ -133,13 +179,23 @@ export type DownloadOfflineMapRegionOptions = {
   bbox: BoundingBox;
   /** Defaults to a timestamp-based id when omitted (avoid collisions for ad-hoc viewport packs). */
   name?: string;
+  /** Single style to download. Prefer `styleURLs` to cover multiple basemaps in one region. */
   styleURL?: string;
+  /** Download a pack per style (e.g. terrain + satellite) so users can switch basemaps offline. */
+  styleURLs?: string[];
   minZoom?: number;
+  /**
+   * Hard ceiling for downloaded zoom. The effective maxZoom is clamped down from here for large
+   * areas so a high-res pack can't blow past the tile budget (see resolveOfflineMaxZoom).
+   */
   maxZoom?: number;
 };
 
 /**
  * Download map tiles for a geographic bbox (same shape as Supabase / cache queries).
+ *
+ * When multiple styles are requested, one pack is created per style and progress is reported as a
+ * combined 0–100 across them.
  */
 export async function downloadOfflineMapRegion(
   options: DownloadOfflineMapRegionOptions,
@@ -153,32 +209,42 @@ export async function downloadOfflineMapRegion(
   const {
     bbox,
     name = `driftguide-offline-${Date.now()}`,
-    styleURL = SAMPLE_OFFLINE_STYLE_URL,
     minZoom = SAMPLE_OFFLINE_MIN_ZOOM,
-    maxZoom = SAMPLE_OFFLINE_MAX_ZOOM,
+    maxZoom: hardMaxZoom = SAMPLE_OFFLINE_MAX_ZOOM,
   } = options;
+  const styleURLs =
+    options.styleURLs && options.styleURLs.length > 0
+      ? options.styleURLs
+      : [options.styleURL ?? SAMPLE_OFFLINE_STYLE_URL];
+
+  // Clamp the zoom ceiling down for large areas so a z18 pack stays a sane size.
+  const maxZoom = resolveOfflineMaxZoom(bbox, minZoom, hardMaxZoom);
+  const bounds = mapboxCreatePackBoundsFromBoundingBox(bbox);
 
   if (name.startsWith(DRIFTGUIDE_OFFLINE_MAP_PACK_PREFIX)) {
-    await deletePackIfExists(name);
+    await deleteDriftguideOfflinePacksForBase(name);
   }
 
-  await om.createPack(
-    {
-      name,
-      styleURL,
-      bounds: mapboxCreatePackBoundsFromBoundingBox(bbox),
-      minZoom,
-      maxZoom,
-    },
-    (_pack, status) => {
-      onProgress?.({
-        percentage: typeof status.percentage === 'number' ? status.percentage : 0,
-      });
-    },
-    (_pack, err) => {
-      console.warn('[mapboxOfflineRegion]', err?.message ?? err);
-    },
-  );
+  const total = styleURLs.length;
+  for (let i = 0; i < total; i++) {
+    const packName = offlineStylePackName(name, i);
+    await om.createPack(
+      {
+        name: packName,
+        styleURL: styleURLs[i],
+        bounds,
+        minZoom,
+        maxZoom,
+      },
+      (_pack, status) => {
+        const pct = typeof status.percentage === 'number' ? status.percentage : 0;
+        onProgress?.({ percentage: (i * 100 + pct) / total });
+      },
+      (_pack, err) => {
+        console.warn('[mapboxOfflineRegion]', err?.message ?? err);
+      },
+    );
+  }
 }
 
 /** MVP default: Utah Valley sample {@link SAMPLE_OFFLINE_BOUNDING_BOX}. */

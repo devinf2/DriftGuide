@@ -43,7 +43,6 @@ import { getCachedConditions } from '@/src/services/waterwayCache';
 import {
   filterEventsToViewerTripLog,
   latestFlyChangeRigFromEvents,
-  nextSequentialTimelineTimestamp,
   totalFishFromEvents,
 } from '@/src/utils/journalTimeline';
 import { buildEventConditionsSnapshot } from '@/src/utils/eventConditionsSnapshot';
@@ -114,7 +113,7 @@ interface TripState {
     /** Stable client id for offline-first sync (omit to assign a new uuid). */
     clientEventId?: string | null,
     options?: {
-      /** @deprecated Ignored: new catches always use {@link nextSequentialTimelineTimestamp} so the log stays in add order. */
+      /** Real catch time (photo EXIF / upload time). Omit to use the current wall-clock time. */
       timestampIso?: string;
       conditionsSnapshot?: EventConditionsSnapshot | null;
     },
@@ -725,22 +724,27 @@ export const useTripStore = create<TripState>()(
           waterFlowData: null,
         }));
 
-        void import('@/src/services/tripOutboxSync')
-          .then(({ runTripOutboxExclusive, syncPendingTripBundle }) => {
-            void runTripOutboxExclusive(async () => {
-              const pending = await getPendingTrips();
-              const p = pending[tripId];
-              if (!p) return;
-              const ok = await syncPendingTripBundle(p);
-              if (ok) {
-                await removePendingTrip(tripId);
-                useTripStore.setState((s) => ({
-                  pendingSyncTrips: s.pendingSyncTrips.filter((id) => id !== tripId),
-                }));
-              }
-            });
-          })
-          .catch((e) => console.warn('[updateTripSurvey] background sync kick failed', e));
+        // Only attempt an immediate upload when the app is online. When offline (incl. dev
+        // "simulate offline"), leave the trip in the pending queue so the journal shows the
+        // uploading placeholder; SyncOnConnectivity flushes it once connectivity returns.
+        if (get().isOnline) {
+          void import('@/src/services/tripOutboxSync')
+            .then(({ runTripOutboxExclusive, syncPendingTripBundle }) => {
+              void runTripOutboxExclusive(async () => {
+                const pending = await getPendingTrips();
+                const p = pending[tripId];
+                if (!p) return;
+                const ok = await syncPendingTripBundle(p);
+                if (ok) {
+                  await removePendingTrip(tripId);
+                  useTripStore.setState((s) => ({
+                    pendingSyncTrips: s.pendingSyncTrips.filter((id) => id !== tripId),
+                  }));
+                }
+              });
+            })
+            .catch((e) => console.warn('[updateTripSurvey] background sync kick failed', e));
+        }
 
         return { localSaved: true, cloudSynced: false };
       },
@@ -796,7 +800,24 @@ export const useTripStore = create<TripState>()(
             ? clientEventId.trim()
             : uuidv4();
 
-        const timestamp = nextSequentialTimelineTimestamp(activeTrip, get().events);
+        // Catch time is the real moment it happened: an explicit capture time (photo EXIF / upload
+        // time) when provided, otherwise the current wall-clock time. We only nudge it forward to
+        // stay strictly after the latest existing event so rapid logs keep their add-order — we do
+        // NOT clamp to the trip window, which previously collapsed many catches onto the end time.
+        const explicitMs =
+          options?.timestampIso && !Number.isNaN(Date.parse(options.timestampIso))
+            ? Date.parse(options.timestampIso)
+            : null;
+        const startMs = new Date(activeTrip.start_time).getTime();
+        let timestampMs = explicitMs ?? Date.now();
+        if (Number.isFinite(startMs) && timestampMs < startMs) timestampMs = startMs;
+        let maxEventMs = Number.isFinite(startMs) ? startMs : Date.now();
+        for (const e of get().events) {
+          const t = new Date(e.timestamp).getTime();
+          if (!Number.isNaN(t)) maxEventMs = Math.max(maxEventMs, t);
+        }
+        if (timestampMs <= maxEventMs) timestampMs = maxEventMs + 1;
+        const timestamp = new Date(timestampMs).toISOString();
 
         const conditions_snapshot =
           options?.conditionsSnapshot !== undefined

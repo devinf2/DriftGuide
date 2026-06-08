@@ -1,5 +1,6 @@
 import type { CatchData, FlyChangeData, Trip, TripEvent, TripEventWithSource } from '@/src/types';
 import { v4 as uuidv4 } from 'uuid';
+import { formatCatchFlyLabel } from '@/src/utils/getFlyForCatch';
 
 function parseTripEventCoord(value: unknown): number | null {
   if (value == null) return null;
@@ -60,12 +61,18 @@ function formatCatchDetailLabel(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function appendCatchMeasurementDetailLines(data: CatchData, lines: string[]): void {
+function appendCatchMeasurementDetailLines(
+  data: CatchData,
+  lines: string[],
+  flyLabel?: string | null,
+): void {
   const w = formatCatchWeightLabel(data.weight_lb, data.weight_oz);
   if (w) lines.push(`Weight: ${w}`);
   if (data.depth_ft != null) lines.push(`Depth: ${data.depth_ft} ft`);
   if (data.structure) lines.push(`Structure: ${formatCatchDetailLabel(data.structure)}`);
-  if (data.presentation_method) lines.push(`Presentation: ${formatCatchDetailLabel(data.presentation_method)}`);
+  // Show the fly that caught the fish in place of the presentation method when known.
+  if (flyLabel) lines.push(`Fly: ${flyLabel}`);
+  else if (data.presentation_method) lines.push(`Presentation: ${formatCatchDetailLabel(data.presentation_method)}`);
   if (data.released != null) lines.push(`Released: ${data.released ? 'Yes' : 'No'}`);
 }
 
@@ -78,11 +85,14 @@ export function formatCatchSpeciesLabel(data: CatchData): string | null {
   return null;
 }
 
-/** Extra catch detail lines shown when a timeline row is expanded (excludes species/size subtitle). */
-export function getCatchDetailLines(data: CatchData): string[] {
+/**
+ * Extra catch detail lines shown when a timeline row is expanded (excludes species/size subtitle).
+ * Pass `flyLabel` to show the catching fly in place of the presentation method.
+ */
+export function getCatchDetailLines(data: CatchData, flyLabel?: string | null): string[] {
   const lines: string[] = [];
   if (data.note?.trim()) lines.push(data.note.trim());
-  appendCatchMeasurementDetailLines(data, lines);
+  appendCatchMeasurementDetailLines(data, lines, flyLabel);
   return lines;
 }
 
@@ -157,6 +167,8 @@ export type TimelineDisplayRow = {
   flySlot: TimelineFlySlot | null;
   /** Index in `sortEventsByTime(events)` for row menu / insert actions */
   eventIndex: number;
+  /** Catch rows only: fly label resolved from the active fly change (e.g. "Humpy #14"). */
+  catchFly?: string;
 };
 
 function flyChangeDataHasSecondary(data: FlyChangeData): boolean {
@@ -220,6 +232,10 @@ export function buildTimelineDisplayRows(
       event,
       flySlot: null,
       eventIndex,
+      catchFly:
+        event.event_type === 'catch'
+          ? formatCatchFlyLabel(coerceTripEventDataObject(event) as unknown as CatchData, sorted)
+          : undefined,
     });
   }
 

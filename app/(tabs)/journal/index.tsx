@@ -43,6 +43,7 @@ import {
     View,
 } from 'react-native';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
+import { usePendingJournalTrips } from '@/src/hooks/usePendingTripPayload';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type ViewMode = 'list' | 'map';
@@ -76,6 +77,7 @@ export default function JournalScreen() {
   const effectiveTop = useEffectiveSafeTopInset();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { user } = useAuthStore();
+  const pendingUploadTrips = usePendingJournalTrips(user?.id);
   const favoriteIds = useLocationFavoritesStore((s) => s.ids);
   const favoriteLocationIds = useMemo(() => new Set(favoriteIds), [favoriteIds]);
   const { colors, resolvedScheme } = useAppTheme();
@@ -164,6 +166,43 @@ export default function JournalScreen() {
 
     return allTrips.filter(t => isAfter(new Date(t.start_time), cutoff));
   }, [allTrips, dateRange]);
+
+  // Trips saved on this device still uploading from cache. Exclude any that already
+  // came back from the cloud (brief overlap during the sync window) and apply the date filter.
+  const pendingPlaceholderTrips = useMemo(() => {
+    if (pendingUploadTrips.length === 0) return [] as Trip[];
+    const cloudIds = new Set(allTrips.map((t) => t.id));
+    let pending = pendingUploadTrips.filter((t) => !cloudIds.has(t.id));
+
+    if (dateRange !== 'all') {
+      const now = new Date();
+      let cutoff: Date;
+      switch (dateRange) {
+        case 'week':
+          cutoff = startOfWeek(now, { weekStartsOn: 0 });
+          break;
+        case 'month':
+          cutoff = startOfMonth(now);
+          break;
+        case 'year':
+          cutoff = startOfYear(now);
+          break;
+      }
+      pending = pending.filter((t) => isAfter(new Date(t.start_time), cutoff!));
+    }
+    return pending;
+  }, [pendingUploadTrips, allTrips, dateRange]);
+
+  const uploadingTripIds = useMemo(
+    () => new Set(pendingPlaceholderTrips.map((t) => t.id)),
+    [pendingPlaceholderTrips],
+  );
+
+  // Uploading placeholders sit at the top of the list so an offline trip is visible immediately.
+  const listTrips = useMemo(
+    () => [...pendingPlaceholderTrips, ...filteredTrips],
+    [pendingPlaceholderTrips, filteredTrips],
+  );
 
   const locationGroups = useMemo(() => {
     const groups = new Map<string, LocationGroup>();
@@ -336,9 +375,10 @@ export default function JournalScreen() {
         onPress={() => pushJournalTripDetail(`/journal/${item.id}`)}
         colors={colors}
         styles={tripGridStyles}
+        uploading={uploadingTripIds.has(item.id)}
       />
     ),
-    [tripPhotoUrlsMap, cardWidth, colors, tripGridStyles],
+    [tripPhotoUrlsMap, cardWidth, colors, tripGridStyles, uploadingTripIds],
   );
 
   if (loading) {
@@ -491,14 +531,14 @@ export default function JournalScreen() {
       {/* List View */}
       {viewMode === 'list' && (
         <FlatList
-          data={filteredTrips}
+          data={listTrips}
           numColumns={2}
           renderItem={renderTrip}
           keyExtractor={(item) => item.id}
           nestedScrollEnabled
-          columnWrapperStyle={filteredTrips.length > 0 ? styles.journalGridRow : undefined}
+          columnWrapperStyle={listTrips.length > 0 ? styles.journalGridRow : undefined}
           contentContainerStyle={
-            filteredTrips.length === 0
+            listTrips.length === 0
               ? styles.centered
               : [styles.journalGridList, { paddingLeft: Spacing.xl + insets.left, paddingRight: Spacing.xl + insets.right }]
           }

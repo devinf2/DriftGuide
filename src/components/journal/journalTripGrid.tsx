@@ -3,7 +3,7 @@ import type { LocationType, Photo, Trip } from '@/src/types';
 import { formatFishCount, formatTripDate } from '@/src/utils/formatters';
 import { MaterialIcons } from '@expo/vector-icons';
 import { memo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 /** Unique image URLs for a trip from `photos` rows (includes catch-linked via catch_id). */
 export function imageUrlsForTrip(tripId: string, photos: Photo[]): string[] {
@@ -124,6 +124,7 @@ export const JournalTripGridCard = memo(function JournalTripGridCard({
   onPress,
   colors,
   styles,
+  uploading = false,
 }: {
   trip: Trip;
   imageUrls: string[];
@@ -131,6 +132,8 @@ export const JournalTripGridCard = memo(function JournalTripGridCard({
   onPress: () => void;
   colors: ThemeColors;
   styles: ReturnType<typeof createJournalTripGridStyles>;
+  /** Trip is saved on this device and still uploading from cache: show a loading overlay. */
+  uploading?: boolean;
 }) {
   const locationType = trip.location?.type as LocationType | undefined;
   const accent =
@@ -139,14 +142,25 @@ export const JournalTripGridCard = memo(function JournalTripGridCard({
 
   return (
     <View style={[styles.tripGridCard, { width: cardWidth }]}>
-      <JournalTripCarousel
-        urls={imageUrls}
-        width={cardWidth}
-        height={carouselHeight}
-        colors={colors}
-        styles={styles}
-        onImagePress={onPress}
-      />
+      <View>
+        <JournalTripCarousel
+          urls={imageUrls}
+          width={cardWidth}
+          height={carouselHeight}
+          colors={colors}
+          styles={styles}
+          onImagePress={onPress}
+        />
+        {uploading ? (
+          <View
+            style={[styles.tripUploadOverlay, { width: cardWidth, height: carouselHeight }]}
+            pointerEvents="none"
+          >
+            <ActivityIndicator size="small" color={colors.textInverse} />
+            <Text style={styles.tripUploadOverlayText}>Uploading…</Text>
+          </View>
+        ) : null}
+      </View>
       <Pressable
         style={({ pressed }) => [styles.tripGridBody, pressed && styles.tripGridBodyPressed]}
         onPress={onPress}
@@ -175,6 +189,7 @@ export const JournalTripGridCard = memo(function JournalTripGridCard({
   );
 }, (prev, next) => {
   if (prev.trip.id !== next.trip.id) return false;
+  if (prev.uploading !== next.uploading) return false;
   if (prev.trip.total_fish !== next.trip.total_fish) return false;
   if (prev.trip.shared_session_id !== next.trip.shared_session_id) return false;
   if (prev.cardWidth !== next.cardWidth) return false;
@@ -202,6 +217,18 @@ export function createJournalTripGridStyles(colors: ThemeColors) {
     tripCarouselWrap: {
       position: 'relative',
       backgroundColor: colors.borderLight,
+    },
+    tripUploadOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      gap: Spacing.xs,
+    },
+    tripUploadOverlayText: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.textInverse,
     },
     tripCarouselEmpty: {
       alignItems: 'center',

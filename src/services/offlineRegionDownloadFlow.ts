@@ -29,11 +29,20 @@ export async function executeOfflineRegionDownload(
 ): Promise<ExecuteOfflineRegionDownloadResult> {
   const tilesOk = isMapboxOfflineAvailable();
   if (tilesOk) {
+    // Download both terrain and satellite so users can switch basemaps offline, plus the style
+    // they're currently viewing (covers hybrid). Deduped to avoid redundant packs.
+    const styleURLs = Array.from(
+      new Set([
+        mapboxStyleURLForBasemap('outdoors'),
+        mapboxStyleURLForBasemap('satellite'),
+        mapboxStyleURLForBasemap(args.basemapId),
+      ]),
+    );
     await downloadOfflineMapRegion(
       {
         bbox: args.liveBbox,
         name: args.mapPackName,
-        styleURL: mapboxStyleURLForBasemap(args.basemapId),
+        styleURLs,
       },
       onTileProgress
         ? (p: OfflineDownloadProgress) => onTileProgress(p.percentage)

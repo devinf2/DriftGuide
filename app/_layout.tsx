@@ -13,6 +13,7 @@ import 'react-native-reanimated';
 
 import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/googleOAuth';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
+import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -247,6 +248,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     <View style={styles.authGateRoot}>
       {session ? <SyncOnConnectivity /> : null}
       {session ? <GlobalOfflineBanner /> : null}
+      {session ? <GlobalUploadIndicator /> : null}
       <View style={styles.authGateStackShell}>{children}</View>
       {OfflineSimOverlay ? (
         <View pointerEvents="box-none" style={styles.devOverlay}>

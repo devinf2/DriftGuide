@@ -101,7 +101,7 @@ export function TripDashboardTimelineRows({
 
   return (
     <>
-      {rows.map(({ key, event, flySlot, eventIndex: index }, displayIdx) => {
+      {rows.map(({ key, event, flySlot, eventIndex: index, catchFly }, displayIdx) => {
         const isFirst = displayIdx === 0;
         const isLast = displayIdx === rows.length - 1;
         const { title, subtitle } = getTimelineRowPresentation(event, flySlot);
@@ -122,7 +122,7 @@ export function TripDashboardTimelineRows({
             : null;
         const isCatch = event.event_type === 'catch';
         const catchData = isCatch ? (event.data as CatchData) : null;
-        const catchDetailLines = catchData ? getCatchDetailLines(catchData) : [];
+        const catchDetailLines = catchData ? getCatchDetailLines(catchData, catchFly) : [];
         const isCatchExpanded = isCatch && expandedCatchIds.has(event.id);
         const catchHeroUrl =
           catchData != null
@@ -272,7 +272,7 @@ export function TripDashboardTimelineRows({
               <Text style={styles.timelineRowTitle}>{title}</Text>
               {subtitle ? <Text style={styles.timelineRowSubtitle}>{subtitle}</Text> : null}
               {isCatch && isCatchExpanded && catchData ? (
-                <CatchDetailsBlock data={catchData} styles={styles} />
+                <CatchDetailsBlock data={catchData} flyLabel={catchFly} styles={styles} />
               ) : null}
             </Pressable>
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   Modal,
@@ -859,14 +859,87 @@ export function ChangeFlyPickerModal({
     setOpenAsCustom(false);
   }, []);
 
+  /**
+   * Confirm queued from "add fly" — run only AFTER the AddFlySheet has fully dismissed.
+   * Dismissing two stacked modals in the same frame freezes iOS, so we sequence them.
+   */
+  const pendingPostAddConfirmRef = useRef<(() => void) | null>(null);
+
+  const runPendingPostAddConfirm = useCallback(() => {
+    const fn = pendingPostAddConfirmRef.current;
+    pendingPostAddConfirmRef.current = null;
+    fn?.();
+  }, []);
+
   const handleAddSheetSaved = useCallback(
     (fly: Fly) => {
+      // Register the new fly in the box (updates the list + notifies the parent).
       handleFlySaved(fly);
-      setAddSheetOpen(false);
       setInitialCatalogFlyForAdd(null);
       setOpenAsCustom(false);
+
+      // Select it and commit so we return to the journal instead of the picker. Build the payload
+      // straight from the fly — the picker's slot state hasn't flushed and the fly isn't in
+      // `userFlies` yet. Queue the commit; it runs once the AddFlySheet finishes dismissing.
+      const added = flyToFlyChangeData(fly, [fly, ...userFlies], flyCatalog);
+      let commit: (() => void) | null = null;
+      if (effectiveActiveSlot === 'dropper') {
+        const primary =
+          buildFlyChangeFromSelection(
+            pickerName,
+            pickerSize,
+            pickerColor,
+            primaryUserBoxFlyId,
+            primaryCatalogFlyId,
+            userFlies,
+            flyCatalog,
+          ) ??
+          initialPrimary ??
+          null;
+        if (primary) commit = () => onConfirm(primary, added);
+      } else {
+        const dropper =
+          pickerName2 != null && String(pickerName2).trim()
+            ? buildFlyChangeFromSelection(
+                pickerName2,
+                pickerSize2,
+                pickerColor2,
+                dropperUserBoxFlyId,
+                dropperCatalogFlyId,
+                userFlies,
+                flyCatalog,
+              )
+            : (initialDropper ?? null);
+        commit = () => onConfirm(added, dropper);
+      }
+      pendingPostAddConfirmRef.current = commit;
+      setAddSheetOpen(false);
+      // iOS waits for the Modal's onDismiss; Android has no onDismiss and doesn't freeze on
+      // stacked dismissals, so fire on the next frame once the sheet starts closing.
+      if (Platform.OS !== 'ios') {
+        requestAnimationFrame(runPendingPostAddConfirm);
+      }
     },
-    [handleFlySaved],
+    [
+      handleFlySaved,
+      effectiveActiveSlot,
+      pickerName,
+      pickerSize,
+      pickerColor,
+      primaryUserBoxFlyId,
+      primaryCatalogFlyId,
+      pickerName2,
+      pickerSize2,
+      pickerColor2,
+      dropperUserBoxFlyId,
+      dropperCatalogFlyId,
+      userFlies,
+      flyCatalog,
+      initialPrimary,
+      initialDropper,
+      onConfirm,
+      runPendingPostAddConfirm,
+    ],
   );
 
   const windowH = Dimensions.get('window').height;
@@ -948,7 +1021,7 @@ export function ChangeFlyPickerModal({
               ) : null}
 
               <ScrollView style={styles.flyPickerScroll} contentContainerStyle={styles.flyPickerContent} keyboardShouldPersistTaps="handled">
-                {dropperSectionOpen && !singleEditSlot ? (
+                {!singleEditSlot ? (
                   <View style={styles.slotSwitcher}>
                     <Pressable
                       style={[styles.slotChip, activeSlot === 'primary' && styles.slotChipActive]}
@@ -958,7 +1031,11 @@ export function ChangeFlyPickerModal({
                     </Pressable>
                     <Pressable
                       style={[styles.slotChip, activeSlot === 'dropper' && styles.slotChipActive]}
-                      onPress={() => setActiveSlot('dropper')}
+                      onPress={() => {
+                        // Always-visible toggle: tapping Secondary opens that slot if it's empty.
+                        if (pickerName2 === null) setPickerName2('');
+                        setActiveSlot('dropper');
+                      }}
                     >
                       {renderSlotChip('Secondary', dropperSlotChipPreview, activeSlot === 'dropper')}
                     </Pressable>
@@ -997,12 +1074,9 @@ export function ChangeFlyPickerModal({
                   emptyMessage={flySearchQuery ? 'No matches in catalog' : 'No flies in catalog'}
                 />
 
-                {!singleEditSlot ? (
-                pickerName2 === null ? (
-                  <Pressable style={styles.addDropperButton} onPress={() => setPickerName2('')}>
-                    <Text style={styles.addDropperButtonText}>Add secondary (e.g. hopper-dropper)</Text>
-                  </Pressable>
-                ) : (
+                {/* Adding a secondary is handled by the always-visible Secondary toggle above;
+                    only offer Remove here once one exists. */}
+                {!singleEditSlot && pickerName2 !== null ? (
                   <Pressable
                     style={styles.addDropperButton}
                     onPress={() => {
@@ -1016,7 +1090,6 @@ export function ChangeFlyPickerModal({
                   >
                     <Text style={styles.addDropperButtonText}>Remove secondary</Text>
                   </Pressable>
-                )
                 ) : null}
               </ScrollView>
 
@@ -1054,6 +1127,7 @@ export function ChangeFlyPickerModal({
             openAsCustom={openAsCustom}
             tripId={tripId}
             onSaved={handleAddSheetSaved}
+            onDismiss={runPendingPostAddConfirm}
             title="Add fly to box"
           />
         </>

@@ -18,6 +18,12 @@ export const SAMPLE_OFFLINE_BOUNDS = mapboxCreatePackBoundsFromBoundingBox(
 );
 
 export const SAMPLE_OFFLINE_MIN_ZOOM = 10;
-export const SAMPLE_OFFLINE_MAX_ZOOM = 16;
+/**
+ * Match the interactive map's `MAP_MAX_ZOOM` (18). Downloading only to z16 (the old value)
+ * left zooms 17–18 with no tiles, so Mapbox upscaled z16 tiles → the grainy/blurry look.
+ * Each extra zoom level ~4× the tiles, so areas are capped (see OFFLINE_REGION_SIZE_PRESETS
+ * and resolveOfflineMaxZoom) to keep z18 packs a reasonable size.
+ */
+export const SAMPLE_OFFLINE_MAX_ZOOM = 18;
 
 export const SAMPLE_OFFLINE_STYLE_URL = MAPBOX_STYLE_URL;

@@ -3,7 +3,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAuthStore } from '@/src/stores/authStore';
-import { syncTripToCloud } from '@/src/services/sync';
+import { syncTripToCloud, flushPendingJournalEdits } from '@/src/services/sync';
 import { prepareTripEventsForCloudSync } from '@/src/services/tripOutboxSync';
 import { flushPendingCatches } from '@/src/services/mapCatchLocalStore';
 import { syncPendingUserCatches } from '@/src/services/userCatchService';
@@ -42,6 +42,7 @@ export function SyncOnConnectivity() {
         }
         await flushPendingCatches();
         await retryPendingSyncs();
+        await flushPendingJournalEdits();
         const { activeTrip, events } = useTripStore.getState();
         if (activeTrip && events) {
           const prepared = await prepareTripEventsForCloudSync(activeTrip, events);
@@ -77,6 +78,7 @@ export function SyncOnConnectivity() {
           if (uid) await syncPendingUserCatches(uid);
           await flushPendingCatches();
           await retryPendingSyncs();
+          await flushPendingJournalEdits();
           const { activeTrip: at, events: ev } = useTripStore.getState();
           if (at && ev) {
             const prepared = await prepareTripEventsForCloudSync(at, ev);

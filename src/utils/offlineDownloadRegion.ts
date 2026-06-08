@@ -47,22 +47,26 @@ export function boundingBoxToGeoJsonPolygonCoords(bbox: BoundingBox): LatLng[][]
 /**
  * Offline download rectangles: east–west `halfWidthKm`, north–south `halfHeightKm` from center.
  * Mapbox downloads all tiles for the bbox in one `createPack` call; larger preset ≈ more tiles & storage.
+ *
+ * These are deliberately small because packs now download to z18 (sharp, no upscaling). Each extra
+ * zoom level ~4× the tiles, so a high-res z18 pack of a big area would be huge — we trade area for
+ * sharpness. Both presets stay under MAX_OFFLINE_TILES_PER_STYLE at z18 for each downloaded style.
  */
 export const OFFLINE_REGION_SIZE_PRESETS = {
   small: {
-    halfWidthKm: 9,
-    halfHeightKm: 16,
+    halfWidthKm: 1.5,
+    halfHeightKm: 4,
     title: 'Small',
     /** Rough full extent (km); varies slightly with latitude. */
-    extentLabel: '~18 × 32 km',
-    hint: 'Less storage, quicker',
+    extentLabel: '~3 × 8 km',
+    hint: 'Sharp, less storage',
   },
   /** Double each half-extent vs small → ~4× ground area and tile count (same zoom range). */
   large: {
-    halfWidthKm: 18,
-    halfHeightKm: 32,
+    halfWidthKm: 3,
+    halfHeightKm: 8,
     title: 'Large',
-    extentLabel: '~36 × 64 km',
+    extentLabel: '~6 × 16 km',
     hint: 'More river miles offline',
   },
 } as const;

@@ -61,8 +61,16 @@ export function getTimelineRowPresentation(
   }
 }
 
-export function CatchDetailsBlock({ data, styles }: { data: CatchData; styles: Record<string, object> }) {
-  const lines = getCatchDetailLines(data);
+export function CatchDetailsBlock({
+  data,
+  flyLabel,
+  styles,
+}: {
+  data: CatchData;
+  flyLabel?: string;
+  styles: Record<string, object>;
+}) {
+  const lines = getCatchDetailLines(data, flyLabel);
   if (lines.length === 0) return null;
   return (
     <View style={styles.timelineCatchDetails}>

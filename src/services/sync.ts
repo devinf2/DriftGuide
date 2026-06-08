@@ -1070,3 +1070,44 @@ export async function updateTripTotalFishInCloud(trip: Trip, events: TripEvent[]
   if (trip.total_fish === total_fish) return true;
   return upsertTripToSupabase({ ...trip, total_fish });
 }
+
+/**
+ * Flush journal edits queued while offline (see pendingJournalEditsStorage). Replays each
+ * per-event op against the cloud using the latest local event snapshot, then reconciles
+ * total_fish. Failed ops are retained for the next reconnect; succeeded ops are dropped.
+ */
+export async function flushPendingJournalEdits(): Promise<void> {
+  const { getPendingJournalEdits, setRemainingJournalOps } = await import(
+    './pendingJournalEditsStorage'
+  );
+  const all = await getPendingJournalEdits();
+  for (const tripId of Object.keys(all)) {
+    const { trip, events, ops } = all[tripId];
+    const remaining: Record<string, 'upsert' | 'delete'> = {};
+    for (const [eventId, mode] of Object.entries(ops)) {
+      try {
+        if (mode === 'delete') {
+          const ok = await deleteJournalTripEvent(trip.id, eventId);
+          if (!ok) remaining[eventId] = mode;
+        } else {
+          const ev = events.find((e) => e.id === eventId);
+          // Event no longer present locally (e.g. later deleted): nothing to push.
+          if (!ev) continue;
+          const ok = await upsertJournalTripEvent(trip, ev, events);
+          if (!ok) remaining[eventId] = mode;
+        }
+      } catch (e) {
+        console.warn('[flushPendingJournalEdits]', eventId, e);
+        remaining[eventId] = mode;
+      }
+    }
+    if (Object.keys(remaining).length === 0) {
+      try {
+        await updateTripTotalFishInCloud(trip, events);
+      } catch (e) {
+        console.warn('[flushPendingJournalEdits] totals', e);
+      }
+    }
+    await setRemainingJournalOps(tripId, remaining);
+  }
+}

@@ -5,6 +5,7 @@ import {
   Image,
   Keyboard,
   Modal,
+  PixelRatio,
   Platform,
   Pressable,
   ScrollView,
@@ -52,7 +53,9 @@ import type {
 import { ChangeFlyPickerModal, seedSelectionFromFlyChange } from '@/src/components/fly/ChangeFlyPickerModal';
 import { resolveFlyImageSource } from '@/src/utils/resolveFlyPhotoUrl';
 import { SinglePhotoZoomModal } from '@/src/components/SinglePhotoZoomModal';
-import { normalizeCatchPhotoUrls } from '@/src/utils/catchPhotos';
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { normalizeCatchPhotoUrls, resolveCatchDisplayPhotoUrls } from '@/src/utils/catchPhotos';
+import { layoutSizeToPixelSize } from '@/src/utils/photoDisplayUrl';
 
 const MAX_CATCH_PHOTOS = 8;
 
@@ -286,6 +289,12 @@ export type CatchDetailsModalProps = {
   flyCatalog?: FlyCatalog[];
   allEvents: TripEvent[];
   editingEvent?: TripEvent | null;
+  /**
+   * Edit mode: canonical photo rows from the `photos` table (keyed by catch event id), the same
+   * source the timeline renders. Preferred over the catch JSON `photo_urls` so edit always shows
+   * what the user sees and heals stale JSON on save.
+   */
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>;
   /** Add mode: seed rig from current trip state */
   seedPrimary?: FlyChangeData | null;
   seedDropper?: FlyChangeData | null;
@@ -964,6 +973,7 @@ export function CatchDetailsModal({
   flyCatalog: flyCatalogProp = [],
   allEvents,
   editingEvent,
+  albumPhotoUrlsByCatchId,
   seedPrimary,
   seedDropper,
   getPresentationForFly,
@@ -1022,6 +1032,7 @@ export function CatchDetailsModal({
   const [zoomPhotoUri, setZoomPhotoUri] = useState<string | null>(null);
 
   const catchModalContentRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   /** Log past trips: all catches on an imported draft (add + edit), not live sessions. */
   const showImportCatchTime =
@@ -1231,8 +1242,9 @@ export function CatchDetailsModal({
       setCatchWeightOz(data.weight_oz != null ? String(data.weight_oz) : '');
       setCatchNote(data.note ?? '');
       setCatchDepth(data.depth_ft != null ? String(data.depth_ft) : '');
-      setCatchPhotoUris(normalizeCatchPhotoUrls(data));
-      initialEditRemoteUrlsRef.current = normalizeCatchPhotoUrls(data).filter(isRemoteStorageUrl);
+      const editPhotoUrls = resolveCatchDisplayPhotoUrls(ev.id, data, albumPhotoUrlsByCatchId);
+      setCatchPhotoUris(editPhotoUrls);
+      initialEditRemoteUrlsRef.current = editPhotoUrls.filter(isRemoteStorageUrl);
       setPhotoExifMeta(null);
       setCatchCaughtOnFly(
         data.caught_on_fly === 'dropper'
@@ -1274,7 +1286,7 @@ export function CatchDetailsModal({
         setImportCatchAt(Number.isNaN(ts) ? new Date() : new Date(ts));
       }
     },
-    [allEvents, userFlies, resolvedFlyCatalog, trip.imported],
+    [allEvents, userFlies, resolvedFlyCatalog, trip.imported, albumPhotoUrlsByCatchId],
   );
 
   /** Edit: load before paint so lat/lon fields and map show the catch immediately (avoids empty fields until interaction). */
@@ -1293,6 +1305,14 @@ export function CatchDetailsModal({
   useEffect(() => {
     if (!visible) setEditPinFormSynced(false);
   }, [visible]);
+
+  // The modal stays mounted (only `visible` toggles), so the ScrollView keeps its prior scroll
+  // offset and can reopen scrolled partway down. Always start at the top on open / catch switch.
+  useEffect(() => {
+    if (!visible) return;
+    const id = requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: false }));
+    return () => cancelAnimationFrame(id);
+  }, [visible, mode, editTargetCatch?.id]);
 
   useEffect(() => {
     if (!visible) {
@@ -1970,6 +1990,7 @@ export function CatchDetailsModal({
               </Pressable>
             </View>
             <ScrollView
+              ref={scrollRef}
               style={styles.catchModalScroll}
               contentContainerStyle={styles.catchModalScrollContent}
               keyboardShouldPersistTaps="handled"
@@ -2163,6 +2184,7 @@ export function CatchDetailsModal({
               <ScrollView
                 horizontal
                 nestedScrollEnabled
+                directionalLockEnabled
                 showsHorizontalScrollIndicator={false}
                 style={styles.speciesScroll}
                 contentContainerStyle={styles.speciesScrollContent}
@@ -2222,7 +2244,16 @@ export function CatchDetailsModal({
                 {catchPhotoUris.map((uri, idx) => (
                   <View key={`${uri}-${idx}`} style={styles.catchPhotoPreviewWrap}>
                     <Pressable onPress={() => setZoomPhotoUri(uri)} accessibilityRole="imagebutton" accessibilityLabel="View photo">
-                      <Image source={{ uri }} style={styles.catchPhotoPreview} />
+                      {isRemoteStorageUrl(uri) ? (
+                        <OfflineTripPhotoImage
+                          remoteUri={uri}
+                          maxPixelSize={layoutSizeToPixelSize(120, PixelRatio.get())}
+                          style={styles.catchPhotoPreview}
+                          contentFit="cover"
+                        />
+                      ) : (
+                        <Image source={{ uri }} style={styles.catchPhotoPreview} />
+                      )}
                     </Pressable>
                     <Pressable
                       style={styles.catchPhotoRemove}

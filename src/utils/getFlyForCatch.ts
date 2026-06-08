@@ -18,3 +18,24 @@ export function getFlyForCatch(
     fly_color: (useDropper && d.color2 ? d.color2 : d.color) ?? null,
   };
 }
+
+/** "Humpy #14 (Olive)" from a resolved fly; undefined when there is no pattern. */
+export function formatFlyLabel(fly: {
+  fly_pattern: string | null;
+  fly_size: number | null;
+  fly_color: string | null;
+}): string | undefined {
+  if (!fly.fly_pattern) return undefined;
+  return [
+    fly.fly_pattern,
+    fly.fly_size != null ? `#${fly.fly_size}` : null,
+    fly.fly_color ? `(${fly.fly_color})` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Fly label for a catch, resolved from its active fly change. Undefined when unlinked. */
+export function formatCatchFlyLabel(catchData: CatchData, events: TripEvent[]): string | undefined {
+  return formatFlyLabel(getFlyForCatch(catchData, events));
+}
