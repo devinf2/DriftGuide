@@ -129,6 +129,8 @@ export interface Location {
   name: string;
   type: LocationType;
   parent_location_id: string | null;
+  /** USPS 2-letter state code (e.g. 'UT', 'FL'). Null = unknown / non-US. */
+  state?: string | null;
   latitude: number | null;
   longitude: number | null;
   metadata: Record<string, unknown> | null;
@@ -524,4 +526,23 @@ export interface Photo {
   captured_at: string | null;
   created_at: string;
   deleted_at?: string | null;
+}
+
+/** Coarse land-ownership bucket the Public/Private Land overlay styles + access copy key off of. */
+export type LandOwnershipType =
+  | 'private'
+  | 'federal'
+  | 'state'
+  | 'tribal'
+  | 'local'
+  | 'water'
+  | 'unknown';
+
+/** Result of tapping the map with the land overlay on (RPC: land_ownership_at_point). */
+export interface LandOwnershipInfo {
+  ownership_type: LandOwnershipType;
+  agency: string | null;
+  owner_name: string | null;
+  access_status: 'public' | 'restricted' | 'unknown';
+  admin_unit: string | null;
 }

@@ -414,6 +414,38 @@ export async function fetchTripById(tripId: string): Promise<Trip | null> {
   }
 }
 
+/** Viewer-aware gate for shared trip links (RPC `trip_share_access`, migration 108). */
+export type TripShareAccess = {
+  exists: boolean;
+  visibility: 'public' | 'friends_only' | 'private' | 'unknown';
+  ownerId: string | null;
+  ownerName: string;
+  ownerUsername: string | null;
+  ownerAvatarUrl: string | null;
+  canView: boolean;
+};
+
+export async function fetchTripShareAccess(tripId: string): Promise<TripShareAccess | null> {
+  try {
+    const { data, error } = await supabase.rpc('trip_share_access', { p_trip_id: tripId });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return null;
+    return {
+      exists: Boolean(row.trip_exists),
+      visibility: (row.visibility ?? 'unknown') as TripShareAccess['visibility'],
+      ownerId: row.owner_id ?? null,
+      ownerName: (row.owner_name ?? '').trim() || 'A DriftGuide angler',
+      ownerUsername: row.owner_username ?? null,
+      ownerAvatarUrl: row.owner_avatar_url ?? null,
+      canView: Boolean(row.can_view),
+    };
+  } catch (error) {
+    console.error('Error fetching trip share access:', error);
+    return null;
+  }
+}
+
 export async function fetchTripsFromCloud(userId: string): Promise<Trip[]> {
   try {
     const { data, error } = await supabase

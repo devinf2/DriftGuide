@@ -6,6 +6,14 @@ import {
 } from '@/src/components/map/MapLocateButton';
 import { JournalCatchMapMarker, JournalCatchMapPin } from '@/src/components/map/JournalCatchMapPin';
 import { MapBasemapSwitcher } from '@/src/components/map/MapBasemapSwitcher';
+import {
+  LAND_OWNERSHIP_FILL_COLORS,
+  LAND_OWNERSHIP_LINE_COLORS,
+} from '@/src/constants/landOwnership';
+import {
+  LAND_OWNERSHIP_SOURCE_LAYER,
+  LAND_TILES_URL_TEMPLATE,
+} from '@/src/services/landOwnershipService';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { MAPBOX_ACCESS_TOKEN, mapboxStyleURLForBasemap } from '@/src/constants/mapbox';
 import { MAP_MAX_ZOOM, MAP_MIN_ZOOM } from '@/src/constants/mapDefaults';
@@ -17,6 +25,7 @@ import { boundingBoxFromLngLatPair } from '@/src/types/boundingBox';
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
 import { MaterialIcons } from '@expo/vector-icons';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
     forwardRef,
     useCallback,
@@ -30,7 +39,6 @@ import {
     type ReactNode,
 } from 'react';
 import {
-  Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -74,6 +82,20 @@ function roundZoom(z: number): number {
   return Math.round(z * 10) / 10;
 }
 
+/** Mapbox data-driven `match` expression mapping the `ownership_type` tile prop → a color. */
+function ownershipColorExpression(colorByType: Record<string, string>): unknown[] {
+  const cases: unknown[] = ['match', ['get', 'ownership_type']];
+  for (const [type, color] of Object.entries(colorByType)) {
+    if (type === 'unknown') continue; // used as the fallback
+    cases.push(type, color);
+  }
+  cases.push(colorByType.unknown); // default
+  return cases;
+}
+
+const LAND_FILL_COLOR_EXPRESSION = ownershipColorExpression(LAND_OWNERSHIP_FILL_COLORS);
+const LAND_LINE_COLOR_EXPRESSION = ownershipColorExpression(LAND_OWNERSHIP_LINE_COLORS);
+
 /**
  * Stacked pins at the same map coordinate (e.g. parent waterbody + child access point) can all
  * receive a single tap from native; only the first JS handler should run. Scoped per-coordinate
@@ -110,6 +132,23 @@ function TripMapboxMarkerViewItem({
   styles: any;
   colors: ThemeColors;
 }) {
+  // Recognize only a stationary single-finger tap on the pin. A second finger (pinch)
+  // or any finger movement (drag) fails the tap so the touches fall through to the
+  // native map's pan/zoom — a plain Pressable would claim the responder and starve
+  // the map of that finger, freezing the map wherever a pin sits under your finger.
+  const tap = useMemo(
+    () =>
+      Gesture.Tap()
+        .maxDistance(12)
+        .runOnJS(true)
+        .onTouchesDown((e, state) => {
+          if (e.numberOfTouches > 1) state.fail();
+        })
+        .onEnd(() => {
+          if (m.onPress) runMarkerPressOnce(m.coordinate, () => m.onPress?.());
+        }),
+    [m],
+  );
   return (
     <MarkerView
       coordinate={m.coordinate}
@@ -117,15 +156,16 @@ function TripMapboxMarkerViewItem({
       allowOverlap
       allowOverlapWithPuck
     >
-      <Pressable
-        onPress={m.onPress ? () => runMarkerPressOnce(m.coordinate, () => m.onPress?.()) : undefined}
-        hitSlop={10}
-        accessibilityRole="button"
-        accessibilityLabel={m.title ?? 'Location'}
-        style={styles.markerViewPressable}
-      >
-        {m.children ?? <MaterialIcons name="place" size={16} color={colors.primaryLight} />}
-      </Pressable>
+      <GestureDetector gesture={tap}>
+        <View
+          accessibilityRole="button"
+          accessibilityLabel={m.title ?? 'Location'}
+          hitSlop={10}
+          style={styles.markerViewPressable}
+        >
+          {m.children ?? <MaterialIcons name="place" size={16} color={colors.primaryLight} />}
+        </View>
+      </GestureDetector>
     </MarkerView>
   );
 }
@@ -259,6 +299,10 @@ type TripMapboxMapViewProps = {
   onMapIdle?: (state: MapCameraStatePayload) => void;
   /** Fired when zoom changes (pinch or programmatic) so parents can stay in sync. */
   onZoomLevelChange?: (zoom: number) => void;
+  /** Tap on the map background (not a marker) → `[lng, lat]`. Used for the land-ownership lookup. */
+  onMapPress?: (coordinate: [number, number]) => void;
+  /** When true, renders the Utah land-ownership vector overlay beneath the markers. */
+  landOverlayVisible?: boolean;
   /**
    * Renders above the bottom safe inset; Mapbox (i) sits to its left when present.
    * Use for e.g. add-location FAB on the Map tab.
@@ -294,6 +338,8 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       onCameraChanged,
       onMapIdle,
       onZoomLevelChange,
+      onMapPress,
+      landOverlayVisible = false,
       trailingFab = null,
       reservePlanTripFabSpacing = false,
       mapTabControlLayout = false,
@@ -326,6 +372,9 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         PointAnnotation?: React.ComponentType<Record<string, unknown>>;
         MarkerView?: React.ComponentType<Record<string, unknown>>;
         UserLocation?: React.ComponentType<Record<string, unknown>>;
+        VectorSource?: React.ComponentType<Record<string, unknown>>;
+        FillLayer?: React.ComponentType<Record<string, unknown>>;
+        LineLayer?: React.ComponentType<Record<string, unknown>>;
       };
       return ns;
     }, [rawMod]);
@@ -430,7 +479,10 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       );
     }
 
-    const { MapView, Camera, PointAnnotation, MarkerView, UserLocation } = mod;
+    const { MapView, Camera, PointAnnotation, MarkerView, UserLocation, VectorSource, FillLayer, LineLayer } =
+      mod;
+    const canRenderLandOverlay =
+      landOverlayVisible && !!LAND_TILES_URL_TEMPLATE && !!VectorSource && !!FillLayer && !!LineLayer;
     if (!MapView || !Camera || !PointAnnotation || !UserLocation) {
       return (
         <View style={[styles.placeholder, containerStyle]}>
@@ -483,6 +535,15 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
               : undefined
           }
           onMapIdle={(state: unknown) => handleMapIdle(state as MapCameraStatePayload)}
+          onPress={
+            onMapPress
+              ? (feature: unknown) => {
+                  const coords = (feature as { geometry?: { coordinates?: [number, number] } })
+                    ?.geometry?.coordinates;
+                  if (coords && coords.length === 2) onMapPress(coords);
+                }
+              : undefined
+          }
         >
           <Camera
             ref={mode === 'fullscreen' ? fullscreenCameraRef : cameraRef}
@@ -491,6 +552,34 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
             minZoomLevel={MAP_MIN_ZOOM}
             maxZoomLevel={MAP_MAX_ZOOM}
           />
+          {canRenderLandOverlay && VectorSource && FillLayer && LineLayer ? (
+            <VectorSource
+              id="landOwnership"
+              tileUrlTemplates={[LAND_TILES_URL_TEMPLATE]}
+              minZoomLevel={5}
+              maxZoomLevel={22}
+            >
+              <FillLayer
+                id="landOwnershipFill"
+                sourceID="landOwnership"
+                sourceLayerID={LAND_OWNERSHIP_SOURCE_LAYER}
+                style={{
+                  fillColor: LAND_FILL_COLOR_EXPRESSION,
+                  fillOpacity: 0.35,
+                }}
+              />
+              <LineLayer
+                id="landOwnershipLine"
+                sourceID="landOwnership"
+                sourceLayerID={LAND_OWNERSHIP_SOURCE_LAYER}
+                style={{
+                  lineColor: LAND_LINE_COLOR_EXPRESSION,
+                  lineWidth: 0.6,
+                  lineOpacity: 0.6,
+                }}
+              />
+            </VectorSource>
+          ) : null}
           {markers.map((m) =>
             m.catchPhotoUrl !== undefined && MarkerView ? (
               <TripMapboxCatchMarkerViewItem

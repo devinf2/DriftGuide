@@ -23,6 +23,7 @@ const UUID_RE =
 
 type PreviewRow = {
   rich_preview: boolean;
+  visibility: string;
   title: string;
   description: string;
   image_url: string | null;
@@ -80,6 +81,7 @@ Deno.serve(async (req: Request) => {
   let title = "DriftGuide";
   let description = "Open in the app to see this trip.";
   let imageUrl = defaultOgImage;
+  let visibility = "unknown";
 
   if (UUID_RE.test(tripIdRaw)) {
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -94,6 +96,7 @@ Deno.serve(async (req: Request) => {
       const row = data[0] as PreviewRow;
       title = row.title?.trim() || title;
       description = row.description?.trim() || description;
+      visibility = row.visibility?.trim() || visibility;
       const candidate = row.image_url?.trim();
       if (candidate && /^https:\/\//i.test(candidate)) {
         imageUrl = candidate;
@@ -104,14 +107,21 @@ Deno.serve(async (req: Request) => {
   }
 
   const tripLinkValid = UUID_RE.test(tripIdRaw);
-  const deepLink = tripLinkValid ? `driftguide://trip/${tripIdRaw}` : "";
+  // Land on the trip-viewing screen (enforces visibility), not the live tracking dashboard.
+  const deepLink = tripLinkValid ? `driftguide://trip/${tripIdRaw}/summary` : "";
   const safeTitle = escapeHtml(title);
   const safeDesc = escapeHtml(description);
   const safeOgUrl = escapeAttr(canonicalUrl);
   const safeOgImage = escapeAttr(imageUrl);
 
+  const ctaLabel =
+    visibility === "private"
+      ? "Open in DriftGuide"
+      : visibility === "friends_only"
+      ? "Add friend in DriftGuide"
+      : "View trip in DriftGuide";
   const openAppBlock = tripLinkValid
-    ? `<p><a href="${escapeAttr(deepLink)}" style="display:inline-block;padding:0.65rem 1rem;background:#0b5cab;color:#fff;text-decoration:none;border-radius:0.5rem;font-weight:600;">Open in DriftGuide</a></p>`
+    ? `<p><a href="${escapeAttr(deepLink)}" style="display:inline-block;padding:0.65rem 1rem;background:#0b5cab;color:#fff;text-decoration:none;border-radius:0.5rem;font-weight:600;">${escapeHtml(ctaLabel)}</a></p>`
     : `<p style="color:#64748b;">This link is missing a valid trip id.</p>`;
 
   const storeBlock = [

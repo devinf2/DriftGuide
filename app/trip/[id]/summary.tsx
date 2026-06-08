@@ -16,7 +16,6 @@ import {
   PixelRatio,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { cacheDirectory, downloadAsync } from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
@@ -28,7 +27,7 @@ import {
 } from '@/src/components/journal/TripEndpointPinModal';
 import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
 import { effectiveTripPhotoVisibility } from '@/src/constants/tripPhotoVisibility';
-import { fetchTripById, fetchTripEvents, fetchTripsFromCloud, syncTripToCloud } from '@/src/services/sync';
+import { fetchTripById, fetchTripEvents, fetchTripShareAccess, fetchTripsFromCloud, syncTripToCloud, type TripShareAccess } from '@/src/services/sync';
 import { fetchPhotos } from '@/src/services/photoService';
 import {
   Trip,
@@ -76,8 +75,6 @@ import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
 import { buildShareTripUrl } from '@/src/constants/shareLinks';
-
-const SHARE_TRIP_MAX_PHOTO_URLS = 6;
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
 
@@ -133,6 +130,8 @@ export default function TripSummaryScreen() {
   const surveyStyles = useMemo(() => createTripSurveyStyles(themeColors), [themeColors]);
   const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
+  /** Visibility gate for shared links: set only when a non-owner viewer is denied. */
+  const [accessGate, setAccessGate] = useState<TripShareAccess | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [events, setEvents] = useState<TripEvent[]>([]);
   const [tripPhotos, setTripPhotos] = useState<Photo[]>([]);
@@ -253,6 +252,22 @@ export default function TripSummaryScreen() {
       setLoading(false);
     }
     void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, user?.id, isConnected]);
+
+  // Viewer-aware visibility gate for shared links. Only meaningful online; offline we keep the
+  // existing local-trip behavior (own trips load from the pending bundle / cache).
+  useEffect(() => {
+    if (!id || !user?.id || !isConnected) {
+      setAccessGate(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchTripShareAccess(id).then((res) => {
+      if (!cancelled) setAccessGate(res);
+    });
     return () => {
       cancelled = true;
     };
@@ -621,71 +636,16 @@ export default function TripSummaryScreen() {
 
   const handleShareTripLink = useCallback(async () => {
     if (!trip?.id) return;
-    // Web preview URL is optional: when EXPO_PUBLIC_SHARE_TRIP_BASE_URL is unset we still
-    // share the app deep link so the share sheet always opens with something usable.
-    const webPageUrl = buildShareTripUrl(trip.id);
-    const appLink = `driftguide://trip/${trip.id}`;
-    const place = trip.location?.name?.trim();
-    const httpsPhotos = tripPhotos
-      .map((p) => p.url)
-      .filter((u): u is string => typeof u === 'string' && /^https:\/\//i.test(u))
-      .slice(0, SHARE_TRIP_MAX_PHOTO_URLS);
-
-    const buildMessageTextOnly = (): string => {
-      const lines: string[] = [];
-      if (webPageUrl) lines.push(webPageUrl, '');
-      lines.push(`Open in DriftGuide: ${appLink}`, '', place ? `Trip: ${place}` : 'DriftGuide trip');
-      if (effectivePhotoVisibility === 'public' && httpsPhotos.length > 0) {
-        lines.push('', 'Photos:', ...httpsPhotos);
-      }
-      return lines.join('\n');
-    };
-
-    /**
-     * iOS + `Share.share({ url: localImage, message })`: if the HTML preview URL is the first line,
-     * the sheet often unfurls that link and replaces the photo tile with a web snapshot (looks like
-     * raw OG/HTML). Put the preview link last and omit the attached photo from the text list.
-     */
-    const buildMessageIosWithAttachedPhoto = (): string => {
-      const lines: string[] = [
-        place ? `Trip: ${place}` : 'DriftGuide trip',
-        '',
-        'Open in DriftGuide:',
-        appLink,
-      ];
-      if (effectivePhotoVisibility === 'public' && httpsPhotos.length > 1) {
-        const more = httpsPhotos.slice(1, 4);
-        lines.push('', 'More photos:', ...more);
-      }
-      if (webPageUrl) lines.push('', 'Trip preview (opens in browser):', webPageUrl);
-      return lines.join('\n');
-    };
-
+    // Share a single link so it unfurls into a rich preview (first photo + owner's name) via the
+    // share-trip Open Graph page. Prefer the https preview URL; if EXPO_PUBLIC_SHARE_TRIP_BASE_URL
+    // is unset, fall back to the app deep link so the sheet still opens with something usable.
+    const link = buildShareTripUrl(trip.id) ?? `driftguide://trip/${trip.id}/summary`;
     try {
-      if (
-        Platform.OS === 'ios' &&
-        effectivePhotoVisibility === 'public' &&
-        httpsPhotos.length > 0 &&
-        cacheDirectory
-      ) {
-        const remote = httpsPhotos[0];
-        const ext = remote.toLowerCase().includes('.png') ? 'png' : 'jpg';
-        const dest = `${cacheDirectory}driftguide-trip-share-${trip.id.replace(/-/g, '').slice(0, 12)}.${ext}`;
-        try {
-          const { uri, status } = await downloadAsync(remote, dest);
-          if (status === 200 && uri.startsWith('file')) {
-            await Share.share({ url: uri, message: buildMessageIosWithAttachedPhoto() });
-            return;
-          }
-        } catch {
-          /* fall through */
-        }
-      }
-      await Share.share({ message: buildMessageTextOnly() });
+      await Share.share({ message: link });
     } catch {
       /* dismissed */
     }
-  }, [trip?.id, trip?.location?.name, effectivePhotoVisibility, tripPhotos]);
+  }, [trip?.id]);
 
   const tripDurationLabel = useMemo(() => {
     if (!trip) return '';
@@ -780,6 +740,48 @@ export default function TripSummaryScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={themeColors.primary} />
           <Text style={styles.loadingText}>Loading trip...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Shared-link visibility gate (non-owner viewers who are not allowed to see this trip).
+  if (accessGate && !accessGate.canView) {
+    const ownerName = accessGate.ownerName;
+    const isFriendsOnly = accessGate.exists && accessGate.visibility === 'friends_only';
+    const gateMessage = !accessGate.exists
+      ? 'Trip not found'
+      : isFriendsOnly
+        ? `${ownerName} shares trips with friends. Add ${ownerName} to see this trip.`
+        : 'This trip is private.';
+    return (
+      <SafeAreaView style={styles.container} edges={['bottom']}>
+        <View style={styles.centered}>
+          <MaterialIcons
+            name={isFriendsOnly ? 'group-add' : 'lock'}
+            size={40}
+            color={themeColors.textSecondary}
+            style={{ marginBottom: Spacing.md }}
+          />
+          <Text style={[styles.loadingText, { textAlign: 'center', paddingHorizontal: Spacing.xl }]}>
+            {gateMessage}
+          </Text>
+          {isFriendsOnly && accessGate.ownerId ? (
+            <Pressable
+              style={styles.backButton}
+              onPress={() =>
+                router.push({ pathname: '/friends/friend/[id]', params: { id: accessGate.ownerId! } })
+              }
+            >
+              <Text style={styles.backButtonText}>{`View ${ownerName}'s profile`}</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            style={[styles.backButton, { backgroundColor: 'transparent' }]}
+            onPress={() => exitTripSummary(router, returnTo, friendId)}
+          >
+            <Text style={[styles.backButtonText, { color: themeColors.textSecondary }]}>Go Back</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );

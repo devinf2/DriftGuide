@@ -1,4 +1,5 @@
 import { AddLocationMapSheet } from '@/src/components/add-location/AddLocationMapSheet';
+import { LandOwnershipSheet } from '@/src/components/map/LandOwnershipSheet';
 import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
@@ -8,10 +9,13 @@ import { useAppTheme, type ResolvedScheme } from '@/src/theme/ThemeProvider';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
 import { useLocationStore } from '@/src/stores/locationStore';
-import type { Location } from '@/src/types';
+import { useMapOverlayStore } from '@/src/stores/mapOverlayStore';
+import { getLandOwnershipAtPoint } from '@/src/services/landOwnershipService';
+import type { LandOwnershipInfo, Location } from '@/src/types';
+import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
-import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
+import { boundingBoxFromMapState, type MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ExpoLocation from 'expo-location';
@@ -39,6 +43,10 @@ import { mergeLocationsById } from '@/src/utils/mergeLocations';
 
 /** Reserve right edge for Mapbox’s top-right compass (diameter + margin). */
 const MAP_SEARCH_COMPASS_CLEARANCE = 52;
+/** Max catalog pins painted at once; the in-view set is evenly sampled down to this. */
+const MAX_CATALOG_PINS = 80;
+/** Below this zoom the map is too far out to place pins usefully — hide them entirely. */
+const MIN_CATALOG_PIN_ZOOM = 6;
 
 function catalogPinCoords(loc: Location, catalog: Location[]): { lat: number; lng: number } | null {
   if (
@@ -251,6 +259,7 @@ export default function MapTabScreen() {
 
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_MAP_CENTER);
   const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [mapViewport, setMapViewport] = useState<BoundingBox | null>(null);
   const [cameraNonce, setCameraNonce] = useState(0);
   const mapRef = useRef<TripMapboxMapRef | null>(null);
   const [searchText, setSearchText] = useState('');
@@ -266,6 +275,35 @@ export default function MapTabScreen() {
   const [mapInteractionBlocked, setMapInteractionBlocked] = useState(false);
   /** Bottom sheet height — map stage uses this as marginBottom so the map center matches the crosshair. */
   const [addSheetHeight, setAddSheetHeight] = useState(300);
+
+  // Public / Private Land overlay + tap-to-inspect sheet.
+  const landOwnershipVisible = useMapOverlayStore((s) => s.landOwnershipVisible);
+  const [landSheetOpen, setLandSheetOpen] = useState(false);
+  const [landLoading, setLandLoading] = useState(false);
+  const [landInfo, setLandInfo] = useState<LandOwnershipInfo | null>(null);
+
+  useEffect(() => {
+    if (!landOwnershipVisible) {
+      setLandSheetOpen(false);
+      setLandInfo(null);
+    }
+  }, [landOwnershipVisible]);
+
+  const handleLandMapPress = useCallback(async (coordinate: [number, number]) => {
+    const [lng, lat] = coordinate;
+    setLandInfo(null);
+    setLandLoading(true);
+    setLandSheetOpen(true);
+    const info = await getLandOwnershipAtPoint(lng, lat);
+    setLandInfo(info);
+    setLandLoading(false);
+    if (!info) setLandSheetOpen(false); // tap outside any ownership polygon → nothing to show
+  }, []);
+
+  const closeLandSheet = useCallback(() => {
+    setLandSheetOpen(false);
+    setLandInfo(null);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -397,10 +435,16 @@ export default function MapTabScreen() {
     Keyboard.dismiss();
   }, []);
 
-  const handleMapIdleWhileAdding = useCallback((state: MapCameraStatePayload) => {
-    const [lng, lat] = state.properties.center;
-    setAddPin({ latitude: lat, longitude: lng });
-  }, []);
+  const handleMapIdle = useCallback(
+    (state: MapCameraStatePayload) => {
+      setMapViewport(boundingBoxFromMapState(state));
+      if (addingLocation) {
+        const [lng, lat] = state.properties.center;
+        setAddPin({ latitude: lat, longitude: lng });
+      }
+    },
+    [addingLocation],
+  );
 
   const applyMapFeatureToMap = useCallback((f: MapboxGeocodeFeature) => {
     const [lng, lat] = f.center;
@@ -445,10 +489,31 @@ export default function MapTabScreen() {
     [addingLocation, beginAddLocation, colors.textInverse, endAddLocation, styles],
   );
 
+  // Cap how many catalog pins we draw at once. The full catalog is national (~700+),
+  // and rendering every MarkerView leaves no bare map to grab and bogs down the GL
+  // surface. Keep only what's in view; if that's still too many, evenly sample it so
+  // coverage stays uniform at any zoom. Search and the add-location sheet still use the
+  // full list (mapDisplayLocations) — this only thins what's painted on the map.
+  const visibleCatalogLocations = useMemo(() => {
+    // Too far out to be useful (and just a wall of icons) — show nothing until zoomed in.
+    if (mapZoom < MIN_CATALOG_PIN_ZOOM) return [];
+    const inView = mapViewport
+      ? mapDisplayLocations.filter(
+          (l) =>
+            l.latitude != null &&
+            l.longitude != null &&
+            isPointInBoundingBox(l.latitude, l.longitude, mapViewport),
+        )
+      : mapDisplayLocations;
+    if (inView.length <= MAX_CATALOG_PINS) return inView;
+    const stride = Math.ceil(inView.length / MAX_CATALOG_PINS);
+    return inView.filter((_, i) => i % stride === 0);
+  }, [mapDisplayLocations, mapViewport, mapZoom]);
+
   const catalogMarkers = useMemo(
     () =>
       buildCatalogMapboxMarkers(
-        mapDisplayLocations,
+        visibleCatalogLocations,
         (loc) => {
           if (addingLocation) endAddLocation();
           router.push(`/spot/${loc.id}?fromMap=1`);
@@ -462,7 +527,7 @@ export default function MapTabScreen() {
         favoriteLocationIds,
       ),
     [
-      mapDisplayLocations,
+      visibleCatalogLocations,
       router,
       addingLocation,
       endAddLocation,
@@ -510,8 +575,12 @@ export default function MapTabScreen() {
                 cameraKey={`map-tab-${cameraNonce}`}
                 markers={catalogMarkers}
                 showUserLocation={locationAllowed}
-                onMapIdle={addingLocation ? handleMapIdleWhileAdding : undefined}
+                onMapIdle={handleMapIdle}
                 onZoomLevelChange={setMapZoom}
+                landOverlayVisible={landOwnershipVisible}
+                onMapPress={
+                  landOwnershipVisible && !addingLocation ? handleLandMapPress : undefined
+                }
                 trailingFab={addLocationFab}
                 reservePlanTripFabSpacing
                 mapTabControlLayout
@@ -617,6 +686,14 @@ export default function MapTabScreen() {
             ) : null}
           </View>
         </View>
+      ) : null}
+
+      {landOwnershipVisible ? (
+        <LandOwnershipSheet
+          info={landSheetOpen ? landInfo : null}
+          loading={landSheetOpen && landLoading}
+          onClose={closeLandSheet}
+        />
       ) : null}
     </View>
   );

@@ -13,6 +13,7 @@ import { MAPBOX_BASEMAP_OPTIONS } from '@/src/constants/mapbox';
 import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useMapBasemapStore } from '@/src/stores/mapBasemapStore';
+import { useMapOverlayStore } from '@/src/stores/mapOverlayStore';
 
 const FAB_SIZE = 44;
 const FAB_SIZE_COMPACT = 40;
@@ -46,6 +47,8 @@ export function MapBasemapSwitcher({
   const insets = useSafeAreaInsets();
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const setBasemapId = useMapBasemapStore((s) => s.setBasemapId);
+  const landOwnershipVisible = useMapOverlayStore((s) => s.landOwnershipVisible);
+  const toggleLandOwnership = useMapOverlayStore((s) => s.toggleLandOwnership);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const fabSize = compact ? FAB_SIZE_COMPACT : FAB_SIZE;
@@ -112,6 +115,29 @@ export function MapBasemapSwitcher({
                 </Pressable>
               );
             })}
+            <View style={styles.menuDivider} />
+            <Text style={styles.menuTitle}>Overlays</Text>
+            <Pressable
+              onPress={toggleLandOwnership}
+              style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
+              accessibilityRole="checkbox"
+              accessibilityLabel="Public / Private Land"
+              accessibilityState={{ checked: landOwnershipVisible }}
+            >
+              <Text
+                style={[
+                  styles.menuRowLabel,
+                  landOwnershipVisible && styles.menuRowLabelSelected,
+                ]}
+              >
+                Public / Private Land
+              </Text>
+              {landOwnershipVisible ? (
+                <MaterialIcons name="check" size={20} color={colors.primary} />
+              ) : (
+                <View style={styles.checkPlaceholder} />
+              )}
+            </Pressable>
           </View>
         ) : null}
         {menuOpen ? <View style={{ height: MENU_GAP }} /> : null}
@@ -191,6 +217,12 @@ function createBasemapSwitcherStyles(colors: ThemeColors) {
     checkPlaceholder: {
       width: 20,
       height: 20,
+    },
+    menuDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+      marginVertical: Spacing.xs,
+      marginHorizontal: Spacing.md,
     },
     fab: {
       justifyContent: 'center',

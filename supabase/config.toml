@@ -15,3 +15,7 @@ verify_jwt = false
 
 [functions.login-with-identifier]
 verify_jwt = false
+
+# Public vector tiles for the Public/Private Land overlay — read-only, no auth required.
+[functions.land-tiles]
+verify_jwt = false
