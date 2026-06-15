@@ -26,6 +26,12 @@ interface AuthState {
   isProfileLoading: boolean;
   /** After opening a password-reset deep link; cleared when the user sets a new password or signs out. */
   passwordRecoveryPending: boolean;
+  /**
+   * Contextual prompt shown on the auth screen when a guest taps an account-bound action
+   * (e.g. "Sign in to save your trip"). Null for the cold-start / generic sign-in case.
+   */
+  authPromptMessage: string | null;
+  setAuthPromptMessage: (message: string | null) => void;
   setPasswordRecoveryPending: (pending: boolean) => void;
   setSession: (session: Session | null) => void;
   /** If `getSession()` throws during cold start, clear splash without guessing session. */
@@ -63,6 +69,9 @@ export const useAuthStore = create<AuthState>()(
       isLoading: true,
       isProfileLoading: false,
       passwordRecoveryPending: false,
+      authPromptMessage: null,
+
+      setAuthPromptMessage: (message) => set({ authPromptMessage: message }),
 
       setPasswordRecoveryPending: (pending) => set({ passwordRecoveryPending: pending }),
 
@@ -72,7 +81,8 @@ export const useAuthStore = create<AuthState>()(
           user: session?.user ?? null,
           isLoading: false,
           isProfileLoading: Boolean(session),
-          ...(session ? {} : { profile: null }),
+          // A real session arrived (any sign-in path) → drop any pending "sign in to…" prompt.
+          ...(session ? { authPromptMessage: null } : { profile: null }),
         });
       },
 

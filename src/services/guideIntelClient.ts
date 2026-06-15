@@ -37,6 +37,9 @@ export async function invokeGuideIntel(body: GuideIntelRequestBody): Promise<unk
 
   const { data: sessionData } = await supabase.auth.getSession();
   const accessToken = sessionData?.session?.access_token;
+  // Guests (no session) cannot reach the per-user guide-intel edge function — it resolves a real
+  // user id and rate-limits per account. Return null so askAI degrades gracefully to the on-device
+  // offline guide reply (and the friendly "sign in for the full guide" message) instead of throwing.
   if (!accessToken) return null;
 
   try {

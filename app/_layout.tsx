@@ -12,6 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/googleOAuth';
+import { isGuestAllowedRoute } from '@/src/auth/guestRoutes';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
@@ -205,7 +206,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const onResetPasswordRoute = segments[0] === 'auth' && segments[1] === 'reset-password';
 
     if (!session) {
-      if (!inAuth) router.replace('/auth');
+      // Guest browsing (WS-B): allow read-only surfaces (home, map, guide, spot, hatch chart) to
+      // render with no account. Only redirect account-bound routes (trip, journal, friends, profile,
+      // settings, sync-dependent screens) to the auth screen. Writes are gated separately via
+      // requireAuth at their entry points, so this redirect is the cold-start / deep-link backstop.
+      if (!isGuestAllowedRoute(segments)) router.replace('/auth');
       return;
     }
 
