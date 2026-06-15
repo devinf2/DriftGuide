@@ -5,6 +5,12 @@ import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';
 import { matchStoredProfileHomeState, type UsStateOption } from '@/src/constants/usStates';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { uploadProfileAvatar } from '@/src/services/photoService';
+import {
+  NOTIFICATIONS_OPT_IN_KEY,
+  registerPushToken,
+  unregisterPushToken,
+} from '@/src/services/pushNotifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -413,10 +419,54 @@ export default function ProfileSettingsScreen() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUri, setAvatarPreviewUri] = useState<string | null>(null);
   const [savingPhotoVisibility, setSavingPhotoVisibility] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [savingNotifications, setSavingNotifications] = useState(false);
 
   useEffect(() => {
     setHomeStateSelected(matchStoredProfileHomeState(profile?.home_state));
   }, [profile?.home_state]);
+
+  // Reflect the stored notifications opt-in preference on mount.
+  useEffect(() => {
+    void AsyncStorage.getItem(NOTIFICATIONS_OPT_IN_KEY).then((v) =>
+      setNotificationsEnabled(v === 'true'),
+    );
+  }, []);
+
+  // Toggle push notifications. Turning ON requests OS permission WITH rationale
+  // (post-activation, never at first launch) and registers the Expo push token;
+  // turning OFF removes this device's token. Reverts the switch if permission is
+  // denied so the UI never lies about the real state.
+  const handleToggleNotifications = useCallback(
+    (next: boolean) => {
+      void (async () => {
+        setSavingNotifications(true);
+        try {
+          if (next) {
+            const granted = await registerPushToken();
+            if (!granted) {
+              setNotificationsEnabled(false);
+              await AsyncStorage.setItem(NOTIFICATIONS_OPT_IN_KEY, 'false');
+              Alert.alert(
+                'Notifications are off',
+                'Enable notifications for DriftGuide in your device Settings to get conditions alerts, friend activity, streak reminders, and trip nudges.',
+              );
+              return;
+            }
+            setNotificationsEnabled(true);
+            await AsyncStorage.setItem(NOTIFICATIONS_OPT_IN_KEY, 'true');
+          } else {
+            await unregisterPushToken();
+            setNotificationsEnabled(false);
+            await AsyncStorage.setItem(NOTIFICATIONS_OPT_IN_KEY, 'false');
+          }
+        } finally {
+          setSavingNotifications(false);
+        }
+      })();
+    },
+    [],
+  );
 
   useEffect(() => {
     setFirstNameDraft(profile?.first_name?.trim() ?? '');
@@ -944,6 +994,25 @@ export default function ProfileSettingsScreen() {
           disabled={savingPhotoVisibility}
           saving={savingPhotoVisibility}
         />
+      </View>
+
+      <View style={[styles.card, styles.sectionSpacing]}>
+        <Text style={styles.sectionTitle}>Notifications</Text>
+        <View style={styles.appearanceRow}>
+          <View style={styles.appearanceLabelWrap}>
+            <Text style={styles.bodyText}>Push notifications</Text>
+          </View>
+          <Switch
+            value={notificationsEnabled}
+            onValueChange={handleToggleNotifications}
+            disabled={savingNotifications}
+            trackColor={{ false: colors.border, true: colors.primaryLight }}
+            thumbColor={colors.surfaceElevated}
+          />
+        </View>
+        <Text style={styles.bodyText}>
+          Conditions alerts, friend activity, streak reminders, and trip nudges.
+        </Text>
       </View>
 
       <View style={[styles.card, styles.sectionSpacing]}>

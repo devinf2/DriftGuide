@@ -24,3 +24,11 @@ verify_jwt = false
 # happens inside the function, table stays RLS-locked).
 [functions.analytics-ingest]
 verify_jwt = false
+
+# WS-G scheduled push workers. Invoked by cron (pg_cron + pg_net); they authorize
+# via a shared CRON_SECRET header or the service-role bearer, so verify_jwt is off.
+[functions.conditions-alerts]
+verify_jwt = false
+
+[functions.activity-push]
+verify_jwt = false
