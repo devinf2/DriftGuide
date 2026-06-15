@@ -1995,3 +1995,118 @@ export async function getFlyOfTheDay(
     return fallback;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Bug Matcher AI photo ID (WS-F)
+// ---------------------------------------------------------------------------
+
+import { readAsStringAsync } from 'expo-file-system/legacy';
+import type { GuideIntelIdentifyBugResult } from '@/src/services/guideIntelContract';
+
+export type BugIdResult = GuideIntelIdentifyBugResult & {
+  /** 'edge' = guide-intel function, 'client' = direct OpenAI fallback. */
+  source: 'edge' | 'client';
+};
+
+/** Build a base64 data URL from a local picker URI so the model can read the image. */
+async function imageUriToDataUrl(uri: string): Promise<string> {
+  if (uri.startsWith('data:') || uri.startsWith('http')) return uri;
+  const base64 = await readAsStringAsync(uri, { encoding: 'base64' });
+  const ext = uri.split('?')[0].split('.').pop()?.toLowerCase();
+  const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  return `data:${mime};base64,${base64}`;
+}
+
+function parseBugIdResult(raw: unknown): GuideIntelIdentifyBugResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const insect = typeof r.insect === 'string' ? r.insect.trim() : '';
+  if (!insect) return null;
+  let confidence = Number(r.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0;
+  confidence = Math.max(0, Math.min(1, confidence));
+  return {
+    insect,
+    category: typeof r.category === 'string' ? r.category.trim() : 'unknown',
+    lifeStage: typeof r.lifeStage === 'string' ? r.lifeStage.trim() : 'unknown',
+    confidence,
+    flies: Array.isArray(r.flies)
+      ? r.flies.map((x) => String(x ?? '').trim()).filter((s) => s.length > 0).slice(0, 6)
+      : [],
+    note: typeof r.note === 'string' ? r.note.trim() : '',
+  };
+}
+
+const BUG_ID_VISION_SYSTEM = [
+  'You are an expert aquatic entomologist and fly fishing guide.',
+  'Identify the fishing-relevant insect in the photo (mayfly, caddis, stonefly, midge, or terrestrial).',
+  'Respond with ONLY valid JSON, no markdown:',
+  '{"insect":"common name","category":"midge|mayfly|caddis|stone|terrestrial|stillwater|unknown","lifeStage":"nymph|larva|pupa|emerger|dun|adult|spinner|unknown","confidence":0.0-1.0,"flies":["3-6 known pattern names"],"note":"one short ID + presentation tip"}',
+  'If it is not an identifiable insect, set category/lifeStage to "unknown", confidence low, flies [], and say so in note.',
+].join('\n');
+
+/**
+ * Identify a bug from a photo (camera/library URI). Online-only.
+ * Tries the guide-intel `identify_bug` edge action first (honors the server rate limit),
+ * then a direct OpenAI vision fallback when a client key exists. Throws on offline/no-path
+ * so the screen can fall back to the offline feature key with a clear message.
+ */
+export async function identifyBugFromImage(
+  uri: string,
+  opts?: { regionLabel?: string; latitude?: number | null; longitude?: number | null },
+): Promise<BugIdResult> {
+  if (!(await isOnlineForGuideIntel())) {
+    throw new Error('offline');
+  }
+
+  const dataUrl = await imageUriToDataUrl(uri);
+  const regionLabel =
+    opts?.regionLabel ||
+    (await resolveRegionLabelAsync(opts?.latitude ?? null, opts?.longitude ?? null));
+
+  // 1) Edge action (rate-limited server-side; uses the Supabase session).
+  const edge = await invokeGuideIntel({ action: 'identify_bug', regionLabel, imageUrl: dataUrl });
+  const fromEdge = parseBugIdResult(edge);
+  if (fromEdge) return { ...fromEdge, source: 'edge' };
+
+  // 2) Client OpenAI vision fallback (only when a key exists and we're online).
+  if (!(await canUseClientOpenAiFallback())) {
+    throw new Error('unavailable');
+  }
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      messages: [
+        { role: 'system', content: BUG_ID_VISION_SYSTEM },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Identify this insect for fly selection in ${regionLabel}. Return strict JSON only.` },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      max_tokens: 320,
+      temperature: 0.3,
+    }),
+  });
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content?.trim();
+  if (typeof content === 'string' && content) {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = parseBugIdResult(JSON.parse(jsonMatch[0]));
+        if (parsed) return { ...parsed, source: 'client' };
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  throw new Error('parse_failed');
+}

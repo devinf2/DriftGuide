@@ -57,6 +57,48 @@ async function openaiChat(
   return String(data?.choices?.[0]?.message?.content ?? "").trim();
 }
 
+/**
+ * Vision call: send a system prompt plus a user message with text + image content parts.
+ * gpt-4o-mini supports image inputs via the chat completions `image_url` content part.
+ */
+async function openaiVision(
+  system: string,
+  userText: string,
+  imageUrl: string,
+  maxTokens: number,
+  temperature: number,
+): Promise<string> {
+  if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not configured");
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      messages: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: userText },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      max_tokens: maxTokens,
+      temperature,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("OpenAI vision error", data);
+    throw new Error(data?.error?.message || "OpenAI vision request failed");
+  }
+  return String(data?.choices?.[0]?.message?.content ?? "").trim();
+}
+
 type GuideChatSource = { url: string; title: string; fetchedAt: string; excerpt: string };
 
 const DRIFTGUIDE_LOCATION_FENCE = /```\s*driftguide-location\s*([\s\S]*?)```/i;
@@ -609,6 +651,51 @@ Deno.serve(async (req: Request) => {
         console.warn("extract_locations parse", e);
       }
       return jsonResponse({ mentions });
+    }
+
+    if (action === "identify_bug") {
+      const imageUrl = String(body.imageUrl ?? "").trim();
+      if (!imageUrl) {
+        return jsonResponse({ error: "Missing imageUrl", code: "bad_request" }, 400);
+      }
+      const sys = [
+        "You are an expert aquatic entomologist and fly fishing guide.",
+        "Identify the fishing-relevant insect in the photo (mayfly, caddis, stonefly, midge, or terrestrial like ant/beetle/hopper).",
+        "Respond with ONLY valid JSON, no markdown, no prose:",
+        '{"insect":"common name","category":"midge|mayfly|caddis|stone|terrestrial|stillwater|unknown","lifeStage":"nymph|larva|pupa|emerger|dun|adult|spinner|unknown","confidence":0.0-1.0,"flies":["3-6 fly pattern names that imitate this bug/stage"],"note":"one short streamside ID + presentation tip"}',
+        "Use widely known pattern names (e.g. Pheasant Tail Nymph, Elk Hair Caddis, Zebra Midge, Chubby Chernobyl, Parachute Adams, RS2).",
+        "If the image is not an identifiable insect, set category and lifeStage to \"unknown\", confidence low, flies [], and say so in note.",
+      ].join("\n");
+      const userText = `Identify this insect for fly selection in ${regionLabel}. Return the strict JSON only.`;
+      const raw = await openaiVision(sys, userText, imageUrl, 320, 0.3);
+      let result: Record<string, unknown> = {
+        insect: "Unknown",
+        category: "unknown",
+        lifeStage: "unknown",
+        confidence: 0,
+        flies: [],
+        note: "Could not parse an identification from the model.",
+      };
+      try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+          let confidence = Number(parsed.confidence);
+          if (!Number.isFinite(confidence)) confidence = 0;
+          confidence = Math.max(0, Math.min(1, confidence));
+          result = {
+            insect: typeof parsed.insect === "string" && parsed.insect.trim() ? parsed.insect.trim() : "Unknown",
+            category: typeof parsed.category === "string" ? parsed.category.trim() : "unknown",
+            lifeStage: typeof parsed.lifeStage === "string" ? parsed.lifeStage.trim() : "unknown",
+            confidence,
+            flies: asStringArr(parsed.flies, 6),
+            note: typeof parsed.note === "string" ? parsed.note.trim() : "",
+          };
+        }
+      } catch (e) {
+        console.warn("identify_bug parse", e);
+      }
+      return jsonResponse(result);
     }
 
     return jsonResponse({ error: "Unknown action", code: "bad_request" }, 400);
