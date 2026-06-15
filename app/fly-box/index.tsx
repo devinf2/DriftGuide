@@ -372,6 +372,22 @@ export default function FlyBoxScreen() {
             : 'Keep inventory of your flies for quick switching on trips. The AI will use your fly box in recommendations.'}
         </Text>
 
+        {!readOnly ? (
+          // WS-F entry point. Lives here (fly-box) since home/index.tsx is owned by another
+          // workstream. TODO(home): home could also surface a "Match a bug" affordance →
+          // router.push('/bug-matcher').
+          <Pressable
+            style={styles.bugMatcherButton}
+            onPress={() => router.push('/bug-matcher')}
+            accessibilityRole="button"
+            accessibilityLabel="Match a bug"
+          >
+            <Ionicons name="bug-outline" size={18} color={colors.primary} />
+            <Text style={styles.bugMatcherButtonText}>Match a bug</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+          </Pressable>
+        ) : null}
+
         {!loading && flies.length > 0 ? (
           <View style={styles.searchWrap}>
             <Ionicons name="search" size={18} color={colors.textTertiary} />
@@ -511,6 +527,24 @@ function createFlyBoxStyles(colors: ThemeColors) {
     color: colors.textSecondary,
     marginBottom: Spacing.lg,
     lineHeight: 20,
+  },
+  bugMatcherButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  bugMatcherButtonText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: colors.primary,
   },
   searchWrap: {
     flexDirection: 'row',
