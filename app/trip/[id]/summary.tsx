@@ -66,6 +66,7 @@ import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCar
 import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
+import { ShareToFeedModal } from '@/src/components/feed/ShareToFeedModal';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
 import {
   photosToViewerSlides,
@@ -167,6 +168,7 @@ export default function TripSummaryScreen() {
   const [tripAiSummaryModalVisible, setTripAiSummaryModalVisible] = useState(false);
   const [peopleSheetVisible, setPeopleSheetVisible] = useState(false);
   const [summaryHeaderMenuVisible, setSummaryHeaderMenuVisible] = useState(false);
+  const [shareToFeedOpen, setShareToFeedOpen] = useState(false);
   // Action to run once the header menu Modal has fully dismissed. On iOS, presenting
   // the native Share sheet (or another Modal) while this Modal is still animating out
   // silently fails, so we defer the action to the Modal's onDismiss callback.
@@ -1070,6 +1072,14 @@ export default function TripSummaryScreen() {
             >
               <Text style={styles.summaryHeaderMenuLabel}>Share trip link</Text>
             </Pressable>
+            {isOwnTrip ? (
+              <Pressable
+                style={styles.summaryHeaderMenuRow}
+                onPress={() => closeMenuThenRun(() => setShareToFeedOpen(true))}
+              >
+                <Text style={styles.summaryHeaderMenuLabel}>Share to feed</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               style={styles.summaryHeaderMenuRow}
               onPress={() => {
@@ -1100,6 +1110,18 @@ export default function TripSummaryScreen() {
           </View>
         </View>
       </Modal>
+
+      {isOwnTrip && trip ? (
+        <ShareToFeedModal
+          visible={shareToFeedOpen}
+          draft={{
+            tripId: trip.id,
+            media: tripPhotos.map((p) => p.url),
+          }}
+          onClose={() => setShareToFeedOpen(false)}
+          onPosted={() => setShareToFeedOpen(false)}
+        />
+      ) : null}
 
       {isOwnTrip ? (
         <TripPhotoVisibilityDropdown
