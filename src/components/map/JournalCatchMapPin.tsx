@@ -15,6 +15,8 @@ type Props = {
   photoUrl?: string | null;
   /** PointAnnotation snapshots children; call after the image paints so the pin bitmap updates. */
   onImageLoaded?: () => void;
+  /** Per-angler tint for the pin ring (and the fish icon disk when there's no photo). */
+  ringColor?: string | null;
 };
 
 function createPinStyles(colors: ThemeColors) {
@@ -52,11 +54,14 @@ function createPinStyles(colors: ThemeColors) {
 }
 
 /** Compact catch marker: circular photo or fish icon. */
-export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
+export function JournalCatchMapPin({ photoUrl, onImageLoaded, ringColor }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createPinStyles(colors), [colors]);
   const uri = photoUrl?.trim();
   const hasPhoto = Boolean(uri);
+  const tint = ringColor?.trim() || null;
+  const ringStyle = tint ? { borderColor: tint, borderWidth: 3 } : null;
+  const iconStyle = tint ? { backgroundColor: tint } : null;
   const bumpSnapshot = () => {
     onImageLoaded?.();
     if (!onImageLoaded) return;
@@ -66,7 +71,7 @@ export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
     });
   };
   return (
-    <View style={styles.ring} collapsable={false}>
+    <View style={[styles.ring, ringStyle]} collapsable={false}>
       {hasPhoto ? (
         <OfflineTripPhotoImage
           remoteUri={uri!}
@@ -79,7 +84,7 @@ export function JournalCatchMapPin({ photoUrl, onImageLoaded }: Props) {
           onError={bumpSnapshot}
         />
       ) : (
-        <View style={styles.iconInner}>
+        <View style={[styles.iconInner, iconStyle]}>
           <MaterialCommunityIcons name="fish" size={17} color={colors.textInverse} />
         </View>
       )}
@@ -92,10 +97,12 @@ type MarkerProps = {
   title?: string;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
+  /** Per-angler tint for the pin ring (Group / per-person map views). */
+  ringColor?: string | null;
 };
 
 /** Catch pin wrapped for Mapbox MarkerView (live view — photos load reliably). */
-export function JournalCatchMapMarker({ photoUrl, title, onPress, style }: MarkerProps) {
+export function JournalCatchMapMarker({ photoUrl, title, onPress, style, ringColor }: MarkerProps) {
   return (
     <Pressable
       style={style}
@@ -104,7 +111,7 @@ export function JournalCatchMapMarker({ photoUrl, title, onPress, style }: Marke
       accessibilityRole="button"
       accessibilityLabel={title ?? 'Catch'}
     >
-      <JournalCatchMapPin photoUrl={photoUrl} />
+      <JournalCatchMapPin photoUrl={photoUrl} ringColor={ringColor} />
     </Pressable>
   );
 }

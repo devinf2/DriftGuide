@@ -7,6 +7,16 @@ export interface FlyStat {
   fishCaught: number;
 }
 
+export interface BiggestFishCatch {
+  id: string;
+  species: string | null;
+  sizeInches: number | null;
+  weightLb: number | null;
+  weightOz: number | null;
+  photoUrl: string | null;
+  timestamp: string | null;
+}
+
 export interface ProfileStats {
   tripCount: number;
   totalFish: number;
@@ -15,6 +25,7 @@ export interface ProfileStats {
   fishPerMonth: { month: string; count: number }[];
   favoriteFly: FlyStat | null;
   bestFly: FlyStat | null;
+  biggestFish: BiggestFishCatch[];
 }
 
 export async function fetchProfileStats(
@@ -42,6 +53,7 @@ export async function fetchProfileStats(
       fishPerMonth: months,
       favoriteFly: null,
       bestFly: null,
+      biggestFish: [],
     };
   }
 
@@ -49,7 +61,7 @@ export async function fetchProfileStats(
 
   const { data: events } = await supabase
     .from('trip_events')
-    .select('id, trip_id, event_type, data')
+    .select('id, trip_id, event_type, data, timestamp')
     .in('trip_id', tripIds);
 
   const allEvents = (events || []) as TripEvent[];
@@ -108,6 +120,30 @@ export async function fetchProfileStats(
     }
   });
 
+  // Biggest fish: rank by length (size_inches), then by total weight as a
+  // tiebreaker. One row per catch; only catches with a recorded size qualify.
+  const biggestFish: BiggestFishCatch[] = catchEvents
+    .map(e => {
+      const d = e.data as CatchData;
+      return {
+        id: e.id,
+        species: d.species ?? null,
+        sizeInches: d.size_inches ?? null,
+        weightLb: d.weight_lb ?? null,
+        weightOz: d.weight_oz ?? null,
+        photoUrl: d.photo_url ?? d.photo_urls?.[0] ?? null,
+        timestamp: e.timestamp ?? null,
+      };
+    })
+    .filter(c => c.sizeInches != null)
+    .sort((a, b) => {
+      if (b.sizeInches! !== a.sizeInches!) return b.sizeInches! - a.sizeInches!;
+      const aw = (a.weightLb ?? 0) * 16 + (a.weightOz ?? 0);
+      const bw = (b.weightLb ?? 0) * 16 + (b.weightOz ?? 0);
+      return bw - aw;
+    })
+    .slice(0, 3);
+
   trips.forEach((t: any) => {
     const d = new Date(t.start_time);
     const idx =
@@ -127,6 +163,7 @@ export async function fetchProfileStats(
     fishPerMonth: months,
     favoriteFly,
     bestFly,
+    biggestFish,
   };
 }
 

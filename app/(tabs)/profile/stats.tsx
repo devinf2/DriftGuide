@@ -1,7 +1,11 @@
+import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
+import { SinglePhotoZoomModal } from '@/src/components/SinglePhotoZoomModal';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { fetchProfileStats, ProfileStats } from '@/src/services/profileStats';
+import { fetchProfileStats, ProfileStats, BiggestFishCatch } from '@/src/services/profileStats';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useAuthStore } from '@/src/stores/authStore';
 import { endOfMonth, startOfMonth, subMonths } from 'date-fns';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -47,6 +51,64 @@ function StatCard({ label, value, styles }: { label: string; value: number; styl
   );
 }
 
+function formatFishWeight(lb: number | null, oz: number | null): string | null {
+  const totalOz = (lb ?? 0) * 16 + (oz ?? 0);
+  if (totalOz <= 0) return null;
+  const whole = Math.floor(totalOz / 16);
+  const rem = Math.round(totalOz - whole * 16);
+  if (whole > 0 && rem > 0) return `${whole} lb ${rem} oz`;
+  if (whole > 0) return `${whole} lb`;
+  return `${rem} oz`;
+}
+
+function BiggestFishRow({
+  rank,
+  fish,
+  onPressPhoto,
+  styles,
+  colors,
+}: {
+  rank: number;
+  fish: BiggestFishCatch;
+  onPressPhoto: (uri: string) => void;
+  styles: any;
+  colors: ThemeColors;
+}) {
+  const weight = formatFishWeight(fish.weightLb, fish.weightOz);
+  const meta = [fish.sizeInches != null ? `${fish.sizeInches}"` : null, weight]
+    .filter(Boolean)
+    .join(' · ');
+  const photo = fish.photoUrl?.trim();
+
+  return (
+    <View style={styles.fishRow}>
+      <Text style={styles.fishRank}>{rank}</Text>
+      <View style={styles.fishInfo}>
+        <Text style={styles.fishSpecies} numberOfLines={1}>
+          {fish.species || 'Unknown species'}
+        </Text>
+        {meta ? <Text style={styles.fishMeta}>{meta}</Text> : null}
+      </View>
+      {photo ? (
+        <Pressable onPress={() => onPressPhoto(photo)} style={styles.fishThumbWrap}>
+          {photo.startsWith('http') ? (
+            <OfflineTripPhotoImage remoteUri={photo} maxPixelSize={150} style={styles.fishThumb} contentFit="cover" />
+          ) : (
+            <Image source={{ uri: photo }} style={styles.fishThumb} contentFit="cover" cachePolicy="memory-disk" />
+          )}
+          <View style={styles.fishThumbBadge}>
+            <MaterialCommunityIcons name="magnify-plus-outline" size={12} color={colors.textInverse} />
+          </View>
+        </Pressable>
+      ) : (
+        <View style={[styles.fishThumb, styles.fishThumbEmpty]}>
+          <MaterialCommunityIcons name="fish" size={20} color={colors.textTertiary} />
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function ProfileStatsScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStatsStyles(colors), [colors]);
@@ -69,6 +131,7 @@ export default function ProfileStatsScreen() {
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
+  const [zoomPhotoUri, setZoomPhotoUri] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     if (!statsUserId) return;
@@ -243,8 +306,37 @@ export default function ProfileStatsScreen() {
               )}
             </View>
           </View>
+
+          <View style={styles.section}>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitleStandalone}>Biggest fish</Text>
+              {stats.biggestFish.length > 0 ? (
+                <View style={styles.fishList}>
+                  {stats.biggestFish.map((fish, i) => (
+                    <BiggestFishRow
+                      key={fish.id}
+                      rank={i + 1}
+                      fish={fish}
+                      onPressPhoto={setZoomPhotoUri}
+                      styles={styles}
+                      colors={colors}
+                    />
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.emptyText}>No fish with a recorded size yet</Text>
+              )}
+            </View>
+          </View>
         </>
       ) : null}
+
+      <SinglePhotoZoomModal
+        visible={zoomPhotoUri != null}
+        uri={zoomPhotoUri}
+        onClose={() => setZoomPhotoUri(null)}
+        closeButtonTop={insets.top + Spacing.lg}
+      />
     </ScrollView>
   );
 }
@@ -365,5 +457,40 @@ function createStatsStyles(colors: ThemeColors) {
     },
     flyName: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
     flyMeta: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    fishList: { gap: Spacing.sm },
+    fishRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      padding: Spacing.md,
+    },
+    fishRank: {
+      fontSize: FontSize.lg,
+      fontWeight: '700',
+      color: colors.textTertiary,
+      width: 20,
+      textAlign: 'center',
+    },
+    fishInfo: { flex: 1 },
+    fishSpecies: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
+    fishMeta: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    fishThumbWrap: { position: 'relative' },
+    fishThumb: {
+      width: 56,
+      height: 56,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.borderLight,
+    },
+    fishThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+    fishThumbBadge: {
+      position: 'absolute',
+      right: 3,
+      bottom: 3,
+      backgroundColor: 'rgba(0,0,0,0.55)',
+      borderRadius: 8,
+      padding: 2,
+    },
   });
 }

@@ -18,7 +18,7 @@ import {
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
+import { Spacing, FontSize, BorderRadius, anglerMapColor, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
   getTripEndpointInitialCoords,
@@ -33,10 +33,11 @@ import {
 } from '@/src/constants/tripPhotoVisibility';
 import { fetchTripById, fetchTripEvents, fetchTripShareAccess, fetchTripsFromCloud, syncTripToCloud, type TripShareAccess } from '@/src/services/sync';
 import { fetchPhotos, fetchPhotosVisibleForTripIds } from '@/src/services/photoService';
-import { listTripsInSession } from '@/src/services/sharedSessionService';
+import { fetchMergedSessionEventsForTrips, listTripsInSession } from '@/src/services/sharedSessionService';
 import {
   Trip,
   TripEvent,
+  TripEventWithSource,
   TripPhotoVisibility,
   CatchData,
   AIQueryData,
@@ -48,7 +49,7 @@ import {
 } from '@/src/types';
 import { buildAlbumPhotoUrlsByCatchId, buildCatchViewerSlideFields, resolveCatchDisplayPhotoUrls } from '@/src/utils/catchPhotos';
 import { formatTripDate, formatTripDuration, formatEventTime, formatFlowRate, formatTemperature } from '@/src/utils/formatters';
-import { formatCatchWeightLabel, getTripEventDescription } from '@/src/utils/journalTimeline';
+import { formatCatchWeightLabel, getTripEventDescription, totalFishFromEvents } from '@/src/utils/journalTimeline';
 import { inferActiveFishingMsFromPauseResumeEvents } from '@/src/utils/tripTiming';
 import {
   getSessionTripPhotos,
@@ -62,7 +63,12 @@ import { getPendingTrips } from '@/src/services/pendingSyncStorage';
 import { getFlowStatus, FLOW_STATUS_LABELS, FLOW_STATUS_COLORS, CLARITY_LABELS } from '@/src/services/waterFlow';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
-import { JournalTripRouteMapView, buildJournalWaypoints } from '@/src/components/map/JournalTripRouteMapView';
+import {
+  JournalTripRouteMapView,
+  buildCatchWaypoints,
+  buildStartEndWaypoints,
+  type JournalWaypoint,
+} from '@/src/components/map/JournalTripRouteMapView';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { SharedTripPhotosSection } from '@/src/components/trip/SharedTripPhotosSection';
 import { SharedTripTimelineSection } from '@/src/components/trip/SharedTripTimelineSection';
@@ -541,9 +547,12 @@ export default function TripSummaryScreen() {
   }, [trip?.location?.name, albumPhotoUrlsByCatchId, events]);
 
   const handleMapCatchWaypointPress = useCallback(
-    (catchEventId: string) => {
-      const ev = events.find((e) => e.id === catchEventId && e.event_type === 'catch');
-      if (!ev) return;
+    // `opts` lets the map tab resolve catches from any angler in the session (Group / per-person
+    // views), where the catch isn't in the viewer's own `events`. Falls back to own events.
+    (catchEventId: string, opts?: { event?: TripEvent; eventsContext?: TripEvent[] }) => {
+      const ev = opts?.event ?? events.find((e) => e.id === catchEventId && e.event_type === 'catch');
+      if (!ev || ev.event_type !== 'catch') return;
+      const ctx = opts?.eventsContext ?? events;
       const data = ev.data as CatchData;
       const hero =
         resolveCatchDisplayPhotoUrls(ev.id, data, albumPhotoUrlsByCatchId)[0] ?? null;
@@ -551,7 +560,7 @@ export default function TripSummaryScreen() {
         setTripPhotoViewerIndex(null);
         setFullScreenPhoto({
           url: hero,
-          ...buildCatchViewerSlideFields(ev, data, trip?.location?.name ?? undefined, events),
+          ...buildCatchViewerSlideFields(ev, data, trip?.location?.name ?? undefined, ctx),
         });
       } else {
         setMapCatchDetailEvent(ev);
@@ -691,12 +700,15 @@ export default function TripSummaryScreen() {
 
   const handleShareTripLink = useCallback(async () => {
     if (!trip?.id) return;
-    // Share a single link so it unfurls into a rich preview (first photo + owner's name) via the
-    // share-trip Open Graph page. Prefer the https preview URL; if EXPO_PUBLIC_SHARE_TRIP_BASE_URL
-    // is unset, fall back to the app deep link so the sheet still opens with something usable.
-    const link = buildShareTripUrl(trip.id) ?? `driftguide://trip/${trip.id}/summary`;
+    // Share the https preview URL so it unfurls into a rich card (first photo + owner's name)
+    // via the share-trip Open Graph page. Messaging apps can only unfurl https links, not the
+    // `driftguide://` scheme, so the scheme is a last resort when no share base is configured.
+    const httpsUrl = buildShareTripUrl(trip.id);
+    const link = httpsUrl ?? `driftguide://trip/${trip.id}/summary`;
     try {
-      await Share.share({ message: link });
+      // iOS uses `url` for the rich preview; Android only reads `message`. Send both so the
+      // single https link unfurls on iOS and still appears as text on Android.
+      await Share.share(httpsUrl ? { message: link, url: link } : { message: link });
     } catch {
       /* dismissed */
     }
@@ -1452,6 +1464,9 @@ export default function TripSummaryScreen() {
           trip={trip}
           events={events}
           tripPhotos={tripPhotos}
+          viewerUserId={user?.id ?? ''}
+          isConnected={isConnected}
+          albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
           isOwnTrip={isOwnTrip}
           editMode={isOwnTrip && journalEditMode}
           tripPinPlacement={tripPinPlacement}
@@ -1640,12 +1655,15 @@ function SummaryPhotosTab({
 /* ─── Map Tab (read-only: route + pins; line snaps to nearby trails when possible) ─── */
 
 const TRIP_ROUTE_LEGEND_INFO =
-  'The teal line follows Mapbox walking paths near your track (trails and river corridors when available). If no path matches, a straight line connects your points.';
+  'Pins mark where each fish was caught. Catches logged without GPS are placed at the trip location and fanned out so each stays tappable. In a shared session, switch between Group, You, and each angler — every person has their own color.';
 
 function SummaryMapTab({
   trip,
   events,
   tripPhotos,
+  viewerUserId,
+  isConnected,
+  albumPhotoUrlsByCatchId,
   isOwnTrip,
   editMode,
   tripPinPlacement,
@@ -1661,6 +1679,10 @@ function SummaryMapTab({
   trip: Trip;
   events: TripEvent[];
   tripPhotos: Photo[];
+  viewerUserId: string;
+  isConnected: boolean;
+  /** Catch-photo album rows for the whole session (so peers' catch pins resolve photos). */
+  albumPhotoUrlsByCatchId: ReadonlyMap<string, readonly string[]>;
   isOwnTrip: boolean;
   editMode: boolean;
   tripPinPlacement: TripPinPlacementState | null;
@@ -1669,24 +1691,160 @@ function SummaryMapTab({
   onCancelPlacement: () => void;
   onSavePlacement: () => void;
   placementSaving: boolean;
-  onCatchWaypointPress: (catchEventId: string) => void;
+  onCatchWaypointPress: (
+    catchEventId: string,
+    opts?: { event?: TripEvent; eventsContext?: TripEvent[] },
+  ) => void;
   summaryStyles: ReturnType<typeof createTripSummaryStyles>;
   palette: ThemeColors;
 }) {
   const insets = useSafeAreaInsets();
-  const albumPhotoUrlsByCatchId = useMemo(
-    () => buildAlbumPhotoUrlsByCatchId(tripPhotos),
-    [tripPhotos],
+  const sessionId = trip.shared_session_id ?? null;
+
+  /** Map filter: 'group' = everyone, otherwise a child trip id in the session (including the viewer's). */
+  const [mapMode, setMapMode] = useState<'group' | string>(() => trip.id);
+  const [childTrips, setChildTrips] = useState<Trip[]>([]);
+  const [mergedEvents, setMergedEvents] = useState<TripEventWithSource[]>([]);
+
+  const loadGroup = useCallback(async () => {
+    if (!sessionId || !isConnected) {
+      setChildTrips([]);
+      setMergedEvents([]);
+      return;
+    }
+    try {
+      const trips = await listTripsInSession(sessionId);
+      setChildTrips(trips);
+      setMergedEvents(await fetchMergedSessionEventsForTrips(trips));
+    } catch {
+      /* keep last good data */
+    }
+  }, [sessionId, isConnected]);
+
+  useEffect(() => {
+    if (!sessionId || !isConnected) return;
+    void loadGroup();
+  }, [sessionId, isConnected, loadGroup]);
+
+  useEffect(() => {
+    if (!sessionId || !isConnected) return;
+    const t = setInterval(() => void loadGroup(), 15000);
+    return () => clearInterval(t);
+  }, [sessionId, isConnected, loadGroup]);
+
+  /** One option per angler trip in the session, each with a stable color. "You" keeps the brand color. */
+  const sessionTripOptions = useMemo(() => {
+    if (!sessionId) return [] as { trip: Trip; tripId: string; label: string; color: string; isYou: boolean }[];
+    const rows = childTrips.slice();
+    if (!rows.some((r) => r.id === trip.id)) rows.push(trip);
+    rows.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+    const nameByUser = new Map<string, string>();
+    for (const e of mergedEvents) {
+      if (!nameByUser.has(e.source_user_id)) nameByUser.set(e.source_user_id, e.source_display_name);
+    }
+    let anglerIdx = 0;
+    return rows.map((t) => {
+      const isYou = t.id === trip.id;
+      return {
+        trip: t,
+        tripId: t.id,
+        label: isYou ? 'You' : nameByUser.get(t.user_id)?.trim() || 'Angler',
+        color: isYou ? palette.primary : anglerMapColor(anglerIdx++),
+        isYou,
+      };
+    });
+  }, [sessionId, childTrips, trip, mergedEvents, palette.primary]);
+
+  /** Keep the selected mode valid as session metadata loads. */
+  useEffect(() => {
+    if (!sessionId) {
+      if (mapMode !== trip.id) setMapMode(trip.id);
+      return;
+    }
+    if (mapMode === 'group') return;
+    const ids = sessionTripOptions.map((o) => o.tripId);
+    if (ids.length > 0 && !ids.includes(mapMode)) {
+      setMapMode(ids.includes(trip.id) ? trip.id : 'group');
+    }
+  }, [sessionId, mapMode, sessionTripOptions, trip.id]);
+
+  const eventsForTripId = useCallback(
+    (tripId: string): TripEvent[] => {
+      // The viewer's own trip uses local events (fresh, includes not-yet-synced); peers use the merge.
+      if (tripId === trip.id) return events;
+      return mergedEvents.filter((e) => e.source_trip_id === tripId);
+    },
+    [trip.id, events, mergedEvents],
   );
-  const waypoints = useMemo(
-    () => buildJournalWaypoints(trip, events, albumPhotoUrlsByCatchId),
-    [trip, events, albumPhotoUrlsByCatchId],
+
+  const tripObjById = useCallback(
+    (tripId: string): Trip => (tripId === trip.id ? trip : childTrips.find((t) => t.id === tripId) ?? trip),
+    [trip, childTrips],
   );
-  const hasMapData = waypoints.length > 0;
+
+  /** Resolve a tapped pin to its event + that angler's events, so peers' catches open too. */
+  const eventLookup = useMemo(() => {
+    const m = new Map<string, { event: TripEvent; tripId: string }>();
+    for (const e of events) m.set(e.id, { event: e, tripId: trip.id });
+    for (const e of mergedEvents) if (!m.has(e.id)) m.set(e.id, { event: e, tripId: e.source_trip_id });
+    return m;
+  }, [events, mergedEvents, trip.id]);
+
+  const handlePinPress = useCallback(
+    (catchEventId: string) => {
+      const hit = eventLookup.get(catchEventId);
+      if (!hit) {
+        onCatchWaypointPress(catchEventId);
+        return;
+      }
+      onCatchWaypointPress(catchEventId, { event: hit.event, eventsContext: eventsForTripId(hit.tripId) });
+    },
+    [eventLookup, eventsForTripId, onCatchWaypointPress],
+  );
+
+  const catchWaypoints = useMemo<JournalWaypoint[]>(() => {
+    if (!sessionId) {
+      return buildCatchWaypoints(trip, events, albumPhotoUrlsByCatchId);
+    }
+    const buildFor = (o: { tripId: string; color: string }) =>
+      buildCatchWaypoints(
+        tripObjById(o.tripId),
+        eventsForTripId(o.tripId),
+        albumPhotoUrlsByCatchId,
+        o.color,
+        `catch-${o.tripId}`,
+      );
+    if (mapMode === 'group') return sessionTripOptions.flatMap(buildFor);
+    const sel = sessionTripOptions.find((o) => o.tripId === mapMode);
+    return sel
+      ? buildFor(sel)
+      : buildCatchWaypoints(trip, events, albumPhotoUrlsByCatchId, palette.primary, `catch-${trip.id}`);
+  }, [sessionId, mapMode, sessionTripOptions, trip, events, albumPhotoUrlsByCatchId, eventsForTripId, tripObjById, palette.primary]);
+
+  const startEnd = useMemo(() => buildStartEndWaypoints(trip, events), [trip, events]);
+  const hasMapData = catchWaypoints.length > 0 || startEnd.start != null || startEnd.end != null;
 
   const coordSummary = useMemo(() => tripStartEndDisplayCoords(trip, events), [trip, events]);
 
   const showMap = hasMapData || editMode || tripPinPlacement != null;
+
+  const chipStyle = (active: boolean) => ({
+    borderColor: active ? palette.primary : palette.border,
+    backgroundColor: active ? palette.surfaceElevated : palette.surface,
+  });
+  const chipText = (active: boolean) => ({
+    fontSize: FontSize.xs,
+    fontWeight: '600' as const,
+    color: active ? palette.primary : palette.textSecondary,
+  });
+
+  const groupFishCount = useMemo(
+    () => sessionTripOptions.reduce((sum, o) => sum + totalFishFromEvents(eventsForTripId(o.tripId)), 0),
+    [sessionTripOptions, eventsForTripId],
+  );
+
+  const showChips = sessionId != null && sessionTripOptions.length > 1;
+  const showAnglerLegend = showChips && mapMode === 'group';
 
   if (!showMap) {
     return (
@@ -1706,14 +1864,57 @@ function SummaryMapTab({
 
   return (
     <View style={summaryStyles.summaryMapTabRoot}>
+      {showChips ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={summaryStyles.summaryMapChipScroll}
+          contentContainerStyle={summaryStyles.summaryMapChipRow}
+        >
+          <Pressable
+            style={({ pressed }) => [summaryStyles.summaryMapChip, chipStyle(mapMode === 'group'), pressed && { opacity: 0.85 }]}
+            onPress={() => setMapMode('group')}
+          >
+            <View style={summaryStyles.summaryMapChipInner}>
+              <Text style={chipText(mapMode === 'group')}>Group</Text>
+              <Text style={[chipText(mapMode === 'group'), { fontSize: 10 }]} accessibilityLabel={`${groupFishCount} fish`}>
+                {groupFishCount}
+              </Text>
+            </View>
+          </Pressable>
+          {sessionTripOptions.map((o) => {
+            const active = mapMode === o.tripId;
+            const n = totalFishFromEvents(eventsForTripId(o.tripId));
+            return (
+              <Pressable
+                key={o.tripId}
+                style={({ pressed }) => [summaryStyles.summaryMapChip, chipStyle(active), pressed && { opacity: 0.85 }]}
+                onPress={() => setMapMode(o.tripId)}
+              >
+                <View style={summaryStyles.summaryMapChipInner}>
+                  <View style={[summaryStyles.summaryMapColorDot, { backgroundColor: o.color }]} />
+                  <Text style={[chipText(active), summaryStyles.summaryMapChipLabelFlex]} numberOfLines={1}>
+                    {o.label}
+                  </Text>
+                  <Text style={[chipText(active), { fontSize: 10 }]} accessibilityLabel={`${n} fish`}>
+                    {n}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
       <View style={summaryStyles.summaryMapMapWrap}>
         <JournalTripRouteMapView
           trip={trip}
           events={events}
           tripAlbumPhotos={tripPhotos}
+          catchWaypoints={catchWaypoints}
+          showRouteLine={false}
           containerStyle={summaryStyles.summaryMapNative}
           liveLocation={isOwnTrip}
-          onCatchWaypointPress={onCatchWaypointPress}
+          onCatchWaypointPress={handlePinPress}
           placementKind={placing ? tripPinPlacement.kind : null}
           placementLatitude={placing ? tripPinPlacement.lat : undefined}
           placementLongitude={placing ? tripPinPlacement.lng : undefined}
@@ -1763,17 +1964,29 @@ function SummaryMapTab({
       >
         <View style={summaryStyles.summaryMapLegendTitleRow}>
           <Text style={summaryStyles.summaryMapLegendTitle} numberOfLines={1}>
-            Trip Route
+            {showChips ? 'Catch Map' : 'Trip Route'}
           </Text>
           <Pressable
-            onPress={() => Alert.alert('Trip Route', TRIP_ROUTE_LEGEND_INFO)}
+            onPress={() => Alert.alert(showChips ? 'Catch Map' : 'Trip Route', TRIP_ROUTE_LEGEND_INFO)}
             hitSlop={12}
             accessibilityRole="button"
-            accessibilityLabel="How the trip route line is drawn"
+            accessibilityLabel="How the catch map works"
           >
             <MaterialIcons name="info-outline" size={22} color={palette.textTertiary} />
           </Pressable>
         </View>
+        {showAnglerLegend ? (
+          <View style={summaryStyles.summaryMapAnglerLegend}>
+            {sessionTripOptions.map((o) => (
+              <View key={o.tripId} style={summaryStyles.summaryMapAnglerLegendItem}>
+                <View style={[summaryStyles.summaryMapColorDot, { backgroundColor: o.color }]} />
+                <Text style={summaryStyles.summaryMapAnglerLegendLabel} numberOfLines={1}>
+                  {o.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         {editMode ? (
           <View style={summaryStyles.summaryMapEditPins}>
             <Text style={summaryStyles.summaryMapEditPinsHint}>Adjust start and end pins for this trip.</Text>
@@ -2160,6 +2373,59 @@ function createTripSummaryStyles(c: ThemeColors) {
     fontSize: FontSize.sm,
     fontWeight: '700',
     color: c.text,
+  },
+  summaryMapChipScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+    backgroundColor: c.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border,
+  },
+  summaryMapChipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexGrow: 0,
+    gap: 6,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  summaryMapChip: {
+    flexShrink: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: BorderRadius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 200,
+  },
+  summaryMapChipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  summaryMapChipLabelFlex: {
+    flexShrink: 1,
+    maxWidth: 140,
+  },
+  summaryMapColorDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  summaryMapAnglerLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.md,
+    alignSelf: 'stretch',
+  },
+  summaryMapAnglerLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  summaryMapAnglerLegendLabel: {
+    fontSize: FontSize.sm,
+    color: c.textSecondary,
   },
 
   // Summary Photos tab

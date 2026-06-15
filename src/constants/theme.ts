@@ -83,6 +83,27 @@ export type ThemeColors = {
 /** @deprecated Use useAppTheme().colors */
 export const Colors: ThemeColors = ColorsLight as ThemeColors;
 
+/**
+ * Distinct, high-contrast pin colors for per-angler map views (Group mode). Chosen to read clearly
+ * over satellite imagery and against each other. Cycles when a session has more anglers than entries.
+ * The viewer ("You") is colored with the brand primary instead of pulling from this list.
+ */
+export const AnglerMapColors = [
+  '#F97316', // orange
+  '#22C55E', // green
+  '#A855F7', // purple
+  '#EC4899', // pink
+  '#06B6D4', // cyan
+  '#F59E0B', // amber
+  '#EF4444', // red
+  '#84CC16', // lime
+] as const;
+
+/** Pick a stable angler pin color by the angler's order within the session. */
+export function anglerMapColor(index: number): string {
+  return AnglerMapColors[((index % AnglerMapColors.length) + AnglerMapColors.length) % AnglerMapColors.length];
+}
+
 /** Colors for location types on maps and lists. */
 export const LocationTypeColors: Record<LocationType, string> = {
   stream: '#60A5FA',

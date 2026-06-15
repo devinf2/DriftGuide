@@ -44,7 +44,24 @@ export type JournalWaypoint = {
   /** `kind === 'catch'` only */
   photoUrl?: string | null;
   catchEventId?: string;
+  /** Per-angler tint for catch pins in Group / per-person views. */
+  ringColor?: string | null;
+  /** True when this catch had no saved GPS and was fanned out around the trip's location. */
+  approximate?: boolean;
 };
+
+/**
+ * Deterministic spiral offset (in degrees) for catches that lack their own GPS and are pinned at the
+ * trip location. Index 0 sits dead center; later catches fan out so stacked pins stay tappable.
+ * ~6m base radius — close enough to read as "at the trip spot," far enough apart to tap.
+ */
+function fanOutLngLatOffset(index: number): { dLat: number; dLng: number } {
+  if (index <= 0) return { dLat: 0, dLng: 0 };
+  const goldenAngle = 2.399963; // ~137.5° — even, non-overlapping spiral
+  const angle = index * goldenAngle;
+  const radius = 0.00006 * Math.sqrt(index);
+  return { dLat: radius * Math.sin(angle), dLng: radius * Math.cos(angle) };
+}
 
 function loadMapbox(): Record<string, unknown> | null {
   if (!isRnMapboxNativeLinked()) return null;
@@ -55,63 +72,81 @@ function loadMapbox(): Record<string, unknown> | null {
   }
 }
 
+/** Start / end pins for a trip (resolved from trip fields + events). */
+export function buildStartEndWaypoints(
+  trip: Trip,
+  events: TripEvent[],
+): { start: JournalWaypoint | null; end: JournalWaypoint | null } {
+  const { startLat, startLon, endLat, endLon } = tripStartEndDisplayCoords(trip, events);
+  const start: JournalWaypoint | null =
+    startLat != null && startLon != null
+      ? { id: 'journal-start', lng: startLon, lat: startLat, title: 'Start', pinColor: Colors.primary, kind: 'start' }
+      : null;
+  const end: JournalWaypoint | null =
+    endLat != null && endLon != null
+      ? { id: 'journal-end', lng: endLon, lat: endLat, title: 'End', pinColor: Colors.secondary, kind: 'end' }
+      : null;
+  return { start, end };
+}
+
+/**
+ * Catch pins for a trip, in chronological order. Every catch gets a pin: catches that never recorded
+ * their own GPS (e.g. quick "skip" logs, or a failed/slow fix) fall back to the trip's location, fanned
+ * out so stacked pins stay tappable. `ringColor` tints the pin for Group / per-person views.
+ */
+export function buildCatchWaypoints(
+  trip: Trip,
+  events: TripEvent[],
+  albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
+  ringColor?: string | null,
+  idPrefix = 'journal-catch',
+): JournalWaypoint[] {
+  const { startLat, startLon } = tripStartEndDisplayCoords(trip, events);
+  const catches = events
+    .filter((e) => e.event_type === 'catch')
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  const waypoints: JournalWaypoint[] = [];
+  let fallbackIndex = 0;
+  for (const e of catches) {
+    let lat = e.latitude;
+    let lng = e.longitude;
+    let approximate = false;
+    if (lat == null || lng == null) {
+      // No per-catch GPS — anchor to the trip location so the fish still shows.
+      if (startLat == null || startLon == null) continue;
+      const off = fanOutLngLatOffset(fallbackIndex++);
+      lat = startLat + off.dLat;
+      lng = startLon + off.dLng;
+      approximate = true;
+    }
+    const data = e.data as CatchData;
+    const species = data.species?.trim();
+    waypoints.push({
+      id: `${idPrefix}-${e.id}`,
+      lng,
+      lat,
+      title: species ? `Catch · ${species}` : 'Catch',
+      pinColor: Colors.primaryLight,
+      kind: 'catch',
+      photoUrl: resolveCatchHeroPhotoUrl(e.id, data, albumPhotoUrlsByCatchId),
+      catchEventId: e.id,
+      ringColor: ringColor ?? null,
+      approximate,
+    });
+  }
+  return waypoints;
+}
+
 /** Chronological route: start → catches (by time) → end. */
 export function buildJournalWaypoints(
   trip: Trip,
   events: TripEvent[],
   albumPhotoUrlsByCatchId?: ReadonlyMap<string, readonly string[]>,
 ): JournalWaypoint[] {
-  const waypoints: JournalWaypoint[] = [];
-
-  const { startLat: startLatResolved, startLon: startLonResolved, endLat: endLatResolved, endLon: endLonResolved } =
-    tripStartEndDisplayCoords(trip, events);
-
-  const startLat = startLatResolved;
-  const startLon = startLonResolved;
-  if (startLat != null && startLon != null) {
-    waypoints.push({
-      id: 'journal-start',
-      lng: startLon,
-      lat: startLat,
-      title: 'Start',
-      pinColor: Colors.primary,
-      kind: 'start',
-    });
-  }
-
-  const catches = events
-    .filter((e) => e.event_type === 'catch' && e.latitude != null && e.longitude != null)
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-  for (const e of catches) {
-    const data = e.data as CatchData;
-    const species = data.species?.trim();
-    waypoints.push({
-      id: `journal-catch-${e.id}`,
-      lng: e.longitude!,
-      lat: e.latitude!,
-      title: species ? `Catch · ${species}` : 'Catch',
-      pinColor: Colors.primaryLight,
-      kind: 'catch',
-      photoUrl: resolveCatchHeroPhotoUrl(e.id, data, albumPhotoUrlsByCatchId),
-      catchEventId: e.id,
-    });
-  }
-
-  const endLat = endLatResolved;
-  const endLon = endLonResolved;
-  if (endLat != null && endLon != null) {
-    waypoints.push({
-      id: 'journal-end',
-      lng: endLon,
-      lat: endLat,
-      title: 'End',
-      pinColor: Colors.secondary,
-      kind: 'end',
-    });
-  }
-
-  return waypoints;
+  const { start, end } = buildStartEndWaypoints(trip, events);
+  const catches = buildCatchWaypoints(trip, events, albumPhotoUrlsByCatchId);
+  return [start, ...catches, end].filter((w): w is JournalWaypoint => w != null);
 }
 
 /** Apply draft start/end coords while placing a pin; preserves catch order from {@link buildJournalWaypoints}. */
@@ -183,6 +218,14 @@ type Props = {
    * location permission when viewing someone else's shared trip.
    */
   liveLocation?: boolean;
+  /**
+   * Replace the catch pins derived from `events` with a pre-built, possibly multi-angler set
+   * (Group / per-person map). Start & end pins still come from `trip`. When omitted, catches are
+   * built from `events` as usual.
+   */
+  catchWaypoints?: JournalWaypoint[];
+  /** Draw the connecting route line between waypoints (default true). */
+  showRouteLine?: boolean;
 };
 
 /**
@@ -216,6 +259,7 @@ function JournalCatchPointAnnotation({
       <View collapsable={false} pointerEvents="box-none">
         <JournalCatchMapPin
           photoUrl={w.photoUrl}
+          ringColor={w.ringColor}
           onImageLoaded={() => annotRef.current?.refresh?.()}
         />
       </View>
@@ -236,6 +280,8 @@ export function JournalTripRouteMapView({
   expandable = true,
   tripAlbumPhotos = [],
   liveLocation = false,
+  catchWaypoints,
+  showRouteLine = true,
 }: Props) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const albumPhotoUrlsByCatchId = useMemo(
@@ -285,8 +331,13 @@ export function JournalTripRouteMapView({
       placementKind != null && placementLatitude != null && placementLongitude != null
         ? { kind: placementKind, lat: placementLatitude, lng: placementLongitude }
         : null;
-    return mergeJournalWaypointsWithPlacement(trip, events, placement, albumPhotoUrlsByCatchId);
-  }, [trip, events, placementKind, placementLatitude, placementLongitude, albumPhotoUrlsByCatchId]);
+    const base = mergeJournalWaypointsWithPlacement(trip, events, placement, albumPhotoUrlsByCatchId);
+    if (!catchWaypoints) return base;
+    // Keep the trip's (placement-aware) start/end pins, but swap in the supplied catch set.
+    const start = base.find((w) => w.kind === 'start') ?? null;
+    const end = base.find((w) => w.kind === 'end') ?? null;
+    return [start, ...catchWaypoints, end].filter((w): w is JournalWaypoint => w != null);
+  }, [trip, events, placementKind, placementLatitude, placementLongitude, albumPhotoUrlsByCatchId, catchWaypoints]);
   const pathLngLat = useMemo(() => {
     const raw = waypoints.map((w) => [w.lng, w.lat] as [number, number]);
     return dedupeConsecutiveLngLat(raw);
@@ -322,7 +373,8 @@ export function JournalTripRouteMapView({
 
   useEffect(() => {
     let cancelled = false;
-    if (pathLngLat.length < 2) {
+    if (!showRouteLine || pathLngLat.length < 2) {
+      // No line to draw — skip the Mapbox walking-match network call entirely.
       setRouteFeature(null);
       return;
     }
@@ -358,22 +410,29 @@ export function JournalTripRouteMapView({
     return () => {
       cancelled = true;
     };
-  }, [pathLngLat, isPlacing]);
+  }, [pathLngLat, isPlacing, showRouteLine]);
 
   const fitCameraToTripStart = useCallback(() => {
     const cam = cameraRef.current;
     if (!cam?.fitBounds) return;
-    const start = waypoints.find((w) => w.id === 'journal-start') ?? waypoints[0];
-    if (!start) return;
-    const [ne, sw] = bboxPaddingFromLngLats([[start.lng, start.lat]], 0.003);
-    cam.fitBounds(ne, sw, 48, 600);
+    // Fit every pin (start, all catches, end) so no fish sits off-screen. Single point → tight zoom.
+    const pts = waypoints.map((w) => [w.lng, w.lat] as [number, number]);
+    if (pts.length === 0) return;
+    const [ne, sw] = bboxPaddingFromLngLats(pts, pts.length === 1 ? 0.003 : 0.0015);
+    cam.fitBounds(ne, sw, 56, 600);
   }, [waypoints]);
 
+  // Only auto-fit when the actual set of points changes (mode switch, new catch) — not on every
+  // group-poll refresh, which would yank the camera back while the user is panning.
+  const lastFitSigRef = useRef<string | null>(null);
   useEffect(() => {
     if (isPlacing) return;
+    const sig = waypoints.map((w) => `${w.lng.toFixed(5)},${w.lat.toFixed(5)}`).join('|');
+    if (sig === lastFitSigRef.current) return;
+    lastFitSigRef.current = sig;
     const t = setTimeout(() => fitCameraToTripStart(), 300);
     return () => clearTimeout(t);
-  }, [fitCameraToTripStart, isPlacing]);
+  }, [waypoints, fitCameraToTripStart, isPlacing]);
 
   const placementCbRef = useRef(onPlacementCoordinateChange);
   placementCbRef.current = onPlacementCoordinateChange;
@@ -464,7 +523,7 @@ export function JournalTripRouteMapView({
           minZoomLevel={MAP_MIN_ZOOM}
           maxZoomLevel={MAP_MAX_ZOOM}
         />
-        {routeFeature ? (
+        {routeFeature && showRouteLine ? (
           <ShapeSource id="journalTripRoute" shape={routeFeature}>
             <LineLayer
               id="journalRouteGlow"
@@ -503,6 +562,7 @@ export function JournalTripRouteMapView({
                 <JournalCatchMapMarker
                   photoUrl={w.photoUrl}
                   title={w.title}
+                  ringColor={w.ringColor}
                   onPress={
                     onCatchWaypointPress && w.catchEventId
                       ? () => onCatchWaypointPress(w.catchEventId!)
