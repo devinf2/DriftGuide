@@ -40,8 +40,12 @@ export interface Profile {
   created_at: string;
   /** Public Supabase Storage URL for profile image (photos bucket). */
   avatar_url?: string | null;
-  /** US home state (full name or 2-letter code) for offline catalog snapshot. */
+  /** US home state (full name or 2-letter code) for offline catalog snapshot. Kept for US backward-compat. */
   home_state?: string | null;
+  /** Home country (full name or ISO 3166-1 alpha-2 code). Required at onboarding. */
+  home_country?: string | null;
+  /** Home region/state within the country (free text; US states also mirrored to home_state). */
+  home_region?: string | null;
   /** Set when the user finishes first-run profile onboarding in the app. */
   onboarding_completed_at?: string | null;
   /** Set when the user closed their account (soft delete); app signs out and blocks use. */

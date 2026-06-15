@@ -1,11 +1,20 @@
+import { CountryPickerModal } from '@/src/components/CountryPickerModal';
+import { OnboardingWalkthrough } from '@/src/components/OnboardingWalkthrough';
 import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
 import { UsStatePickerModal } from '@/src/components/UsStatePickerModal';
+import {
+  isUsCountry,
+  matchStoredHomeCountry,
+  US_COUNTRY_CODE,
+  type CountryOption,
+} from '@/src/constants/countries';
 import { matchStoredProfileHomeState } from '@/src/constants/usStates';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { TripPhotoVisibility } from '@/src/types';
+import { hasSeenWalkthrough, markWalkthroughSeen } from '@/src/utils/walkthroughSeen';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -95,32 +104,84 @@ export default function OnboardingScreen() {
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [country, setCountry] = useState<CountryOption | null>(null);
   const [homeState, setHomeState] = useState<{ code: string; name: string } | null>(null);
+  const [region, setRegion] = useState('');
   const [darkPref, setDarkPref] = useState(darkModeEnabled);
+  const [countryModalOpen, setCountryModalOpen] = useState(false);
   const [stateModalOpen, setStateModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [defaultTripPhotoVisibility, setDefaultTripPhotoVisibility] =
     useState<TripPhotoVisibility>('private');
 
+  // Show the swipeable intro once for brand-new users before the empty cold-start.
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
+  const [walkthroughChecked, setWalkthroughChecked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const seen = await hasSeenWalkthrough();
+      if (!active) return;
+      setShowWalkthrough(!seen);
+      setWalkthroughChecked(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const isUs = isUsCountry(country?.code);
+
   useEffect(() => {
     setFirstName(profile?.first_name?.trim() ?? '');
     setLastName(profile?.last_name?.trim() ?? '');
+    // Prefer the stored country; fall back to inferring US from a legacy home_state.
+    const storedCountry =
+      matchStoredHomeCountry(profile?.home_country) ??
+      (profile?.home_state?.trim()
+        ? matchStoredHomeCountry(US_COUNTRY_CODE)
+        : null);
+    setCountry(storedCountry);
     setHomeState(matchStoredProfileHomeState(profile?.home_state));
-  }, [profile?.first_name, profile?.last_name, profile?.home_state]);
+    setRegion(profile?.home_region?.trim() ?? '');
+  }, [
+    profile?.first_name,
+    profile?.last_name,
+    profile?.home_country,
+    profile?.home_region,
+    profile?.home_state,
+  ]);
 
   useEffect(() => {
     setDarkPref(darkModeEnabled);
   }, [darkModeEnabled]);
 
+  const handleCountrySelect = (c: CountryOption) => {
+    setCountry(c);
+    // Switching away from the US clears the state selection so it can't leak into a non-US region.
+    if (!isUsCountry(c.code)) {
+      setHomeState(null);
+    }
+  };
+
+  const handleWalkthroughDone = () => {
+    void markWalkthroughSeen();
+    setShowWalkthrough(false);
+  };
+
   const handleContinue = async () => {
     setError(null);
     setSubmitting(true);
     try {
+      // For US the region is the chosen state; otherwise it's the free-text region.
+      const homeRegion = isUs ? homeState?.name ?? '' : region;
       const result = await completeProfileOnboarding({
         firstName,
         lastName,
-        homeState: homeState?.name ?? '',
+        homeCountry: country?.name ?? '',
+        homeRegion,
         darkModeEnabled: darkPref,
         defaultTripPhotoVisibility: defaultTripPhotoVisibility,
       });
@@ -134,6 +195,19 @@ export default function OnboardingScreen() {
       setSubmitting(false);
     }
   };
+
+  // Avoid flashing the form before we know whether to show the walkthrough.
+  if (!walkthroughChecked) {
+    return (
+      <SafeAreaView style={[styles.container, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color={colors.primary} />
+      </SafeAreaView>
+    );
+  }
+
+  if (showWalkthrough) {
+    return <OnboardingWalkthrough onDone={handleWalkthroughDone} />;
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -186,16 +260,44 @@ export default function OnboardingScreen() {
             />
           </View>
 
-          <Text style={styles.label}>Home state</Text>
-          <Pressable style={styles.pickerButton} onPress={() => setStateModalOpen(true)}>
-            {homeState ? (
+          <Text style={styles.label}>Home country</Text>
+          <Pressable style={styles.pickerButton} onPress={() => setCountryModalOpen(true)}>
+            {country ? (
               <Text style={styles.pickerButtonText}>
-                {homeState.name} ({homeState.code})
+                {country.name} ({country.code})
               </Text>
             ) : (
-              <Text style={styles.pickerPlaceholder}>Tap to choose your state</Text>
+              <Text style={styles.pickerPlaceholder}>Tap to choose your country</Text>
             )}
           </Pressable>
+
+          {isUs ? (
+            <>
+              <Text style={styles.label}>Home state (optional)</Text>
+              <Pressable style={styles.pickerButton} onPress={() => setStateModalOpen(true)}>
+                {homeState ? (
+                  <Text style={styles.pickerButtonText}>
+                    {homeState.name} ({homeState.code})
+                  </Text>
+                ) : (
+                  <Text style={styles.pickerPlaceholder}>Tap to choose your state</Text>
+                )}
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>Region (optional)</Text>
+              <TextInput
+                style={styles.input}
+                value={region}
+                onChangeText={setRegion}
+                placeholder="State, province, or region"
+                placeholderTextColor={colors.textTertiary}
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
+            </>
+          )}
 
           <Text style={styles.label}>Appearance</Text>
           <View style={styles.themeRow}>
@@ -240,6 +342,12 @@ export default function OnboardingScreen() {
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <CountryPickerModal
+        visible={countryModalOpen}
+        onClose={() => setCountryModalOpen(false)}
+        onSelect={handleCountrySelect}
+      />
 
       <UsStatePickerModal
         visible={stateModalOpen}
