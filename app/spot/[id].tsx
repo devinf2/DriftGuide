@@ -13,6 +13,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Spacing, FontSize, BorderRadius, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useRequireAuth } from '@/src/auth/useRequireAuth';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
@@ -196,6 +197,7 @@ export default function SpotFishingTripScreen() {
   const insets = useSafeAreaInsets();
   const effectiveTop = useEffectiveSafeTopInset();
   const { user } = useAuthStore();
+  const requireAuth = useRequireAuth();
   const { locations, fetchLocations, getLocationById, setPendingPlanTripLocationId, addRecentLocation } =
     useLocationStore();
   const startTrip = useTripStore((s) => s.startTrip);
@@ -259,9 +261,12 @@ export default function SpotFishingTripScreen() {
   const isSpotFavorite = Boolean(id && favoriteIds.includes(id));
   const showFavoriteInHeader = Boolean(user && id && location);
   const handleToggleFavorite = useCallback(() => {
-    if (!user?.id || !id) return;
+    if (!id) return;
+    // Saving a favorite is account-bound: prompt a guest to sign in (WS-B).
+    if (!requireAuth('Sign in to save favorite spots.')) return;
+    if (!user?.id) return;
     void useLocationFavoritesStore.getState().toggle(user.id, id);
-  }, [user?.id, id]);
+  }, [user?.id, id, requireAuth]);
 
   const handleHeaderBack = useCallback(() => {
     if (router.canGoBack()) router.back();
@@ -767,10 +772,9 @@ export default function SpotFishingTripScreen() {
   };
 
   const handleFishNowHere = useCallback(async () => {
-    if (!user) {
-      Alert.alert('Sign in required', 'Sign in to start a trip.');
-      return;
-    }
+    // Starting a trip is account-bound: open the auth sheet for guests instead of dead-ending (WS-B).
+    if (!requireAuth('Sign in to start a trip.')) return;
+    if (!user) return;
     if (!location || !id) return;
     const { activeTrip: existing, isTripPaused } = useTripStore.getState();
     if (existing?.status === 'active') {
@@ -790,7 +794,7 @@ export default function SpotFishingTripScreen() {
     } finally {
       setFishNowStarting(false);
     }
-  }, [user, location, id, addRecentLocation, startTrip, router]);
+  }, [user, location, id, addRecentLocation, startTrip, router, requireAuth]);
 
   const handleMoreInfo = () => {
     if (!location || !conditions) return;
