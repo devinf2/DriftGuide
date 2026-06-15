@@ -41,6 +41,12 @@ type TripPhotoVisibilityDropdownProps = {
   colorTokens?: ThemeColors;
   /** Use short trigger text ("Friends" vs "Friends only"). Default true on compact rows. */
   shortTriggerLabels?: boolean;
+  /** Render the label + trigger row. Set false to use this purely as a controlled picker modal. */
+  renderTrigger?: boolean;
+  /** Controlled open state for the picker modal. When omitted the component manages its own. */
+  open?: boolean;
+  /** Notified when the picker modal wants to open/close (required for controlled use). */
+  onOpenChange?: (open: boolean) => void;
 };
 
 function createStyles(colors: ThemeColors, fullWidth: boolean, compactTriggerText: boolean) {
@@ -146,6 +152,9 @@ export function TripPhotoVisibilityDropdown({
   fullWidth = false,
   colorTokens,
   shortTriggerLabels,
+  renderTrigger = true,
+  open: controlledOpen,
+  onOpenChange,
 }: TripPhotoVisibilityDropdownProps) {
   const { colors: themeColors } = useAppTheme();
   const colors = colorTokens ?? themeColors;
@@ -155,7 +164,13 @@ export function TripPhotoVisibilityDropdown({
     () => createStyles(colors, fullWidth, compactTriggerText),
     [colors, fullWidth, compactTriggerText],
   );
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (next: boolean) => {
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const title = modalTitle ?? label;
   const triggerLabel = useShortTrigger
     ? TRIP_PHOTO_VISIBILITY_TRIGGER_LABELS[value]
@@ -163,6 +178,7 @@ export function TripPhotoVisibilityDropdown({
 
   return (
     <>
+      {renderTrigger ? (
       <View style={styles.row}>
         <View style={styles.labelCluster}>
           <Text style={styles.label}>{label}</Text>
@@ -197,6 +213,7 @@ export function TripPhotoVisibilityDropdown({
           )}
         </Pressable>
       </View>
+      ) : null}
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <TouchableOpacity

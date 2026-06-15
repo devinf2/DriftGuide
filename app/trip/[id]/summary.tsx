@@ -26,9 +26,14 @@ import {
   type TripEndpointKind,
 } from '@/src/components/journal/TripEndpointPinModal';
 import { TripPhotoVisibilityDropdown } from '@/src/components/TripPhotoVisibilityDropdown';
-import { effectiveTripPhotoVisibility } from '@/src/constants/tripPhotoVisibility';
+import {
+  effectiveTripPhotoVisibility,
+  showTripPhotoVisibilityInfoAlert,
+  TRIP_PHOTO_VISIBILITY_TRIGGER_LABELS,
+} from '@/src/constants/tripPhotoVisibility';
 import { fetchTripById, fetchTripEvents, fetchTripShareAccess, fetchTripsFromCloud, syncTripToCloud, type TripShareAccess } from '@/src/services/sync';
-import { fetchPhotos } from '@/src/services/photoService';
+import { fetchPhotos, fetchPhotosVisibleForTripIds } from '@/src/services/photoService';
+import { listTripsInSession } from '@/src/services/sharedSessionService';
 import {
   Trip,
   TripEvent,
@@ -136,6 +141,9 @@ export default function TripSummaryScreen() {
   const [events, setEvents] = useState<TripEvent[]>([]);
   const [tripPhotos, setTripPhotos] = useState<Photo[]>([]);
   const [tripPhotosLoading, setTripPhotosLoading] = useState(false);
+  /** Album rows for every trip in the shared session (all members), used so peers' catch photos
+   * resolve on the merged timeline + map. Empty for non-shared trips. */
+  const [sessionAlbumPhotos, setSessionAlbumPhotos] = useState<Photo[]>([]);
   const tripPhotosRowCountRef = useRef(0);
   tripPhotosRowCountRef.current = tripPhotos.length;
   const [loading, setLoading] = useState(true);
@@ -163,6 +171,7 @@ export default function TripSummaryScreen() {
   // silently fails, so we defer the action to the Modal's onDismiss callback.
   const pendingMenuActionRef = useRef<(() => void) | null>(null);
   const [photoVisSaving, setPhotoVisSaving] = useState(false);
+  const [visibilityPickerOpen, setVisibilityPickerOpen] = useState(false);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [reviewRating, setReviewRating] = useState<number | null>(null);
   const [reviewClarity, setReviewClarity] = useState<WaterClarity | null>(null);
@@ -294,9 +303,19 @@ export default function TripSummaryScreen() {
     }
   }, [tripPhotos, timelineCatchThumbPixelSize]);
 
+  /** Own trip rows + session peers' rows (own win on id for optimistic freshness). Drives the
+   * catch-photo album map for the timeline and the full-screen viewer so peers' photos resolve. */
+  const mergedAlbumPhotos = useMemo(() => {
+    if (sessionAlbumPhotos.length === 0) return tripPhotos;
+    const byId = new Map<string, Photo>();
+    for (const p of sessionAlbumPhotos) byId.set(p.id, p);
+    for (const p of tripPhotos) byId.set(p.id, p);
+    return [...byId.values()];
+  }, [tripPhotos, sessionAlbumPhotos]);
+
   const albumPhotoUrlsByCatchId = useMemo(
-    () => buildAlbumPhotoUrlsByCatchId(tripPhotos),
-    [tripPhotos],
+    () => buildAlbumPhotoUrlsByCatchId(mergedAlbumPhotos),
+    [mergedAlbumPhotos],
   );
 
   const handleSessionChanged = useCallback((sid: string | null) => {
@@ -429,24 +448,55 @@ export default function TripSummaryScreen() {
     void refreshTripPhotos(showBlocking);
   }, [id, user?.id, trip?.user_id, refreshTripPhotos]);
 
+  /** Load album rows for the whole session so peers' catch photos resolve on the merged timeline.
+   * Same RLS-backed query the Photos tab uses; polled so new peer uploads appear without reopening. */
+  useEffect(() => {
+    const sessionId = trip?.shared_session_id ?? null;
+    if (!sessionId || !isConnected) {
+      setSessionAlbumPhotos([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const trips = await listTripsInSession(sessionId);
+        const ids = trips.map((t) => t.id);
+        const photos = await fetchPhotosVisibleForTripIds(ids);
+        if (!cancelled) setSessionAlbumPhotos(photos);
+      } catch (e) {
+        console.warn('[summary] session album photos load failed', e);
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [trip?.shared_session_id, isConnected, id]);
+
+  /** Photos backing the open full-screen viewer: a peer/group list when one was tapped, else own rows. */
+  const [viewerPhotos, setViewerPhotos] = useState<Photo[] | null>(null);
+  const viewerSourcePhotos = viewerPhotos ?? tripPhotos;
+
   useEffect(() => {
     if (tripPhotoViewerIndex == null) return;
-    if (tripPhotos.length === 0) {
+    if (viewerSourcePhotos.length === 0) {
       setTripPhotoViewerIndex(null);
       return;
     }
-    if (tripPhotoViewerIndex >= tripPhotos.length) {
-      setTripPhotoViewerIndex(tripPhotos.length - 1);
+    if (tripPhotoViewerIndex >= viewerSourcePhotos.length) {
+      setTripPhotoViewerIndex(viewerSourcePhotos.length - 1);
     }
-  }, [tripPhotoViewerIndex, tripPhotos.length]);
+  }, [tripPhotoViewerIndex, viewerSourcePhotos.length]);
 
   const tripPhotoViewerSlides = useMemo(
-    () => photosToViewerSlides(tripPhotos, trip?.location?.name),
-    [tripPhotos, trip?.location?.name],
+    () => photosToViewerSlides(viewerSourcePhotos, trip?.location?.name),
+    [viewerSourcePhotos, trip?.location?.name],
   );
 
   const tripPhotoViewerSlidesFull = useMemo(() => {
-    if (tripPhotoViewerIndex != null && tripPhotos.length > 0) {
+    if (tripPhotoViewerIndex != null && viewerSourcePhotos.length > 0) {
       return tripPhotoViewerSlides;
     }
     if (fullScreenPhoto) {
@@ -471,6 +521,7 @@ export default function TripSummaryScreen() {
   const closeTripPhotoViewer = useCallback(() => {
     setTripPhotoViewerIndex(null);
     setFullScreenPhoto(null);
+    setViewerPhotos(null);
   }, []);
 
   const onTripPhotoViewerIndexChange = useCallback((next: number) => {
@@ -584,10 +635,14 @@ export default function TripSummaryScreen() {
     setActiveTab(key);
   }, []);
 
-  const handleTripPhotoPress = useCallback((photo: Photo) => {
-    const i = tripPhotos.findIndex((p) => p.id === photo.id);
+  const handleTripPhotoPress = useCallback((photo: Photo, photoList?: Photo[]) => {
+    // Group/peer tabs pass the list actually on screen (which includes peers' rows); the "You" tab
+    // and non-shared trips omit it and fall back to the viewer's own album.
+    const source = photoList && photoList.length > 0 ? photoList : tripPhotos;
+    const i = source.findIndex((p) => p.id === photo.id);
     if (i >= 0) {
       setFullScreenPhoto(null);
+      setViewerPhotos(source === tripPhotos ? null : source);
       setTripPhotoViewerIndex(i);
     }
   }, [tripPhotos]);
@@ -956,6 +1011,41 @@ export default function TripSummaryScreen() {
         <View style={styles.summaryHeaderMenuOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setSummaryHeaderMenuVisible(false)} />
           <View style={[styles.summaryHeaderMenuSheet, { paddingBottom: insets.bottom + Spacing.lg }]}>
+            <View style={[styles.summaryHeaderMenuRow, styles.summaryHeaderMenuSplitRow]}>
+              <Text style={styles.summaryHeaderMenuLabel}>Save offline</Text>
+              <Switch
+                value={keepOfflinePinned}
+                onValueChange={handleKeepOfflineChange}
+                trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
+                thumbColor={themeColors.textInverse}
+                ios_backgroundColor={themeColors.textSecondary}
+              />
+            </View>
+            <Pressable
+              style={[styles.summaryHeaderMenuRow, styles.summaryHeaderMenuSplitRow]}
+              disabled={!user || !isConnected}
+              onPress={() => closeMenuThenRun(() => setVisibilityPickerOpen(true))}
+            >
+              <View style={styles.summaryHeaderMenuLabelCluster}>
+                <Text style={[styles.summaryHeaderMenuLabel, (!user || !isConnected) && { opacity: 0.5 }]}>
+                  Visibility
+                </Text>
+                <Pressable
+                  onPress={() => showTripPhotoVisibilityInfoAlert()}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="What visibility means for trip photos"
+                >
+                  <MaterialIcons name="info-outline" size={18} color={themeColors.textSecondary} />
+                </Pressable>
+              </View>
+              <View style={styles.summaryHeaderMenuValue}>
+                <Text style={styles.summaryHeaderMenuValueText}>
+                  {TRIP_PHOTO_VISIBILITY_TRIGGER_LABELS[effectivePhotoVisibility]}
+                </Text>
+                <MaterialIcons name="chevron-right" size={20} color={themeColors.textSecondary} />
+              </View>
+            </Pressable>
             <Pressable
               style={styles.summaryHeaderMenuRow}
               onPress={() => closeMenuThenRun(() => setPeopleSheetVisible(true))}
@@ -1000,49 +1090,35 @@ export default function TripSummaryScreen() {
       </Modal>
 
       {isOwnTrip ? (
-        <View>
-          <View style={styles.topBarRow}>
-            <View style={styles.offlineLeft}>
-              <Text style={styles.keepOfflineLabel} numberOfLines={1}>
-                Save offline
-              </Text>
-              <Switch
-                value={keepOfflinePinned}
-                onValueChange={handleKeepOfflineChange}
-                trackColor={{ false: themeColors.textSecondary, true: themeColors.primaryLight }}
-                thumbColor={themeColors.textInverse}
-                ios_backgroundColor={themeColors.textSecondary}
-                style={styles.keepOfflineSwitch}
-              />
-            </View>
-            <TripPhotoVisibilityDropdown
-              colorTokens={themeColors}
-              label="Visibility"
-              value={effectivePhotoVisibility}
-              onChange={(v: TripPhotoVisibility) => {
-                void (async () => {
-                  if (!trip || !user) return;
-                  if (!isConnected) {
-                    Alert.alert('Offline', 'Connect to the internet to update this.');
-                    return;
-                  }
-                  setPhotoVisSaving(true);
-                  const updated: Trip = { ...trip, trip_photo_visibility: v };
-                  setTrip(updated);
-                  const ok = await syncTripToCloud(updated, events);
-                  setPhotoVisSaving(false);
-                  if (!ok) {
-                    Alert.alert('Could not save', 'Try again when you have a stable connection.');
-                    const found = await fetchTripById(id);
-                    if (found) setTrip(found);
-                  }
-                })();
-              }}
-              disabled={!user || !isConnected}
-              saving={photoVisSaving}
-            />
-          </View>
-        </View>
+        <TripPhotoVisibilityDropdown
+          colorTokens={themeColors}
+          modalTitle="Visibility"
+          renderTrigger={false}
+          open={visibilityPickerOpen}
+          onOpenChange={setVisibilityPickerOpen}
+          value={effectivePhotoVisibility}
+          onChange={(v: TripPhotoVisibility) => {
+            void (async () => {
+              if (!trip || !user) return;
+              if (!isConnected) {
+                Alert.alert('Offline', 'Connect to the internet to update this.');
+                return;
+              }
+              setPhotoVisSaving(true);
+              const updated: Trip = { ...trip, trip_photo_visibility: v };
+              setTrip(updated);
+              const ok = await syncTripToCloud(updated, events);
+              setPhotoVisSaving(false);
+              if (!ok) {
+                Alert.alert('Could not save', 'Try again when you have a stable connection.');
+                const found = await fetchTripById(id);
+                if (found) setTrip(found);
+              }
+            })();
+          }}
+          disabled={!user || !isConnected}
+          saving={photoVisSaving}
+        />
       ) : null}
 
       {/* Date & Location */}
@@ -1273,7 +1349,7 @@ export default function TripSummaryScreen() {
             onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
             onCatchPhotoPress={handleCatchPhotoPress}
             onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
-            tripAlbumPhotos={tripPhotos}
+            tripAlbumPhotos={mergedAlbumPhotos}
           />
         </View>
       ) : null}
@@ -1376,6 +1452,7 @@ export default function TripSummaryScreen() {
           trip={trip}
           events={events}
           tripPhotos={tripPhotos}
+          isOwnTrip={isOwnTrip}
           editMode={isOwnTrip && journalEditMode}
           tripPinPlacement={tripPinPlacement}
           onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
@@ -1569,6 +1646,7 @@ function SummaryMapTab({
   trip,
   events,
   tripPhotos,
+  isOwnTrip,
   editMode,
   tripPinPlacement,
   onRequestEditTripPin,
@@ -1583,6 +1661,7 @@ function SummaryMapTab({
   trip: Trip;
   events: TripEvent[];
   tripPhotos: Photo[];
+  isOwnTrip: boolean;
   editMode: boolean;
   tripPinPlacement: TripPinPlacementState | null;
   onRequestEditTripPin: (kind: TripEndpointKind) => void;
@@ -1633,6 +1712,7 @@ function SummaryMapTab({
           events={events}
           tripAlbumPhotos={tripPhotos}
           containerStyle={summaryStyles.summaryMapNative}
+          liveLocation={isOwnTrip}
           onCatchWaypointPress={onCatchWaypointPress}
           placementKind={placing ? tripPinPlacement.kind : null}
           placementLatitude={placing ? tripPinPlacement.lat : undefined}
@@ -1849,6 +1929,27 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.primary,
     textAlign: 'center',
   },
+  summaryHeaderMenuSplitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  summaryHeaderMenuLabelCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  summaryHeaderMenuValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  summaryHeaderMenuValueText: {
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    color: c.textSecondary,
+  },
 
   dateLocationRow: {
     flexDirection: 'row',
@@ -1931,40 +2032,6 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.textSecondary,
     marginTop: 4,
     textAlign: 'center',
-  },
-
-  topBarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginHorizontal: Spacing.md,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.xs,
-    paddingVertical: 6,
-    paddingLeft: Spacing.xs,
-    paddingRight: Spacing.sm,
-    gap: Spacing.sm,
-    backgroundColor: c.surface,
-    borderRadius: BorderRadius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.border,
-  },
-  offlineLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    flex: 1,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  keepOfflineLabel: {
-    flexShrink: 1,
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    color: c.textSecondary,
-  },
-  keepOfflineSwitch: {
-    transform: [{ scaleX: 0.88 }, { scaleY: 0.88 }],
   },
 
   tabPane: {

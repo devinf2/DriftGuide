@@ -177,6 +177,12 @@ type Props = {
   expandable?: boolean;
   /** When set, catch pin photos use the same album rows as the Photos tab. */
   tripAlbumPhotos?: Photo[];
+  /**
+   * Continuously show the live user-location puck from mount (no tap required), so a finished
+   * trip's map can still be used to navigate out. Gate to the trip owner — avoids requesting
+   * location permission when viewing someone else's shared trip.
+   */
+  liveLocation?: boolean;
 };
 
 /**
@@ -229,6 +235,7 @@ export function JournalTripRouteMapView({
   onPlacementCoordinateChange,
   expandable = true,
   tripAlbumPhotos = [],
+  liveLocation = false,
 }: Props) {
   const basemapId = useMapBasemapStore((s) => s.basemapId);
   const albumPhotoUrlsByCatchId = useMemo(
@@ -523,7 +530,7 @@ export function JournalTripRouteMapView({
             </PointAnnotation>
           ),
         )}
-        {locatedOnce && UserLocation ? <UserLocation visible /> : null}
+        {(locatedOnce || liveLocation) && UserLocation ? <UserLocation visible /> : null}
       </MapView>
 
       {isPlacing && placementKind != null ? (

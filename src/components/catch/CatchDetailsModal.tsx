@@ -816,22 +816,6 @@ function createCatchDetailsStyles(colors: ThemeColors) {
       marginRight: -Spacing.xs,
     },
     flyFieldLabelInline: { marginBottom: 0, flex: 1, minWidth: 0 },
-    addSecondaryFlyButton: {
-      marginTop: Spacing.xs,
-      marginBottom: Spacing.sm,
-      paddingVertical: 4,
-      paddingHorizontal: Spacing.sm,
-      borderRadius: BorderRadius.sm,
-      borderWidth: 1,
-      borderColor: colors.primary,
-      borderStyle: 'dashed',
-      alignSelf: 'flex-start',
-    },
-    addSecondaryFlyButtonText: {
-      fontSize: FontSize.xs,
-      fontWeight: '600',
-      color: colors.primary,
-    },
     /** Inline next to “Secondary fly” header */
     removeSecondaryFlyButton: {
       paddingVertical: 4,
@@ -1008,6 +992,8 @@ export function CatchDetailsModal({
   const [catchCaughtOnFly, setCatchCaughtOnFly] = useState<'primary' | 'dropper' | null>(null);
   const [catchReleased, setCatchReleased] = useState<boolean | null>(null);
   const [catchStructure, setCatchStructure] = useState<Structure | null>(null);
+  /** Friend this catch is attributed to; null = me (the logging user). */
+  const [caughtByUserId, setCaughtByUserId] = useState<string | null>(null);
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [pinLat, setPinLat] = useState<number | null>(null);
   const [pinLon, setPinLon] = useState<number | null>(null);
@@ -1181,6 +1167,7 @@ export function CatchDetailsModal({
     setCatchCaughtOnFly(d?.pattern?.trim() ? 'primary' : null);
     setCatchReleased(null);
     setCatchStructure(null);
+    setCaughtByUserId(null);
     setMoreDetailsOpen(false);
     setPinLat(null);
     setPinLon(null);
@@ -1257,12 +1244,14 @@ export function CatchDetailsModal({
       );
       setCatchReleased(data.released ?? null);
       setCatchStructure(data.structure ?? null);
+      setCaughtByUserId(data.caught_by_user_id ?? null);
       setMoreDetailsOpen(
         Boolean(
           data.structure ||
             (data.depth_ft != null && Number.isFinite(data.depth_ft)) ||
             data.note?.trim() ||
-            data.released != null,
+            data.released != null ||
+            data.caught_by_user_id,
         ),
       );
       const laRaw = ev.latitude;
@@ -1772,6 +1761,7 @@ export function CatchDetailsModal({
             presentation_method: presentationMethod ?? undefined,
             released: catchReleased ?? undefined,
             structure: catchStructure ?? undefined,
+            ...(caughtByUserId ? { caught_by_user_id: caughtByUserId } : {}),
           },
           latitude: lat,
           longitude: lon,
@@ -1872,6 +1862,13 @@ export function CatchDetailsModal({
           presentation_method: presentationMethod,
           released: catchReleased,
           structure: catchStructure,
+          caught_by_user_id: caughtByUserId,
+          // Keep the cached friend-trip pointer only while attribution is unchanged; a
+          // re-attribution invalidates it (reconciliation refills it when trips link).
+          caught_for_trip_id:
+            caughtByUserId && caughtByUserId === (priorCatch.caught_by_user_id ?? null)
+              ? (priorCatch.caught_for_trip_id ?? null)
+              : null,
         };
 
         let eventOverrides:
@@ -2169,16 +2166,6 @@ export function CatchDetailsModal({
                   </View>
                 ) : null}
               </View>
-              {!hasSecondaryFly ? (
-                <Pressable
-                  style={styles.addSecondaryFlyButton}
-                  onPress={openChangeFlyPicker}
-                  accessibilityRole="button"
-                  accessibilityLabel="Add secondary fly"
-                >
-                  <Text style={styles.addSecondaryFlyButtonText}>Add secondary fly</Text>
-                </Pressable>
-              ) : null}
 
               <Text style={styles.flyFieldLabel}>Species</Text>
               <ScrollView
@@ -2225,11 +2212,15 @@ export function CatchDetailsModal({
                 <View style={styles.catchPhotoActionsRow}>
                   <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('camera')}>
                     <MaterialIcons name="photo-camera" size={22} color={colors.primary} />
-                    <Text style={styles.catchPhotoButtonLabel}>Camera</Text>
+                    <Text style={styles.catchPhotoButtonLabel}>
+                      {catchPhotoUris.length > 0 ? 'Take Another' : 'Camera'}
+                    </Text>
                   </Pressable>
                   <Pressable style={styles.catchPhotoButton} onPress={() => void pickPhotoInternal('library')}>
                     <MaterialIcons name="photo-library" size={22} color={colors.primary} />
-                    <Text style={styles.catchPhotoButtonLabel}>Upload</Text>
+                    <Text style={styles.catchPhotoButtonLabel}>
+                      {catchPhotoUris.length > 0 ? 'Add More' : 'Upload'}
+                    </Text>
                   </Pressable>
                 </View>
               ) : null}

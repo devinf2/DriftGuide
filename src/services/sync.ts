@@ -294,11 +294,20 @@ export async function upsertCatchEventToCloud(
       fly_pattern,
       fly_size,
       fly_color,
+      caught_by_user_id: catchData.caught_by_user_id ?? null,
+      caught_for_trip_id: catchData.caught_for_trip_id ?? null,
     };
 
-    const { error: catchError } = await supabase.from('catches').upsert(catchRow, {
+    let { error: catchError } = await supabase.from('catches').upsert(catchRow, {
       onConflict: 'id',
     });
+    // Forward-compat: if migration 115 hasn't been applied yet, drop the attribution
+    // columns and retry so attribution still rides in trip_events.data jsonb.
+    if (catchError?.code === 'PGRST204' || catchError?.code === '42703') {
+      const { caught_by_user_id, caught_for_trip_id, ...fallbackRow } = catchRow;
+      const fallback = await supabase.from('catches').upsert(fallbackRow, { onConflict: 'id' });
+      catchError = fallback.error;
+    }
     if (catchError) {
       console.error('Error syncing catch', catchEvent.id, catchError);
       return false;

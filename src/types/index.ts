@@ -188,6 +188,12 @@ export interface Trip {
   deleted_at?: string | null;
   /** When set, this trip is part of a shared fishing session (group timeline). */
   shared_session_id?: string | null;
+  /**
+   * Local, offline-safe roster of friends attributed catches on this trip (via "Caught by"),
+   * plus any explicitly added. Client-only — rides the trip bundle, NOT a server membership and
+   * NOT included in tripToUpsertPayload. Reconstructable from catch attributions + session members.
+   */
+  participant_user_ids?: string[] | null;
   /** Override profile default for album photos on profile; null = use profile default. */
   trip_photo_visibility?: TripPhotoVisibility | null;
   /** Set on successful server sync when a survey rating was included. */
@@ -249,6 +255,10 @@ export interface CatchData {
   presentation_method?: PresentationMethod | null;
   released?: boolean | null;
   structure?: Structure | null;
+  /** Friend this catch is attributed to; null/undefined = me (the trip owner). Display-only — the row stays under my user_id (RLS). */
+  caught_by_user_id?: string | null;
+  /** Cached pointer to the attributed friend's trip in a shared session, when known. Grouping only; never moves ownership. */
+  caught_for_trip_id?: string | null;
 }
 
 export interface NoteData {
@@ -331,6 +341,10 @@ export interface CatchRow {
   fly_pattern: string | null;
   fly_size: number | null;
   fly_color: string | null;
+  /** Friend this catch is attributed to; null = me (the trip owner). */
+  caught_by_user_id?: string | null;
+  /** Cached pointer to the attributed friend's trip in a shared session, when known. */
+  caught_for_trip_id?: string | null;
   created_at?: string;
   deleted_at?: string | null;
 }

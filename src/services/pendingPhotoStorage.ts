@@ -99,6 +99,26 @@ export async function enqueuePendingPhotoDurable(
   return id;
 }
 
+/**
+ * Serializes pending-photo flushing across every sync path. Multiple triggers can fire a flush at
+ * once — the active-trip debounce (`scheduleInTripSync`), connectivity regain and app-foreground
+ * (`SyncOnConnectivity`), and outbox retry (`runTripOutboxExclusive`). Without this lock two flushes
+ * call `getPendingPhotos()` and see the same queued row before either `removePendingPhoto()`s it, so
+ * `addPhoto` inserts it twice and that catch shows duplicate photos for the angler in the group view.
+ * Every drainer (`processPendingPhotos`, `processPendingPhotosForTripId`) must run under this lock.
+ * It is intentionally separate from the trip outbox chain so the two never deadlock on each other.
+ */
+let photoFlushChain: Promise<void> = Promise.resolve();
+
+export function runPendingPhotoFlushExclusive(fn: () => Promise<void>): Promise<void> {
+  const next = photoFlushChain.then(() => fn());
+  photoFlushChain = next.then(
+    () => {},
+    () => {},
+  );
+  return next;
+}
+
 export async function getPendingPhotos(): Promise<PendingPhoto[]> {
   return getStored();
 }

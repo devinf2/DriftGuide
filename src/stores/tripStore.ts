@@ -854,19 +854,34 @@ export const useTripStore = create<TripState>()(
             presentation_method: data?.presentation_method ?? null,
             released: data?.released ?? null,
             structure: data?.structure ?? null,
+            caught_by_user_id: data?.caught_by_user_id ?? null,
+            caught_for_trip_id: data?.caught_for_trip_id ?? null,
           } as CatchData,
           conditions_snapshot,
           latitude: latitude ?? null,
           longitude: longitude ?? null,
         };
 
-        set(state => ({
-          events: [...state.events, catchEvent],
-          fishCount: fishCount + qty,
-          activeTrip: state.activeTrip
-            ? { ...state.activeTrip, total_fish: fishCount + qty }
-            : null,
-        }));
+        const caughtBy = data?.caught_by_user_id ?? null;
+
+        set(state => {
+          const prevParticipants = state.activeTrip?.participant_user_ids ?? null;
+          const nextParticipants =
+            caughtBy && !(prevParticipants ?? []).includes(caughtBy)
+              ? [...(prevParticipants ?? []), caughtBy]
+              : prevParticipants;
+          return {
+            events: [...state.events, catchEvent],
+            fishCount: fishCount + qty,
+            activeTrip: state.activeTrip
+              ? {
+                  ...state.activeTrip,
+                  total_fish: fishCount + qty,
+                  participant_user_ids: nextParticipants,
+                }
+              : null,
+          };
+        });
 
         setTimeout(() => get().refreshSmartRecommendation(), 100);
         get().scheduleInTripSync();

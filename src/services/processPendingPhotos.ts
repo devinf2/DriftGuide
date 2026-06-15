@@ -2,6 +2,7 @@ import { addPhoto } from './photoService';
 import {
   getPendingPhotos,
   removePendingPhoto,
+  runPendingPhotoFlushExclusive,
   updatePendingTripEventPhotoUrl,
   type PendingPhoto,
 } from './pendingPhotoStorage';
@@ -26,34 +27,37 @@ function pendingToAddPhotoOptions(p: PendingPhoto): Parameters<typeof addPhoto>[
 }
 
 export async function processPendingPhotos(): Promise<void> {
-  const list = await getPendingPhotos();
-  if (list.length === 0) return;
+  // Serialized against every other flush path so a queued photo is never uploaded twice.
+  await runPendingPhotoFlushExclusive(async () => {
+    const list = await getPendingPhotos();
+    if (list.length === 0) return;
 
-  const resolveCatchEventPhotoUpload = useTripStore.getState().resolveCatchEventPhotoUpload;
+    const resolveCatchEventPhotoUpload = useTripStore.getState().resolveCatchEventPhotoUpload;
 
-  const sorted = [...list].sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    if (ta !== tb) return ta - tb;
-    return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
-  });
+    const sorted = [...list].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
+    });
 
-  for (const p of sorted) {
-    try {
-      const options = pendingToAddPhotoOptions(p);
-      const photo = await addPhoto(options, { skipEnqueueOnFailure: true });
-      const url = photo.url;
+    for (const p of sorted) {
+      try {
+        const options = pendingToAddPhotoOptions(p);
+        const photo = await addPhoto(options, { skipEnqueueOnFailure: true });
+        const url = photo.url;
 
-      if (p.type === 'catch' && p.eventId) {
-        resolveCatchEventPhotoUpload(p.tripId, p.eventId, p.uri, url);
-        await updatePendingTripEventPhotoUrl(p.tripId, p.eventId, url);
+        if (p.type === 'catch' && p.eventId) {
+          resolveCatchEventPhotoUpload(p.tripId, p.eventId, p.uri, url);
+          await updatePendingTripEventPhotoUrl(p.tripId, p.eventId, url);
+        }
+
+        await removePendingPhoto(p.id);
+        await deleteSandboxPendingPhotoFile(p.uri);
+      } catch (e) {
+        console.warn('[processPendingPhotos] failed for', p.id, e);
+        // leave in queue to retry later
       }
-
-      await removePendingPhoto(p.id);
-      await deleteSandboxPendingPhotoFile(p.uri);
-    } catch (e) {
-      console.warn('[processPendingPhotos] failed for', p.id, e);
-      // leave in queue to retry later
     }
-  }
+  });
 }

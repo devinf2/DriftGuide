@@ -3,7 +3,7 @@ import { PinchZoomPhotoViewport } from '@/src/components/PinchZoomPhotoViewport'
 import { Spacing, FontSize, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { Photo } from '@/src/types';
-import { formatTripDate } from '@/src/utils/formatters';
+import { formatTripDateTime } from '@/src/utils/formatters';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
@@ -38,7 +38,7 @@ export function photosToViewerSlides(photos: Photo[], locationName?: string): Tr
       [photo.fly_pattern, photo.fly_size ? `#${photo.fly_size}` : null, photo.fly_color].filter(Boolean).join(' ') ||
       undefined,
     date:
-      photo.captured_at || photo.created_at ? formatTripDate(photo.captured_at || photo.created_at!) : undefined,
+      photo.captured_at || photo.created_at ? formatTripDateTime(photo.captured_at || photo.created_at!) : undefined,
     species: photo.species ?? undefined,
     caption: photo.caption ?? undefined,
   }));

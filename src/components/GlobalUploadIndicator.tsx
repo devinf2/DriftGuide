@@ -18,8 +18,16 @@ export function GlobalUploadIndicator() {
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const pendingCount = useTripStore((s) => s.pendingSyncTrips.length);
+  const pendingSyncTrips = useTripStore((s) => s.pendingSyncTrips);
+  const activeTrip = useTripStore((s) => s.activeTrip);
   const isOnline = useTripStore((s) => s.isOnline);
+
+  // Only count trips that have ended. A trip started offline is queued into
+  // pendingSyncTrips while still active — don't surface the uploading bar until it's over.
+  const pendingCount = useMemo(() => {
+    const activeId = activeTrip?.status === 'active' ? activeTrip.id : null;
+    return pendingSyncTrips.filter((id) => id !== activeId).length;
+  }, [pendingSyncTrips, activeTrip]);
 
   const anim = useRef(new Animated.Value(0)).current;
   const [trackWidth, setTrackWidth] = useState(0);
@@ -38,7 +46,8 @@ export function GlobalUploadIndicator() {
     return () => loop.stop();
   }, [anim, pendingCount]);
 
-  if (pendingCount === 0) return null;
+  // Only surface the bar for an ended trip that can actually upload right now.
+  if (pendingCount === 0 || !isOnline) return null;
 
   const segmentWidth = Math.max(trackWidth * 0.4, 1);
   const translateX = anim.interpolate({
@@ -47,13 +56,11 @@ export function GlobalUploadIndicator() {
   });
 
   const noun = `${pendingCount} trip${pendingCount !== 1 ? 's' : ''}`;
-  const label = isOnline
-    ? `Uploading ${noun} from this device…`
-    : `${noun} saved on this device — will upload when you reconnect`;
+  const label = `Uploading ${noun} from this device…`;
 
   return (
     <View
-      style={[styles.bar, { paddingTop: isOnline ? Math.max(insets.top, Spacing.sm) : Spacing.sm }]}
+      style={[styles.bar, { paddingTop: Math.max(insets.top, Spacing.sm) }]}
       accessibilityRole="alert"
     >
       <View

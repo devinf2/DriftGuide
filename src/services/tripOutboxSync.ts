@@ -3,6 +3,7 @@ import type { EventSyncStatus } from '@/src/types/sync';
 import {
   getPendingPhotos,
   removePendingPhoto,
+  runPendingPhotoFlushExclusive,
   updatePendingTripEventPhotoUrl,
   type PendingPhoto,
 } from '@/src/services/pendingPhotoStorage';
@@ -47,38 +48,42 @@ function pendingToAddPhotoOptions(p: PendingPhoto): Parameters<typeof addPhoto>[
 
 /** Upload pending album rows for one trip only (ordered). */
 export async function processPendingPhotosForTripId(tripId: string): Promise<void> {
-  const list = await getPendingPhotos();
-  const mine = list.filter((p) => p.tripId === tripId);
-  if (mine.length === 0) return;
+  // Serialized against every other flush path (incl. the global processPendingPhotos) so the same
+  // queued row can't be uploaded by two overlapping flushes — that produced duplicate album rows.
+  await runPendingPhotoFlushExclusive(async () => {
+    const list = await getPendingPhotos();
+    const mine = list.filter((p) => p.tripId === tripId);
+    if (mine.length === 0) return;
 
-  const resolveCatchEventPhotoUpload = useTripStore.getState().resolveCatchEventPhotoUpload;
+    const resolveCatchEventPhotoUpload = useTripStore.getState().resolveCatchEventPhotoUpload;
 
-  const sorted = [...mine].sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    if (ta !== tb) return ta - tb;
-    return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
-  });
+    const sorted = [...mine].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
+    });
 
-  for (const p of sorted) {
-    try {
-      const photo = await addPhoto(pendingToAddPhotoOptions(p), {
-        isOnline: true,
-        skipEnqueueOnFailure: true,
-      });
-      const url = photo.url;
+    for (const p of sorted) {
+      try {
+        const photo = await addPhoto(pendingToAddPhotoOptions(p), {
+          isOnline: true,
+          skipEnqueueOnFailure: true,
+        });
+        const url = photo.url;
 
-      if (p.type === 'catch' && p.eventId) {
-        resolveCatchEventPhotoUpload(p.tripId, p.eventId, p.uri, url);
-        await updatePendingTripEventPhotoUrl(p.tripId, p.eventId, url);
+        if (p.type === 'catch' && p.eventId) {
+          resolveCatchEventPhotoUpload(p.tripId, p.eventId, p.uri, url);
+          await updatePendingTripEventPhotoUrl(p.tripId, p.eventId, url);
+        }
+
+        await removePendingPhoto(p.id);
+        await deleteSandboxPendingPhotoFile(p.uri);
+      } catch (e) {
+        console.warn('[processPendingPhotosForTripId] failed for', p.id, e);
       }
-
-      await removePendingPhoto(p.id);
-      await deleteSandboxPendingPhotoFile(p.uri);
-    } catch (e) {
-      console.warn('[processPendingPhotosForTripId] failed for', p.id, e);
     }
-  }
+  });
 }
 
 function allEventsSyncedState(events: TripEvent[], status: EventSyncStatus): Record<string, EventSyncStatus> {

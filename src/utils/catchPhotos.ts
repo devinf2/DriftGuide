@@ -1,6 +1,6 @@
 import type { CatchData, Photo, TripEvent } from '@/src/types';
 import type { TripViewerPhotoSlide } from '@/src/components/trip/TripFullScreenPhotoViewerModal';
-import { formatTripDate } from '@/src/utils/formatters';
+import { formatTripDateTime } from '@/src/utils/formatters';
 import { formatCatchSpeciesLabel, getCatchViewerDetailLines } from '@/src/utils/journalTimeline';
 import { formatCatchFlyLabel } from '@/src/utils/getFlyForCatch';
 
@@ -145,7 +145,7 @@ export function buildCatchViewerSlideFields(
   return {
     location: locationName,
     fly: formatCatchFlyLabel(data, events),
-    date: formatTripDate(event.timestamp),
+    date: formatTripDateTime(event.timestamp),
     species: formatCatchSpeciesLabel(data) ?? undefined,
     caption: data.note?.trim() || undefined,
     detailLines: detailLines.length > 0 ? detailLines : undefined,

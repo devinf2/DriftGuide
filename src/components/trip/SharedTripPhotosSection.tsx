@@ -51,7 +51,9 @@ export interface SharedTripPhotosSectionProps {
   /** This trip's album for the viewing user (same as non-shared Photos tab). */
   myTripPhotos: Photo[];
   myPhotosLoading: boolean;
-  onPhotoPress: (photo: Photo) => void;
+  /** `photoList` is the album currently on screen (Group/peer includes peers' rows) so the viewer
+   * can open and page through photos that aren't in the viewer's own trip album. */
+  onPhotoPress: (photo: Photo, photoList: Photo[]) => void;
   /** When set, shows Add control and trailing add tile (active trip). */
   onAddPhoto?: () => void;
   uploading?: boolean;
@@ -388,7 +390,7 @@ export function SharedTripPhotosSection({
         displayPhotos.length > 0 ? (
           <View style={styles.grid}>
             {displayPhotos.map((photo) => (
-              <Pressable key={photo.id} onPress={() => onPhotoPress(photo)}>
+              <Pressable key={photo.id} onPress={() => onPhotoPress(photo, displayPhotos)}>
                 <OfflineTripPhotoImage
                   remoteUri={photo.url}
                   maxPixelSize={thumbPixelSize}
