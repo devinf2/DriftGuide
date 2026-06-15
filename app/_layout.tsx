@@ -12,9 +12,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/googleOAuth';
+import { isGuestAllowedRoute } from '@/src/auth/guestRoutes';
+import { useNotificationResponseRouting } from '@/src/hooks/useNotificationResponseRouting';
+import { configureNotificationHandler } from '@/src/services/pushNotifications';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
+import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
@@ -64,6 +68,9 @@ export const unstable_settings = {
 SplashScreen.preventAutoHideAsync();
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Display foreground push notifications (WS-G). Safe to call at module load.
+configureNotificationHandler();
 
 /** Production builds: `__DEV__` is false → no `require` → dev overlay never loads or ships. */
 const OfflineSimOverlay: ComponentType | undefined = __DEV__
@@ -205,7 +212,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const onResetPasswordRoute = segments[0] === 'auth' && segments[1] === 'reset-password';
 
     if (!session) {
-      if (!inAuth) router.replace('/auth');
+      // Guest browsing (WS-B): allow read-only surfaces (home, map, guide, spot, hatch chart) to
+      // render with no account. Only redirect account-bound routes (trip, journal, friends, profile,
+      // settings, sync-dependent screens) to the auth screen. Writes are gated separately via
+      // requireAuth at their entry points, so this redirect is the cold-start / deep-link backstop.
+      if (!isGuestAllowedRoute(segments)) router.replace('/auth');
       return;
     }
 
@@ -362,6 +373,9 @@ export default function RootLayout() {
   });
   const authLoading = useAuthStore((s) => s.isLoading);
 
+  // WS-G: route to the right screen when a push notification is tapped (and on cold start).
+  useNotificationResponseRouting();
+
   useEffect(() => {
     if (error) throw error;
   }, [error]);
@@ -369,6 +383,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded && !authLoading) {
       void SplashScreen.hideAsync();
+      track(AnalyticsEvents.APP_OPEN);
     }
   }, [loaded, authLoading]);
 

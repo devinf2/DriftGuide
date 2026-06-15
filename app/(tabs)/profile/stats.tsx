@@ -150,6 +150,8 @@ export default function ProfileStatsScreen() {
     }, [loadStats]),
   );
 
+  /** Brand-new angler: no trips logged yet in this range. Show an illustrative preview instead of zeros. */
+  const noData = Boolean(stats) && stats!.tripCount === 0 && stats!.totalCatches === 0;
   const maxFish = stats ? Math.max(...stats.fishPerMonth.map((m) => m.count), 1) : 1;
   const chartVisibleWidth = SCREEN_WIDTH - Spacing.xl * 2 - Spacing.lg * 2;
   const monthCount = stats?.fishPerMonth.length ?? 0;
@@ -227,7 +229,43 @@ export default function ProfileStatsScreen() {
         ) : null}
       </View>
 
-      {!loading && stats ? (
+      {!loading && noData ? (
+        /* Illustrative preview so a brand-new angler sees what their report will look like. */
+        <View style={styles.section}>
+          <View style={styles.card}>
+            <Text style={styles.sectionTitleStandalone}>Your report, once you start logging</Text>
+            <Text style={styles.previewLead}>
+              Log a trip and DriftGuide fills this in automatically — fish per month, your go-to
+              flies, and what produces. Here&apos;s an example:
+            </Text>
+            <View style={styles.previewGrid} pointerEvents="none">
+              <View style={styles.previewRow}>
+                <View style={styles.previewStatCard}>
+                  <Text style={styles.previewStatValue}>8</Text>
+                  <Text style={styles.previewStatLabel}>Trips</Text>
+                </View>
+                <View style={styles.previewStatCard}>
+                  <Text style={styles.previewStatValue}>34</Text>
+                  <Text style={styles.previewStatLabel}>Fish Caught</Text>
+                </View>
+              </View>
+              <View style={styles.previewRow}>
+                <View style={styles.previewStatCard}>
+                  <Text style={styles.previewStatValue}>5</Text>
+                  <Text style={styles.previewStatLabel}>Species</Text>
+                </View>
+                <View style={styles.previewStatCard}>
+                  <Text style={styles.previewStatValue}>Zebra Midge</Text>
+                  <Text style={styles.previewStatLabel}>Top fly</Text>
+                </View>
+              </View>
+            </View>
+            <Text style={styles.previewSample}>Sample data</Text>
+          </View>
+        </View>
+      ) : null}
+
+      {!loading && stats && !noData ? (
         <>
           <View style={styles.section}>
             <View style={[styles.card, styles.chartCard]}>
@@ -491,6 +529,31 @@ function createStatsStyles(colors: ThemeColors) {
       backgroundColor: 'rgba(0,0,0,0.55)',
       borderRadius: 8,
       padding: 2,
+    },
+    previewLead: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 20,
+      marginBottom: Spacing.md,
+    },
+    previewGrid: { gap: Spacing.sm, opacity: 0.8 },
+    previewRow: { flexDirection: 'row', gap: Spacing.sm },
+    previewStatCard: {
+      flex: 1,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.sm,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.md,
+      alignItems: 'center',
+    },
+    previewStatValue: { fontSize: FontSize.xl, fontWeight: '700', color: colors.text },
+    previewStatLabel: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: Spacing.xs },
+    previewSample: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      fontStyle: 'italic',
+      marginTop: Spacing.md,
+      textAlign: 'center',
     },
   });
 }

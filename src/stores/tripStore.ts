@@ -19,7 +19,9 @@ import {
 } from '@/src/types';
 import { getMoonPhase } from '@/src/utils/moonPhase';
 import { captureTripBookmarkCoords, captureTripBookmarkCoordsFast } from '@/src/utils/tripGps';
-import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud } from '@/src/services/sync';
+import { syncTripToCloud, savePlannedTrip, fetchPlannedTripsFromCloud, deleteTripFromCloud, fetchTripsFromCloud, fetchUserCatchesFromCloud } from '@/src/services/sync';
+import { schedulePostTripNudge, maybeNotifyStreaksAndMilestones } from '@/src/services/retentionNotifications';
+import { trackPushRegistration } from '@/src/services/pushNotifications';
 import {
   savePendingTrip,
   getPendingTrips,
@@ -612,6 +614,38 @@ export const useTripStore = create<TripState>()(
           conditionsLoading: false,
           recommendationLoading: false,
         });
+
+        // WS-G retention (fire-and-forget, best-effort): post-trip "log your catches" nudge,
+        // refresh the push-token registration at this post-activation moment, and fire any
+        // streak-at-risk / species-milestone local notifications from the user's history.
+        // History is read from the cloud; the just-ended trip may still be syncing, so the
+        // streak/milestone check is best-effort and never blocks ending the trip.
+        const tripStartMs = new Date(activeTrip.start_time).getTime();
+        const tripUserId = activeTrip.user_id;
+        void (async () => {
+          try {
+            trackPushRegistration();
+            await schedulePostTripNudge(tripId, tripStartMs);
+            if (tripUserId) {
+              const [trips, catches] = await Promise.all([
+                fetchTripsFromCloud(tripUserId),
+                fetchUserCatchesFromCloud(tripUserId),
+              ]);
+              const streakTrips = trips
+                .filter((t) => t.status === 'completed')
+                .map((t) => ({ date: t.start_time }));
+              const milestoneCatches = catches.map((c) => ({
+                date: c.timestamp,
+                species: c.species,
+                sizeInches: c.size_inches,
+                weightLb: c.weight_lb ?? null,
+              }));
+              await maybeNotifyStreaksAndMilestones(streakTrips, milestoneCatches);
+            }
+          } catch (e) {
+            console.warn('[WS-G] post-trip notifications failed', e);
+          }
+        })();
 
         if (!get().isOnline) {
           try {

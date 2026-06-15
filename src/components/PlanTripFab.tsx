@@ -1,5 +1,6 @@
 import { TAB_BAR_EXTRA } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { useRequireAuth } from '@/src/auth/useRequireAuth';
 import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -128,6 +129,7 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   const fabWrapRef = useRef<View>(null);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const requireAuth = useRequireAuth();
   const mapAddLocationOpen = useAddLocationFlowStore((s) => s.mapSheetActive);
   const tabBarMode = placement === 'tabBar';
 
@@ -187,18 +189,22 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
 
   const onPlanTrip = useCallback(() => {
     closeMenu();
+    // Trips are account-bound: a guest must sign in before planning/starting one (WS-B).
+    if (!requireAuth('Sign in to plan a trip.')) return;
     router.push({ pathname: '/trip/new', params: { fromHome: '1' } });
-  }, [closeMenu, router]);
+  }, [closeMenu, requireAuth, router]);
 
   const onFishNow = useCallback(() => {
     closeMenu();
+    if (!requireAuth('Sign in to start a trip.')) return;
     router.push('/trip/fish-now');
-  }, [closeMenu, router]);
+  }, [closeMenu, requireAuth, router]);
 
   const onLogPastTrips = useCallback(() => {
     closeMenu();
+    if (!requireAuth('Sign in to log past trips.')) return;
     router.push('/trip/import-past');
-  }, [closeMenu, router]);
+  }, [closeMenu, requireAuth, router]);
 
   if (hideDuringAddLocation) {
     return null;

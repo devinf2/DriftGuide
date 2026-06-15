@@ -5,6 +5,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -368,6 +369,24 @@ export default function FriendsScreen() {
 
   const hasFriendCode = Boolean(profile?.friend_code?.trim());
 
+  /** Prominent cold-start CTA: share your friend code so a brand-new angler can add their first friend. */
+  const handleShareFriendCode = async () => {
+    const code = profile?.friend_code?.trim();
+    if (!code) {
+      Alert.alert('No friend code yet', 'Claim a friend code above, then share it with friends.');
+      return;
+    }
+    const shown = formatFriendCodeForDisplay(code);
+    try {
+      await Share.share({
+        message: `Add me on DriftGuide — my friend code is ${shown}.`,
+        title: 'My DriftGuide friend code',
+      });
+    } catch {
+      // user cancelled or share unavailable — no-op
+    }
+  };
+
   const handleAcceptSessionInvite = async (inv: SessionInvite) => {
     router.push(buildLinkTripAfterAcceptPath(inv) as Href);
     void loadSessionInvites();
@@ -393,7 +412,16 @@ export default function FriendsScreen() {
           <MaterialIcons name="arrow-back" size={22} color={colors.text} />
         </Pressable>
         <Text style={[styles.topTitle, { color: colors.text }]}>Friends</Text>
-        <View style={{ width: 40 }} />
+        {/* WS-H: entry point into the social feed. TODO: a dedicated bottom-tab/link could live in app/(tabs)/_layout.tsx (owned elsewhere). */}
+        <Pressable
+          onPress={() => router.push('/feed' as Href)}
+          hitSlop={12}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Open feed"
+        >
+          <MaterialIcons name="rss-feed" size={22} color={colors.text} />
+        </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -527,7 +555,32 @@ export default function FriendsScreen() {
         {seg === 'friends' ? (
           <View style={styles.section}>
             {acceptedFriends.length === 0 ? (
-              <Text style={{ color: colors.textSecondary }}>No friends yet. Use Find to add people.</Text>
+              <View style={[styles.emptyFriendsCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+                <MaterialIcons name="group-add" size={40} color={colors.textTertiary} />
+                <Text style={[styles.emptyFriendsTitle, { color: colors.text }]}>No friends yet</Text>
+                <Text style={[styles.emptyFriendsBody, { color: colors.textSecondary }]}>
+                  Share your friend code so friends can add you, then plan trips and compare catches
+                  together.
+                </Text>
+                <Pressable
+                  style={[styles.shareCodeBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => void handleShareFriendCode()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Share your friend code"
+                >
+                  <MaterialIcons name="share" size={18} color={colors.textInverse} />
+                  <Text style={[styles.shareCodeBtnText, { color: colors.textInverse }]}>
+                    {hasFriendCode
+                      ? `Share my code · ${formatFriendCodeForDisplay(profile!.friend_code!)}`
+                      : 'Share my friend code'}
+                  </Text>
+                </Pressable>
+                <Pressable onPress={() => setSeg('find')} hitSlop={8}>
+                  <Text style={[styles.emptyFriendsLink, { color: colors.secondary }]}>
+                    Or find someone by code or name
+                  </Text>
+                </Pressable>
+              </View>
             ) : (
               acceptedFriends.map((f) => {
                 const oid = otherUserIdFromFriendship(f, myId);
@@ -806,4 +859,30 @@ const styles = StyleSheet.create({
   },
   findRequestBtnText: { fontSize: FontSize.sm, fontWeight: '600' },
   findStatusLabel: { fontSize: FontSize.sm, fontWeight: '600' },
+  emptyFriendsCard: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  emptyFriendsTitle: { fontSize: FontSize.lg, fontWeight: '700', marginTop: Spacing.xs },
+  emptyFriendsBody: {
+    fontSize: FontSize.sm,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: Spacing.xs,
+  },
+  shareCodeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.md,
+    alignSelf: 'stretch',
+  },
+  shareCodeBtnText: { fontSize: FontSize.md, fontWeight: '700' },
+  emptyFriendsLink: { fontSize: FontSize.sm, fontWeight: '600', marginTop: Spacing.xs },
 });

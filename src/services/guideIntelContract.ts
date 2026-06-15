@@ -13,7 +13,8 @@ export type GuideIntelAction =
   | 'guide_greeting'
   | 'how_to_fish'
   | 'fly_of_the_day'
-  | 'extract_locations';
+  | 'extract_locations'
+  | 'identify_bug';
 
 /** Citation returned from Edge (USGS + model-attributed web-style refs). */
 export type GuideIntelSource = {
@@ -135,6 +136,29 @@ export type GuideIntelExtractLocationsPayload = GuideIntelRequestBase & {
   question: string;
 };
 
+/**
+ * Bug Matcher AI photo ID (WS-F). Vision call: the edge sends the image to a
+ * vision-capable model and returns strict JSON `{ insect, category, lifeStage,
+ * confidence, flies, note }`.
+ */
+export type GuideIntelIdentifyBugPayload = GuideIntelRequestBase & {
+  action: 'identify_bug';
+  /** Data URL or remote https URL for the bug photo (model image content part). */
+  imageUrl: string;
+};
+
+export type GuideIntelIdentifyBugResult = {
+  insect: string;
+  /** One of the hatch categories, or 'unknown' when the model can't tell. */
+  category: string;
+  lifeStage: string;
+  /** 0–1 model confidence. */
+  confidence: number;
+  /** Suggested fly NAMES; client maps through getBundledFlyImageSource. */
+  flies: string[];
+  note: string;
+};
+
 export type GuideIntelRequestBody =
   | GuideIntelChatPayload
   | GuideIntelFlyRecPayload
@@ -143,7 +167,8 @@ export type GuideIntelRequestBody =
   | GuideIntelHatchPayload
   | GuideIntelSpotTextPayload
   | GuideIntelFlyOfDayPayload
-  | GuideIntelExtractLocationsPayload;
+  | GuideIntelExtractLocationsPayload
+  | GuideIntelIdentifyBugPayload;
 
 export type GuideIntelErrorBody = { error: string; code?: string };
 

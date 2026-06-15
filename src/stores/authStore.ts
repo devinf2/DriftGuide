@@ -14,6 +14,8 @@ import { edgeFunctionInvokeHeaders, supabase } from '@/src/services/supabase';
 import { clearTripPhotoOfflineCache } from '@/src/services/tripPhotoOfflineCache';
 import { useThemeStore } from '@/src/stores/themeStore';
 import { useTripStore } from '@/src/stores/tripStore';
+import { isUsCountry } from '@/src/constants/countries';
+import { validateProfileOnboarding } from '@/src/utils/profileOnboarding';
 
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email/username or password.';
 
@@ -26,6 +28,12 @@ interface AuthState {
   isProfileLoading: boolean;
   /** After opening a password-reset deep link; cleared when the user sets a new password or signs out. */
   passwordRecoveryPending: boolean;
+  /**
+   * Contextual prompt shown on the auth screen when a guest taps an account-bound action
+   * (e.g. "Sign in to save your trip"). Null for the cold-start / generic sign-in case.
+   */
+  authPromptMessage: string | null;
+  setAuthPromptMessage: (message: string | null) => void;
   setPasswordRecoveryPending: (pending: boolean) => void;
   setSession: (session: Session | null) => void;
   /** If `getSession()` throws during cold start, clear splash without guessing session. */
@@ -44,7 +52,10 @@ interface AuthState {
   completeProfileOnboarding: (input: {
     firstName: string;
     lastName: string;
-    homeState: string;
+    /** Country name or ISO 3166-1 alpha-2 code (required). */
+    homeCountry: string;
+    /** Region/state within the country (optional). For US this is the state. */
+    homeRegion?: string;
     darkModeEnabled: boolean;
     defaultTripPhotoVisibility: TripPhotoVisibility;
   }) => Promise<{ error: string | null }>;
@@ -63,6 +74,9 @@ export const useAuthStore = create<AuthState>()(
       isLoading: true,
       isProfileLoading: false,
       passwordRecoveryPending: false,
+      authPromptMessage: null,
+
+      setAuthPromptMessage: (message) => set({ authPromptMessage: message }),
 
       setPasswordRecoveryPending: (pending) => set({ passwordRecoveryPending: pending }),
 
@@ -72,7 +86,8 @@ export const useAuthStore = create<AuthState>()(
           user: session?.user ?? null,
           isLoading: false,
           isProfileLoading: Boolean(session),
-          ...(session ? {} : { profile: null }),
+          // A real session arrived (any sign-in path) → drop any pending "sign in to…" prompt.
+          ...(session ? { authPromptMessage: null } : { profile: null }),
         });
       },
 
@@ -251,7 +266,8 @@ export const useAuthStore = create<AuthState>()(
       completeProfileOnboarding: async ({
         firstName,
         lastName,
-        homeState,
+        homeCountry,
+        homeRegion,
         darkModeEnabled,
         defaultTripPhotoVisibility,
       }) => {
@@ -260,19 +276,31 @@ export const useAuthStore = create<AuthState>()(
 
         const fn = firstName.trim();
         const ln = lastName.trim();
-        const hs = homeState.trim();
-        if (!fn || !ln) return { error: 'Please enter your first and last name.' };
-        if (!hs) return { error: 'Please choose your home state.' };
+        const hc = homeCountry.trim();
+        const hr = homeRegion?.trim() ?? '';
+        const validation = validateProfileOnboarding({
+          firstName,
+          lastName,
+          homeCountry,
+          homeRegion,
+        });
+        if (validation.error) return { error: validation.error };
 
         const combined = [fn, ln].filter(Boolean).join(' ');
         const display_name = combined || get().profile?.display_name?.trim() || 'Angler';
+
+        // Backward-compat: keep `home_state` populated for US so the offline snapshot
+        // bbox filter still works; clear it for non-US so a stale US state can't apply.
+        const homeStateForCompat = isUsCountry(hc) ? hr || null : null;
 
         const { error } = await supabase
           .from('profiles')
           .update({
             first_name: fn,
             last_name: ln,
-            home_state: hs,
+            home_country: hc,
+            home_region: hr || null,
+            home_state: homeStateForCompat,
             display_name,
             onboarding_completed_at: new Date().toISOString(),
             default_trip_photo_visibility: defaultTripPhotoVisibility,

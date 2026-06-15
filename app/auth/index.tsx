@@ -2,8 +2,10 @@ import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constan
 import { getAuthCallbackRedirectUri } from '@/src/auth/googleOAuth';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { Ionicons } from '@expo/vector-icons';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Linking from 'expo-linking';
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
@@ -45,6 +47,26 @@ function createStyles(colors: ThemeColors) {
       fontSize: FontSize.md,
       color: colors.textSecondary,
       marginTop: Spacing.xs,
+    },
+    dismissButton: {
+      position: 'absolute',
+      top: Spacing.sm,
+      right: Spacing.md,
+      zIndex: 2,
+      padding: Spacing.xs,
+    },
+    promptBanner: {
+      marginTop: Spacing.md,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderRadius: BorderRadius.md,
+      backgroundColor: colors.primary + '18',
+    },
+    promptText: {
+      fontSize: FontSize.md,
+      fontWeight: '600',
+      color: colors.primary,
+      textAlign: 'center',
     },
     form: {
       gap: Spacing.md,
@@ -202,8 +224,22 @@ export default function AuthScreen() {
   const [resetBanner, setResetBanner] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const { signIn, signUp, signInWithGoogle, signInWithApple, requestPasswordReset } = useAuthStore();
+  // Contextual prompt set by requireAuth (e.g. "Sign in to start a trip."); guests can dismiss back.
+  const authPromptMessage = useAuthStore((s) => s.authPromptMessage);
+  const session = useAuthStore((s) => s.session);
+  const setAuthPromptMessage = useAuthStore((s) => s.setAuthPromptMessage);
+  const router = useRouter();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Only a guest who reached this screen contextually can dismiss it; the cold-start signed-out
+  // case has nothing to go back to (the gate keeps them here until they sign in).
+  const dismissible = session == null && router.canGoBack();
+
+  const handleDismiss = () => {
+    setAuthPromptMessage(null);
+    if (router.canGoBack()) router.back();
+  };
 
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -295,6 +331,17 @@ export default function AuthScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        {dismissible ? (
+          <Pressable
+            style={styles.dismissButton}
+            onPress={handleDismiss}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Continue browsing without signing in"
+          >
+            <Ionicons name="close" size={26} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Image
@@ -303,6 +350,11 @@ export default function AuthScreen() {
               resizeMode="contain"
             />
             <Text style={styles.subtitle}>Your AI fishing companion</Text>
+            {authPromptMessage ? (
+              <View style={styles.promptBanner}>
+                <Text style={styles.promptText}>{authPromptMessage}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.form}>

@@ -4,6 +4,7 @@ import {
   JournalTripGridCard,
 } from '@/src/components/journal/journalTripGrid';
 import { CatalogLocationMapIcon } from '@/src/components/map/catalogLocationMapIcon';
+import { requestOpenPlanTripMenuFromTabBar } from '@/src/components/PlanTripFab';
 import { TripMapboxMapView, type MapboxMapMarker } from '@/src/components/map/TripMapboxMapView';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '@/src/constants/mapDefaults';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -546,17 +547,42 @@ export default function JournalScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <MaterialIcons name="route" size={48} color={colors.textTertiary} />
-              <Text style={styles.emptyTitle}>
-                {dateRange === 'all' ? 'No trips yet' : 'No trips in this period'}
-              </Text>
-              <Text style={styles.emptyText}>
-                {dateRange === 'all'
-                  ? 'Complete your first trip to begin building your fishing journal.'
-                  : 'Try selecting a different date range.'}
-              </Text>
-            </View>
+            dateRange === 'all' ? (
+              <View style={styles.empty}>
+                <MaterialIcons name="route" size={48} color={colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No trips yet</Text>
+                <Text style={styles.emptyText}>
+                  Start your first trip and DriftGuide builds your journal automatically. Here&apos;s
+                  what a logged trip looks like:
+                </Text>
+                {/* Illustrative preview of a completed-trip card so a brand-new angler sees the payoff. */}
+                <View style={styles.emptyPreviewCard} pointerEvents="none">
+                  <View style={styles.emptyPreviewThumb}>
+                    <MaterialCommunityIcons name="fish" size={28} color={colors.textTertiary} />
+                  </View>
+                  <View style={styles.emptyPreviewBody}>
+                    <Text style={styles.emptyPreviewTitle}>Provo River</Text>
+                    <Text style={styles.emptyPreviewMeta}>5 fish · 2h 15m · Zebra Midge #20</Text>
+                    <Text style={styles.emptyPreviewMeta}>Sample entry</Text>
+                  </View>
+                </View>
+                <Pressable
+                  style={styles.emptyCtaBtn}
+                  onPress={() => requestOpenPlanTripMenuFromTabBar()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Start your first trip"
+                >
+                  <MaterialCommunityIcons name="plus" size={20} color={colors.textInverse} />
+                  <Text style={styles.emptyCtaBtnText}>Start your first trip</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <MaterialIcons name="route" size={48} color={colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No trips in this period</Text>
+                <Text style={styles.emptyText}>Try selecting a different date range.</Text>
+              </View>
+            )
           }
         />
       )}
@@ -944,6 +970,56 @@ function createJournalStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     color: colors.textSecondary,
     textAlign: 'center',
     marginTop: Spacing.sm,
+  },
+  emptyPreviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginTop: Spacing.lg,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    opacity: 0.85,
+  },
+  emptyPreviewThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyPreviewBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  emptyPreviewTitle: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  emptyPreviewMeta: {
+    fontSize: FontSize.sm,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  emptyCtaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    marginTop: Spacing.lg,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+    borderRadius: BorderRadius.md,
+    backgroundColor: colors.primary,
+  },
+  emptyCtaBtnText: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: colors.textInverse,
   },
 
   // Map view

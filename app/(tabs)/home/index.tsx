@@ -2,6 +2,8 @@ import GuideChat from '@/src/components/GuideChat';
 import { FishHomeHatchSection } from '@/src/components/home/FishHomeHatchSection';
 import { FishHomeIntro } from '@/src/components/home/FishHomeIntro';
 import { FishHomePlannedSection } from '@/src/components/home/FishHomePlannedSection';
+import { FishHomeRightNow } from '@/src/components/home/FishHomeRightNow';
+import { StreakMilestoneCard } from '@/src/components/home/StreakMilestoneCard';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { FishHomeSpotsSection } from '@/src/components/home/FishHomeSpotsSection';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -27,7 +29,7 @@ import { profileFirstName } from '@/src/utils/profileDisplay';
 import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Alert,
   Modal,
@@ -378,6 +380,13 @@ export default function HomeScreen() {
     fullHome,
     briefingRefreshKey,
   );
+
+  /**
+   * WS-G insertion point: a self-contained streak/milestone card mounts at the top of the home
+   * layout (rendered just above the "Right now near you" hero). It renders nothing until there's
+   * a streak/PB/milestone, so a guest/new user with no data sees nothing.
+   */
+  const homeMilestoneSlot: ReactNode = <StreakMilestoneCard />;
   const setFromHomeHotSpots = usePlanTripHomeSuggestionsStore((s) => s.setFromHomeHotSpots);
 
   useEffect(() => {
@@ -534,6 +543,11 @@ export default function HomeScreen() {
     [router],
   );
 
+  /** Location-denied / no-GPS fallback for the "Right now near you" hero: send to the map to pick a region. */
+  const openMap = useCallback(() => {
+    router.push('/map');
+  }, [router]);
+
   const showInviteNotificationBell = sessionInviteRows.length > 0 && Boolean(user?.id);
 
   const inviteBellAccessory = useMemo(() => {
@@ -611,18 +625,35 @@ export default function HomeScreen() {
           listHeaderComponent={
             showHomeDiscoveryInChat ? (
               <View>
+                {/* WS-G INSERTION POINT: mount a self-contained streak/milestone card here. */}
+                {/* Drop your component in this slot (it renders above the hero) — no restructuring needed. */}
+                {homeMilestoneSlot}
+
                 <FishHomeIntro
                   userFirstName={profileFirstName(profile)}
                   briefingLoading={hotSpotLoading}
                   rankedWatersCount={hotSpotList.length}
                 />
-                <FishHomePlannedSection
-                  plannedTrips={plannedTrips}
-                  plannedTripsLoading={plannedTripsLoading}
-                  onStartTrip={handleStartPlannedTrip}
-                  onDeleteTrip={handleDeletePlannedTrip}
-                  onOpenGroupPeople={user?.id ? handleOpenPlannedGroupPeople : undefined}
+
+                {/* "Right now near you": where to fish + what to tie on, zero data entry; renders for guests. */}
+                <FishHomeRightNow
+                  rankedWatersCount={hotSpotList.length}
+                  userCoords={userCoords}
+                  userId={user?.id ?? null}
+                  topWaterName={hotSpotList[0]?.location.name ?? null}
+                  onBrowseMap={openMap}
                 />
+
+                {/* Planned trips are a signed-in feature — a guest/new user shouldn't see empty scaffolding. */}
+                {user?.id ? (
+                  <FishHomePlannedSection
+                    plannedTrips={plannedTrips}
+                    plannedTripsLoading={plannedTripsLoading}
+                    onStartTrip={handleStartPlannedTrip}
+                    onDeleteTrip={handleDeletePlannedTrip}
+                    onOpenGroupPeople={handleOpenPlannedGroupPeople}
+                  />
+                ) : null}
                 <FishHomeHatchSection loading={hatchLoading} rows={hatchRows} />
                 <FishHomeSpotsSection
                   hotSpotLoading={hotSpotLoading}

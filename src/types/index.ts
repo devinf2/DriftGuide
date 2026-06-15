@@ -40,8 +40,12 @@ export interface Profile {
   created_at: string;
   /** Public Supabase Storage URL for profile image (photos bucket). */
   avatar_url?: string | null;
-  /** US home state (full name or 2-letter code) for offline catalog snapshot. */
+  /** US home state (full name or 2-letter code) for offline catalog snapshot. Kept for US backward-compat. */
   home_state?: string | null;
+  /** Home country (full name or ISO 3166-1 alpha-2 code). Required at onboarding. */
+  home_country?: string | null;
+  /** Home region/state within the country (free text; US states also mirrored to home_state). */
+  home_region?: string | null;
   /** Set when the user finishes first-run profile onboarding in the app. */
   onboarding_completed_at?: string | null;
   /** Set when the user closed their account (soft delete); app signs out and blocks use. */
@@ -64,6 +68,48 @@ export interface FriendshipRow {
   requested_by: string;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Social feed (WS-H). Posts reuse the TripPhotoVisibility vocabulary.
+// ---------------------------------------------------------------------------
+
+/** Reaction kinds — must match the post_reactions CHECK in migration 117. */
+export type PostReaction = 'fire' | 'fish' | 'like' | 'net' | 'wow';
+export const POST_REACTIONS: PostReaction[] = ['fire', 'fish', 'like', 'net', 'wow'];
+
+/** DB row: posts table. */
+export interface PostRow {
+  id: string;
+  author_id: string;
+  trip_id: string | null;
+  catch_event_id: string | null;
+  caption: string | null;
+  species: string | null;
+  size_inches: number | null;
+  fly_name: string | null;
+  /** From catches.caught_by_user_id (115); null = the author caught it. */
+  caught_by_user_id: string | null;
+  /** Array of remote https photo urls captured at publish time. */
+  media: string[];
+  visibility: TripPhotoVisibility;
+  created_at: string;
+  deleted_at?: string | null;
+}
+
+/** One aggregated reaction bucket for a post (from post_reactions_summary RPC). */
+export interface PostReactionSummary {
+  post_id: string;
+  reaction: PostReaction;
+  count: number;
+  reacted_by_me: boolean;
+}
+
+/** A post plus the author profile + reaction summary, assembled client-side for the feed UI. */
+export interface FeedPost {
+  post: PostRow;
+  author: Profile | null;
+  reactions: PostReactionSummary[];
 }
 
 export type SessionMemberRole = 'owner' | 'member';
