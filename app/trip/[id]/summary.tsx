@@ -31,6 +31,7 @@ import {
   showTripPhotoVisibilityInfoAlert,
   TRIP_PHOTO_VISIBILITY_TRIGGER_LABELS,
 } from '@/src/constants/tripPhotoVisibility';
+import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { fetchTripById, fetchTripEvents, fetchTripShareAccess, fetchTripsFromCloud, syncTripToCloud, type TripShareAccess } from '@/src/services/sync';
 import { fetchPhotos, fetchPhotosVisibleForTripIds } from '@/src/services/photoService';
 import { listTripsInSession } from '@/src/services/sharedSessionService';
@@ -170,6 +171,8 @@ export default function TripSummaryScreen() {
   // the native Share sheet (or another Modal) while this Modal is still animating out
   // silently fails, so we defer the action to the Modal's onDismiss callback.
   const pendingMenuActionRef = useRef<(() => void) | null>(null);
+  // Tracks the last trip id we fired trip_complete for, so re-renders don't double-count.
+  const trackedTripCompleteIdRef = useRef<string | null>(null);
   const [photoVisSaving, setPhotoVisSaving] = useState(false);
   const [visibilityPickerOpen, setVisibilityPickerOpen] = useState(false);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
@@ -265,6 +268,14 @@ export default function TripSummaryScreen() {
       cancelled = true;
     };
   }, [id, user?.id, isConnected]);
+
+  // Fire trip_complete once per completed trip the owner views (de-duped by id via ref).
+  useEffect(() => {
+    if (!trip || trip.status !== 'completed' || trip.user_id !== user?.id) return;
+    if (trackedTripCompleteIdRef.current === trip.id) return;
+    trackedTripCompleteIdRef.current = trip.id;
+    track(AnalyticsEvents.TRIP_COMPLETE, { trip_id: trip.id });
+  }, [trip, user?.id]);
 
   // Viewer-aware visibility gate for shared links. Only meaningful online; offline we keep the
   // existing local-trip behavior (own trips load from the pending bundle / cache).
@@ -696,6 +707,7 @@ export default function TripSummaryScreen() {
     // is unset, fall back to the app deep link so the sheet still opens with something usable.
     const link = buildShareTripUrl(trip.id) ?? `driftguide://trip/${trip.id}/summary`;
     try {
+      track(AnalyticsEvents.SHARE_SENT, { trip_id: trip.id });
       await Share.share({ message: link });
     } catch {
       /* dismissed */

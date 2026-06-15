@@ -17,6 +17,7 @@ import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
+import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { fetchLocationConditions, getDriftGuideScore, getWeatherIconName } from '@/src/services/conditions';
 import {
   getSpotFishingSummary,
@@ -289,6 +290,10 @@ export default function SpotFishingTripScreen() {
   useEffect(() => {
     if (locations.length === 0) fetchLocations();
   }, [locations.length, fetchLocations]);
+
+  useEffect(() => {
+    if (id) track(AnalyticsEvents.SPOT_VIEW, { spot_id: id });
+  }, [id]);
 
   useEffect(() => {
     (async () => {
