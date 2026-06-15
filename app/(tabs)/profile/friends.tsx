@@ -393,7 +393,16 @@ export default function FriendsScreen() {
           <MaterialIcons name="arrow-back" size={22} color={colors.text} />
         </Pressable>
         <Text style={[styles.topTitle, { color: colors.text }]}>Friends</Text>
-        <View style={{ width: 40 }} />
+        {/* WS-H: entry point into the social feed. TODO: a dedicated bottom-tab/link could live in app/(tabs)/_layout.tsx (owned elsewhere). */}
+        <Pressable
+          onPress={() => router.push('/feed' as Href)}
+          hitSlop={12}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Open feed"
+        >
+          <MaterialIcons name="rss-feed" size={22} color={colors.text} />
+        </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
