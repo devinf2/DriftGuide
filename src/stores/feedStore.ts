@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import {
   addReaction,
   fetchFeedPage,
+  fetchMyPosts,
   removeReaction,
 } from '@/src/services/feedService';
 import type { FeedPost, PostReaction } from '@/src/types';
@@ -12,6 +13,14 @@ import {
   toggleReactionSummary,
   type FeedMode,
 } from '@/src/utils/feed';
+
+/** Fetch a page for any mode — 'mine' reads the posts table, others use the feed RPCs. */
+function fetchPage(
+  mode: FeedMode,
+  opts?: { limit?: number; before?: string | null },
+): Promise<FeedPost[]> {
+  return mode === 'mine' ? fetchMyPosts(opts) : fetchFeedPage(mode, opts);
+}
 
 type ModeState = {
   posts: FeedPost[];
@@ -40,19 +49,22 @@ type FeedState = {
   toggleReaction: (mode: FeedMode, postId: string, reaction: PostReaction) => Promise<void>;
   /** Drop a post from all modes (after the author deletes / a viewer blocks the author). */
   removePostEverywhere: (postId: string) => void;
+  /** Update a post's comment count across modes (after add/delete in the comments sheet). */
+  setCommentCount: (postId: string, count: number) => void;
 };
 
 export const useFeedStore = create<FeedState>((set, get) => ({
-  byMode: { friends: emptyMode(), discover: emptyMode() },
+  byMode: { friends: emptyMode(), discover: emptyMode(), mine: emptyMode() },
 
-  reset: () => set({ byMode: { friends: emptyMode(), discover: emptyMode() } }),
+  reset: () =>
+    set({ byMode: { friends: emptyMode(), discover: emptyMode(), mine: emptyMode() } }),
 
   load: async (mode) => {
     const current = get().byMode[mode];
     if (current.loading) return;
     set((s) => ({ byMode: { ...s.byMode, [mode]: { ...current, loading: true, error: null } } }));
     try {
-      const page = await fetchFeedPage(mode, { limit: FEED_PAGE_SIZE });
+      const page = await fetchPage(mode, { limit: FEED_PAGE_SIZE });
       set((s) => ({
         byMode: {
           ...s.byMode,
@@ -81,7 +93,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
   refresh: async (mode) => {
     set((s) => ({ byMode: { ...s.byMode, [mode]: { ...s.byMode[mode], refreshing: true } } }));
     try {
-      const page = await fetchFeedPage(mode, { limit: FEED_PAGE_SIZE });
+      const page = await fetchPage(mode, { limit: FEED_PAGE_SIZE });
       set((s) => ({
         byMode: {
           ...s.byMode,
@@ -105,7 +117,7 @@ export const useFeedStore = create<FeedState>((set, get) => ({
     const before = current.posts[current.posts.length - 1]?.post.created_at ?? null;
     set((s) => ({ byMode: { ...s.byMode, [mode]: { ...current, loadingMore: true } } }));
     try {
-      const page = await fetchFeedPage(mode, { limit: FEED_PAGE_SIZE, before });
+      const page = await fetchPage(mode, { limit: FEED_PAGE_SIZE, before });
       set((s) => {
         const existing = s.byMode[mode];
         const seen = new Set(existing.posts.map((p) => p.post.id));
@@ -164,6 +176,20 @@ export const useFeedStore = create<FeedState>((set, get) => ({
       const next = { ...s.byMode };
       for (const m of Object.keys(next) as FeedMode[]) {
         next[m] = { ...next[m], posts: next[m].posts.filter((p) => p.post.id !== postId) };
+      }
+      return { byMode: next };
+    }),
+
+  setCommentCount: (postId, count) =>
+    set((s) => {
+      const next = { ...s.byMode };
+      for (const m of Object.keys(next) as FeedMode[]) {
+        next[m] = {
+          ...next[m],
+          posts: next[m].posts.map((p) =>
+            p.post.id === postId ? { ...p, commentCount: count } : p,
+          ),
+        };
       }
       return { byMode: next };
     }),

@@ -6,13 +6,15 @@ import type {
   TripPhotoVisibility,
 } from '@/src/types';
 
-export type FeedMode = 'friends' | 'discover';
+export type FeedMode = 'friends' | 'discover' | 'mine';
+/** Modes backed by a server RPC. 'mine' reads the posts table directly instead. */
+export type ServerFeedMode = 'friends' | 'discover';
 
 export const FEED_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 
-/** RPC name for a feed mode. */
-export function feedRpcName(mode: FeedMode): 'feed_friends' | 'feed_discover' {
+/** RPC name for a server-backed feed mode. */
+export function feedRpcName(mode: ServerFeedMode): 'feed_friends' | 'feed_discover' {
   return mode === 'discover' ? 'feed_discover' : 'feed_friends';
 }
 
@@ -105,6 +107,20 @@ export function toggleReactionSummary(
     .filter((r) => r.count > 0);
 }
 
+const PRESENTATION_LABEL: Record<string, string> = {
+  dry: 'Dry',
+  nymph: 'Nymph',
+  streamer: 'Streamer',
+  wet: 'Wet',
+  other: 'Other',
+};
+
+/** Human label for a presentation method value (falls back to the raw value). */
+export function presentationLabel(value?: string | null): string | null {
+  if (!value) return null;
+  return PRESENTATION_LABEL[value] ?? value;
+}
+
 /** Build the denormalized "who caught it" label for a post card. */
 export function caughtByLabel(
   post: Pick<PostRow, 'author_id' | 'caught_by_user_id'>,
@@ -128,6 +144,9 @@ export function normalizePostRow(raw: Record<string, unknown>): PostRow {
     species: (raw.species as string | null) ?? null,
     size_inches: raw.size_inches == null ? null : Number(raw.size_inches),
     fly_name: (raw.fly_name as string | null) ?? null,
+    depth_ft: raw.depth_ft == null ? null : Number(raw.depth_ft),
+    presentation: (raw.presentation as string | null) ?? null,
+    location_name: (raw.location_name as string | null) ?? null,
     caught_by_user_id: (raw.caught_by_user_id as string | null) ?? null,
     media,
     visibility: (raw.visibility as TripPhotoVisibility) ?? 'friends_only',

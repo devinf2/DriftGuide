@@ -337,6 +337,30 @@ export default function TripSummaryScreen() {
     [mergedAlbumPhotos],
   );
 
+  /**
+   * Every shareable remote photo for this trip: album/scenery rows plus each catch's
+   * photos (which may live only in the catch-event JSON, not the `photos` table).
+   * Deduped, https only — so "Share to feed" pulls in the full trip, not just album rows.
+   */
+  const shareablePhotoUrls = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (url: string | null | undefined) => {
+      const t = url?.trim();
+      if (!t || seen.has(t) || !/^https?:\/\//i.test(t)) return;
+      seen.add(t);
+      out.push(t);
+    };
+    for (const p of tripPhotos) push(p.url);
+    for (const e of events) {
+      if (e.event_type !== 'catch') continue;
+      for (const u of resolveCatchDisplayPhotoUrls(e.id, e.data as CatchData, albumPhotoUrlsByCatchId)) {
+        push(u);
+      }
+    }
+    return out;
+  }, [tripPhotos, events, albumPhotoUrlsByCatchId]);
+
   const handleSessionChanged = useCallback((sid: string | null) => {
     setTrip((prev) => (prev ? { ...prev, shared_session_id: sid } : null));
   }, []);
@@ -1128,7 +1152,8 @@ export default function TripSummaryScreen() {
           visible={shareToFeedOpen}
           draft={{
             tripId: trip.id,
-            media: tripPhotos.map((p) => p.url),
+            locationName: trip.location?.name ?? null,
+            media: shareablePhotoUrls,
           }}
           onClose={() => setShareToFeedOpen(false)}
           onPosted={() => setShareToFeedOpen(false)}

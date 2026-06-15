@@ -352,9 +352,20 @@ function ThemedNavigation() {
             name="session/link-trip"
             options={{ headerShown: false, animation: 'slide_from_right' }}
           />
+          <Stack.Screen
+            name="post/new"
+            options={{ headerShown: false, animation: 'slide_from_right' }}
+          />
           <Stack.Screen name="photos" options={{ headerShown: false }} />
           <Stack.Screen
             name="fly-box"
+            options={{
+              headerShown: false,
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="bug-matcher"
             options={{
               headerShown: false,
               animation: 'slide_from_right',

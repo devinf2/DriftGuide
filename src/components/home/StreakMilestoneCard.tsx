@@ -19,7 +19,15 @@ import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constan
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useStreakMilestoneSummary } from '@/src/hooks/useStreakMilestoneSummary';
 
-export function StreakMilestoneCard() {
+type StreakMilestoneCardProps = {
+  /**
+   * 'card' (default) renders the full-width home card.
+   * 'badge' renders a compact pill meant to overlay the hero photo (top-right).
+   */
+  variant?: 'card' | 'badge';
+};
+
+export function StreakMilestoneCard({ variant = 'card' }: StreakMilestoneCardProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
@@ -27,6 +35,7 @@ export function StreakMilestoneCard() {
 
   // Build the headline. Priority: at-risk streak > active streak > new milestone
   // > personal best. Render nothing if none apply (keeps the home screen clean).
+  // `badgeLabel` is the short form shown when this is rendered as an overlay pill.
   const content = useMemo(() => {
     if (!summary) return null;
     const { streak, speciesMilestone, personalBests } = summary;
@@ -36,6 +45,7 @@ export function StreakMilestoneCard() {
         icon: 'fire' as const,
         title: `${streak.current}-week streak at risk`,
         subtitle: 'Fish this week to keep it alive.',
+        badgeLabel: `${streak.current}w`,
       };
     }
     if (streak.current >= 2) {
@@ -46,6 +56,7 @@ export function StreakMilestoneCard() {
           streak.longest > streak.current
             ? `Your best is ${streak.longest} weeks.`
             : "That's your best run yet.",
+        badgeLabel: `${streak.current}w`,
       };
     }
     if (speciesMilestone.crossedThreshold != null) {
@@ -53,6 +64,7 @@ export function StreakMilestoneCard() {
         icon: 'trophy-variant' as const,
         title: `${speciesMilestone.distinctSpecies} species landed`,
         subtitle: `You've passed the ${speciesMilestone.crossedThreshold}-species milestone.`,
+        badgeLabel: `${speciesMilestone.distinctSpecies}`,
       };
     }
     if (personalBests.biggestBySizeInches != null) {
@@ -61,12 +73,30 @@ export function StreakMilestoneCard() {
         icon: 'fish' as const,
         title: 'Personal best',
         subtitle: `Your biggest ${sp}is ${personalBests.biggestBySizeInches}".`,
+        badgeLabel: 'PB',
       };
     }
     return null;
   }, [summary]);
 
   if (!content) return null;
+
+  if (variant === 'badge') {
+    return (
+      <Pressable
+        style={styles.badge}
+        onPress={() => router.push('/profile/stats')}
+        accessibilityRole="button"
+        accessibilityLabel={`${content.title}. ${content.subtitle}`}
+        hitSlop={8}
+      >
+        <MaterialCommunityIcons name={content.icon} size={15} color="#FFFFFF" />
+        <Text style={styles.badgeLabel} numberOfLines={1}>
+          {content.badgeLabel}
+        </Text>
+      </Pressable>
+    );
+  }
 
   return (
     <Pressable
@@ -121,5 +151,24 @@ function createStyles(colors: ThemeColors) {
     textWrap: { flex: 1 },
     title: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
     subtitle: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    badge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: 5,
+      paddingHorizontal: 9,
+      borderRadius: BorderRadius.full,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: 'rgba(255,255,255,0.25)',
+    },
+    badgeLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '800',
+      color: '#FFFFFF',
+      textShadowColor: 'rgba(0,0,0,0.5)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 3,
+    },
   });
 }

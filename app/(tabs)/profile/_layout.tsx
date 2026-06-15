@@ -47,7 +47,7 @@ export default function ProfileTabLayout() {
         name="friends"
         options={{
           title: 'Friends',
-          headerShown: false,
+          headerBackTitle: 'Profile',
         }}
       />
       <Stack.Screen

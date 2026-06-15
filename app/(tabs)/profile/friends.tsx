@@ -39,7 +39,6 @@ import {
 import type { FriendshipRow, SessionInvite } from '@/src/types';
 import { formatPendingSessionInviteSummary } from '@/src/utils/sessionInviteDisplay';
 import { buildLinkTripAfterAcceptPath } from '@/src/utils/sessionInviteNavigation';
-import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { profileInitialLetter } from '@/src/utils/profileDisplay';
 
@@ -73,7 +72,6 @@ export default function FriendsScreen() {
   const { colors } = useAppTheme();
   const router = useRouter();
   const { seg: segParam } = useLocalSearchParams<{ seg?: string | string[] }>();
-  const effectiveTop = useEffectiveSafeTopInset();
   const { user, profile, fetchProfile } = useAuthStore();
   const { friendships, loading, refresh, accept, remove } = useFriendsStore();
   const { isConnected } = useNetworkStatus();
@@ -407,23 +405,6 @@ export default function FriendsScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['bottom']}>
-      <View style={[styles.topBar, { paddingTop: effectiveTop + Spacing.sm, borderBottomColor: colors.border }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <MaterialIcons name="arrow-back" size={22} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.topTitle, { color: colors.text }]}>Friends</Text>
-        {/* WS-H: entry point into the social feed. TODO: a dedicated bottom-tab/link could live in app/(tabs)/_layout.tsx (owned elsewhere). */}
-        <Pressable
-          onPress={() => router.push('/feed' as Href)}
-          hitSlop={12}
-          style={styles.backBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Open feed"
-        >
-          <MaterialIcons name="rss-feed" size={22} color={colors.text} />
-        </Pressable>
-      </View>
-
       <ScrollView contentContainerStyle={styles.scroll}>
         {!isConnected ? (
           <View style={[styles.banner, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>

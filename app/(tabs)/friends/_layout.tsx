@@ -13,7 +13,14 @@ export default function FriendsTabLayout() {
         headerTitleStyle: { color: colors.textInverse, fontWeight: '600' },
       }}
     >
-      <Stack.Screen name="index" options={{ headerShown: false, title: 'Friends' }} />
+      <Stack.Screen name="index" options={{ headerShown: false, title: 'Feed' }} />
+      <Stack.Screen
+        name="manage"
+        options={{
+          title: 'Friends',
+          headerBackTitle: 'Feed',
+        }}
+      />
       <Stack.Screen
         name="friend/[id]"
         options={{

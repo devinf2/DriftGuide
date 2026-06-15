@@ -2,10 +2,12 @@ import { TAB_BAR_EXTRA } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useRequireAuth } from '@/src/auth/useRequireAuth';
 import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { usePathname, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   Keyboard,
@@ -100,6 +102,61 @@ function createStyles(colors: ThemeColors) {
       color: colors.text,
       fontWeight: '500',
     },
+    sheetBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'flex-end',
+    },
+    sheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: BorderRadius.lg,
+      borderTopRightRadius: BorderRadius.lg,
+      paddingHorizontal: Spacing.md,
+      paddingTop: Spacing.sm,
+    },
+    sheetInner: { gap: Spacing.md },
+    grabber: {
+      alignSelf: 'center',
+      width: 40,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.border,
+      marginBottom: Spacing.xs,
+    },
+    postCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+    },
+    postAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface },
+    postAvatarFallback: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    postCardText: { flex: 1 },
+    postCardTitle: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
+    postCardSub: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 1 },
+    actionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      backgroundColor: colors.background,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+    },
+    actionIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionTitle: { flex: 1, fontSize: FontSize.md, fontWeight: '600', color: colors.text },
   });
 }
 
@@ -131,6 +188,8 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const requireAuth = useRequireAuth();
   const mapAddLocationOpen = useAddLocationFlowStore((s) => s.mapSheetActive);
+  const profile = useAuthStore((s) => s.profile);
+  const avatarUrl = profile?.avatar_url ?? null;
   const tabBarMode = placement === 'tabBar';
 
   useEffect(() => {
@@ -206,6 +265,19 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
     router.push('/trip/import-past');
   }, [closeMenu, requireAuth, router]);
 
+  // Bug Matcher is an offline reference tool (no account needed); no auth gate.
+  const onMatchBug = useCallback(() => {
+    closeMenu();
+    router.push('/bug-matcher');
+  }, [closeMenu, router]);
+
+  // Posting is account-bound (RLS); guests sign in first (WS-B).
+  const onCreatePost = useCallback(() => {
+    closeMenu();
+    if (!requireAuth('Sign in to post to the feed.')) return;
+    router.push('/post/new');
+  }, [closeMenu, requireAuth, router]);
+
   if (hideDuringAddLocation) {
     return null;
   }
@@ -222,25 +294,58 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
     floatingBottom += GUIDE_COMPOSER_LIFT;
   }
 
-  const { width: winW, height: winH } = Dimensions.get('window');
-  const menuBottomFab = menuAnchor != null ? winH - menuAnchor.y + 8 : 0;
-  const menuRightFab =
-    menuAnchor != null ? Math.max(Spacing.sm, winW - (menuAnchor.x + menuAnchor.width)) : Spacing.lg;
+  const actionRows: {
+    key: string;
+    title: string;
+    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+    color: string;
+    onPress: () => void;
+  }[] = [
+    { key: 'plan', title: 'Plan a Trip', icon: 'calendar-check', color: '#3B7DAE', onPress: onPlanTrip },
+    { key: 'fishNow', title: 'Fish Now', icon: 'hook', color: '#2E9E5B', onPress: onFishNow },
+    { key: 'import', title: 'Import a trip', icon: 'tray-arrow-down', color: '#C9742E', onPress: onLogPastTrips },
+    { key: 'matchBug', title: 'Match a bug', icon: 'bug', color: '#7E57C2', onPress: onMatchBug },
+  ];
 
-  const menuBottomTab = tabBarBottomPad + TAB_BAR_EXTRA + Spacing.sm;
+  const createSheet = (
+    <View style={styles.sheetInner}>
+      <View style={styles.grabber} />
 
-  const menuCard = (
-    <View style={styles.menuCard}>
-      <Text style={styles.menuTitle}>Go fishing</Text>
-      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onPlanTrip}>
-        <Text style={styles.menuRowText}>Plan a Trip</Text>
+      <Pressable
+        style={({ pressed }) => [styles.postCard, pressed && styles.menuRowPressed]}
+        onPress={onCreatePost}
+        accessibilityRole="button"
+        accessibilityLabel="Create a post"
+      >
+        {avatarUrl ? (
+          <Image source={{ uri: avatarUrl }} style={styles.postAvatar} contentFit="cover" />
+        ) : (
+          <View style={[styles.postAvatar, styles.postAvatarFallback]}>
+            <MaterialCommunityIcons name="fish" size={22} color={colors.primary} />
+          </View>
+        )}
+        <View style={styles.postCardText}>
+          <Text style={styles.postCardTitle}>Create a post</Text>
+          <Text style={styles.postCardSub}>What&apos;s on your mind?</Text>
+        </View>
+        <MaterialCommunityIcons name="image-multiple" size={24} color={colors.secondary} />
       </Pressable>
-      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onFishNow}>
-        <Text style={styles.menuRowText}>Fish Now</Text>
-      </Pressable>
-      <Pressable style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]} onPress={onLogPastTrips}>
-        <Text style={styles.menuRowText}>Log Past Trips</Text>
-      </Pressable>
+
+      {actionRows.map((r) => (
+        <Pressable
+          key={r.key}
+          style={({ pressed }) => [styles.actionRow, pressed && styles.menuRowPressed]}
+          onPress={r.onPress}
+          accessibilityRole="button"
+          accessibilityLabel={r.title}
+        >
+          <View style={[styles.actionIcon, { backgroundColor: `${r.color}22` }]}>
+            <MaterialCommunityIcons name={r.icon} size={24} color={r.color} />
+          </View>
+          <Text style={styles.actionTitle}>{r.title}</Text>
+          <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textTertiary} />
+        </Pressable>
+      ))}
     </View>
   );
 
@@ -266,20 +371,14 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
         </View>
       ) : null}
 
-      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={closeMenu}>
-        <Pressable style={styles.menuOverlay} onPress={closeMenu}>
-          {menuAnchorKind === 'fab' && menuAnchor != null ? (
-            <View
-              style={[styles.menuAnchorFab, { bottom: menuBottomFab, right: menuRightFab }]}
-              onStartShouldSetResponder={() => true}
-            >
-              {menuCard}
-            </View>
-          ) : menuAnchorKind === 'tab' ? (
-            <View style={[styles.menuAnchorTab, { bottom: menuBottomTab }]} onStartShouldSetResponder={() => true}>
-              {menuCard}
-            </View>
-          ) : null}
+      <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={closeMenu}>
+        <Pressable style={styles.sheetBackdrop} onPress={closeMenu}>
+          <Pressable
+            style={[styles.sheet, { paddingBottom: tabBarBottomPad + Spacing.lg }]}
+            onPress={() => {}}
+          >
+            {createSheet}
+          </Pressable>
         </Pressable>
       </Modal>
     </>

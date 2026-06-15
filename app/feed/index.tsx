@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PostCard } from '@/src/components/feed/PostCard';
+import { PostCommentsModal } from '@/src/components/feed/PostCommentsModal';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { blockUser, deletePost, reportPost } from '@/src/services/feedService';
@@ -80,8 +81,12 @@ export default function FeedScreen() {
   const loadMore = useFeedStore((s) => s.loadMore);
   const toggleReaction = useFeedStore((s) => s.toggleReaction);
   const removePostEverywhere = useFeedStore((s) => s.removePostEverywhere);
+  const setCommentCount = useFeedStore((s) => s.setCommentCount);
 
   const [mode, setMode] = useState<FeedMode>('friends');
+  const [commentsTarget, setCommentsTarget] = useState<{ postId: string; authorId: string } | null>(
+    null,
+  );
   const state = byMode[mode];
 
   useEffect(() => {
@@ -161,19 +166,28 @@ export default function FeedScreen() {
     ({ item }: { item: FeedPost }) => {
       const authorIsMe = item.post.author_id === myId;
       const graph = graphFor(item.post.author_id);
-      const canOpenTrip = !!myId && canOpenTripFromPost(item.post, myId, graph);
+      // Author + accepted friends open the full interactive trip; anyone else who can see the
+      // post opens the read-only, visibility-gated view (app/feed/trip/[postId]).
+      const canOpenFull = !!myId && canOpenTripFromPost(item.post, myId, graph);
+      const onOpenTrip = item.post.trip_id
+        ? () =>
+            router.push(
+              (canOpenFull
+                ? `/trip/${item.post.trip_id}/summary`
+                : `/feed/trip/${item.post.id}`) as never,
+            )
+        : undefined;
       return (
         <PostCard
           item={item}
           authorIsMe={authorIsMe}
           profileByUserId={profileNameMap}
-          canOpenTrip={canOpenTrip}
-          onOpenTrip={
-            item.post.trip_id
-              ? () => router.push(`/trip/${item.post.trip_id}/summary` as never)
-              : undefined
-          }
+          onOpenTrip={onOpenTrip}
           onToggleReaction={(reaction) => toggleReaction(mode, item.post.id, reaction)}
+          onOpenComments={() =>
+            setCommentsTarget({ postId: item.post.id, authorId: item.post.author_id })
+          }
+          commentCount={item.commentCount}
           onReport={authorIsMe ? undefined : () => handleModeration(item)}
           onDelete={authorIsMe ? () => handleDelete(item) : undefined}
         />
@@ -188,21 +202,21 @@ export default function FeedScreen() {
       <SafeAreaView style={styles.container} edges={['left', 'right']}>
         <View style={{ paddingTop: topInset + Spacing.sm }}>
           <View style={styles.header}>
+            <View style={{ width: 28 }} />
+            <Text style={styles.headerTitle}>Feed</Text>
             <Pressable
               style={styles.backBtn}
-              onPress={() => router.back()}
+              onPress={() => router.push('/friends/manage' as never)}
               hitSlop={8}
               accessibilityRole="button"
-              accessibilityLabel="Back"
+              accessibilityLabel="Friends"
             >
-              <MaterialIcons name="arrow-back" size={24} color={colors.text} />
+              <MaterialIcons name="people" size={24} color={colors.text} />
             </Pressable>
-            <Text style={styles.headerTitle}>Feed</Text>
-            <View style={{ width: 28 }} />
           </View>
 
           <View style={styles.segments}>
-            {(['friends', 'discover'] as FeedMode[]).map((m) => (
+            {(['friends', 'discover', 'mine'] as FeedMode[]).map((m) => (
               <Pressable
                 key={m}
                 style={[styles.segment, mode === m && styles.segmentActive]}
@@ -211,7 +225,7 @@ export default function FeedScreen() {
                 accessibilityState={{ selected: mode === m }}
               >
                 <Text style={[styles.segmentText, mode === m && styles.segmentTextActive]}>
-                  {m === 'friends' ? 'Friends' : 'Discover'}
+                  {m === 'friends' ? 'Friends' : m === 'discover' ? 'Discover' : 'My Page'}
                 </Text>
               </Pressable>
             ))}
@@ -242,7 +256,9 @@ export default function FeedScreen() {
                 <Text style={styles.emptyText}>
                   {mode === 'friends'
                     ? 'No posts yet. Share a catch or trip, or add friends to fill your feed.'
-                    : 'No public posts yet. Check back soon.'}
+                    : mode === 'discover'
+                      ? 'No public posts yet. Check back soon.'
+                      : "You haven't shared anything yet. Share a catch or trip and it'll show up here."}
                 </Text>
               </View>
             }
@@ -256,6 +272,14 @@ export default function FeedScreen() {
             contentContainerStyle={{ paddingTop: Spacing.sm, paddingBottom: Spacing.xl }}
           />
         )}
+
+        <PostCommentsModal
+          visible={commentsTarget != null}
+          postId={commentsTarget?.postId ?? null}
+          postAuthorId={commentsTarget?.authorId ?? null}
+          onClose={() => setCommentsTarget(null)}
+          onCountChange={setCommentCount}
+        />
       </SafeAreaView>
     </>
   );

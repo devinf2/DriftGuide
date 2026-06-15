@@ -309,8 +309,8 @@ export default function ProfileScreen() {
             label="Friends"
             onPress={() =>
               pendingIncomingFriendRequests > 0
-                ? router.push({ pathname: '/friends', params: { seg: 'requests' } })
-                : router.push('/friends')
+                ? router.push({ pathname: '/profile/friends', params: { seg: 'requests' } })
+                : router.push('/profile/friends')
             }
             colors={colors}
             styles={styles}

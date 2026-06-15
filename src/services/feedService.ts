@@ -1,6 +1,7 @@
 import { supabase } from '@/src/services/supabase';
 import type {
   FeedPost,
+  PostComment,
   PostReaction,
   PostReactionSummary,
   PostRow,
@@ -11,7 +12,7 @@ import {
   buildFeedParams,
   feedRpcName,
   normalizePostRow,
-  type FeedMode,
+  type ServerFeedMode,
 } from '@/src/utils/feed';
 
 export type CreatePostInput = {
@@ -21,6 +22,10 @@ export type CreatePostInput = {
   species?: string | null;
   sizeInches?: number | null;
   flyName?: string | null;
+  depthFt?: number | null;
+  presentation?: string | null;
+  /** Only pass when the author opts in to share location; otherwise leave null. */
+  locationName?: string | null;
   caughtByUserId?: string | null;
   media?: string[];
   visibility: TripPhotoVisibility;
@@ -42,6 +47,9 @@ export async function createPost(input: CreatePostInput): Promise<PostRow | null
       species: input.species ?? null,
       size_inches: input.sizeInches ?? null,
       fly_name: input.flyName ?? null,
+      depth_ft: input.depthFt ?? null,
+      presentation: input.presentation ?? null,
+      location_name: input.locationName ?? null,
       caught_by_user_id: input.caughtByUserId ?? null,
       media: input.media ?? [],
       visibility: input.visibility,
@@ -84,6 +92,20 @@ async function fetchReactionSummaries(postIds: string[]): Promise<PostReactionSu
   }));
 }
 
+async function fetchCommentCounts(postIds: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (postIds.length === 0) return counts;
+  const { data, error } = await supabase.rpc('post_comment_counts', { p_post_ids: postIds });
+  if (error) {
+    console.warn('[fetchCommentCounts]', error);
+    return counts;
+  }
+  for (const r of (data as Record<string, unknown>[]) ?? []) {
+    counts.set(String(r.post_id), Number(r.count));
+  }
+  return counts;
+}
+
 async function fetchAuthorProfiles(authorIds: string[]): Promise<Record<string, Profile>> {
   const unique = Array.from(new Set(authorIds));
   if (unique.length === 0) return {};
@@ -102,7 +124,7 @@ async function fetchAuthorProfiles(authorIds: string[]): Promise<Record<string, 
  * reaction summaries. RLS + the feed RPC guarantee only visible posts come back.
  */
 export async function fetchFeedPage(
-  mode: FeedMode,
+  mode: ServerFeedMode,
   opts?: { limit?: number; before?: string | null },
 ): Promise<FeedPost[]> {
   const params = buildFeedParams(opts);
@@ -114,9 +136,10 @@ export async function fetchFeedPage(
   const posts = ((data as Record<string, unknown>[]) ?? []).map(normalizePostRow);
   if (posts.length === 0) return [];
 
-  const [profiles, reactions] = await Promise.all([
+  const [profiles, reactions, commentCounts] = await Promise.all([
     fetchAuthorProfiles(posts.map((p) => p.author_id)),
     fetchReactionSummaries(posts.map((p) => p.id)),
+    fetchCommentCounts(posts.map((p) => p.id)),
   ]);
 
   const reactionsByPost = new Map<string, PostReactionSummary[]>();
@@ -130,7 +153,148 @@ export async function fetchFeedPage(
     post,
     author: profiles[post.author_id] ?? null,
     reactions: reactionsByPost.get(post.id) ?? [],
+    commentCount: commentCounts.get(post.id) ?? 0,
   }));
+}
+
+/**
+ * Fetch one page of the current user's own posts (newest first), enriched like the feed.
+ * Reads the posts table directly — RLS lets an author see all their own (non-deleted) posts.
+ */
+export async function fetchMyPosts(opts?: {
+  limit?: number;
+  before?: string | null;
+}): Promise<FeedPost[]> {
+  const { data: u } = await supabase.auth.getUser();
+  const uid = u.user?.id;
+  if (!uid) return [];
+
+  const { p_limit, p_before } = buildFeedParams(opts);
+  let query = supabase
+    .from('posts')
+    .select('*')
+    .eq('author_id', uid)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(p_limit);
+  if (p_before) query = query.lt('created_at', p_before);
+
+  const { data, error } = await query;
+  if (error) {
+    console.warn('[fetchMyPosts]', error);
+    return [];
+  }
+  const posts = ((data as Record<string, unknown>[]) ?? []).map(normalizePostRow);
+  if (posts.length === 0) return [];
+
+  const [profiles, reactions, commentCounts] = await Promise.all([
+    fetchAuthorProfiles([uid]),
+    fetchReactionSummaries(posts.map((p) => p.id)),
+    fetchCommentCounts(posts.map((p) => p.id)),
+  ]);
+
+  const reactionsByPost = new Map<string, PostReactionSummary[]>();
+  for (const r of reactions) {
+    const list = reactionsByPost.get(r.post_id) ?? [];
+    list.push(r);
+    reactionsByPost.set(r.post_id, list);
+  }
+
+  return posts.map((post) => ({
+    post,
+    author: profiles[post.author_id] ?? null,
+    reactions: reactionsByPost.get(post.id) ?? [],
+    commentCount: commentCounts.get(post.id) ?? 0,
+  }));
+}
+
+/** List visible comments on a post (oldest first), with author profiles joined. */
+export async function listComments(postId: string): Promise<PostComment[]> {
+  const { data, error } = await supabase
+    .from('post_comments')
+    .select('*')
+    .eq('post_id', postId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.warn('[listComments]', error);
+    return [];
+  }
+  const rows = (data as Record<string, unknown>[]) ?? [];
+  const profiles = await fetchAuthorProfiles(rows.map((r) => String(r.author_id)));
+  return rows.map((r) => ({
+    id: String(r.id),
+    post_id: String(r.post_id),
+    author_id: String(r.author_id),
+    body: String(r.body ?? ''),
+    created_at: String(r.created_at),
+    author: profiles[String(r.author_id)] ?? null,
+  }));
+}
+
+/** Add a comment to a post as the current user. Returns the created comment or null. */
+export async function addComment(postId: string, body: string): Promise<PostComment | null> {
+  const { data: u } = await supabase.auth.getUser();
+  const uid = u.user?.id;
+  const text = body.trim();
+  if (!uid || !text) return null;
+  const { data, error } = await supabase
+    .from('post_comments')
+    .insert({ post_id: postId, author_id: uid, body: text })
+    .select('*')
+    .single();
+  if (error) {
+    console.warn('[addComment]', error);
+    return null;
+  }
+  const r = data as Record<string, unknown>;
+  const profiles = await fetchAuthorProfiles([uid]);
+  return {
+    id: String(r.id),
+    post_id: String(r.post_id),
+    author_id: String(r.author_id),
+    body: String(r.body ?? ''),
+    created_at: String(r.created_at),
+    author: profiles[uid] ?? null,
+  };
+}
+
+/** Soft-delete a comment (own comment, or any comment on a post you authored). */
+export async function deleteComment(commentId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('post_comments')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', commentId);
+  if (error) {
+    console.warn('[deleteComment]', error);
+    return false;
+  }
+  return true;
+}
+
+/** Trip + events + photos behind a "whole trip" post — readable by anyone who can see the post. */
+export type PostTripView = {
+  trip: Record<string, unknown>;
+  location: Record<string, unknown> | null;
+  events: Record<string, unknown>[];
+  photos: Record<string, unknown>[];
+};
+
+export async function fetchPostTripView(postId: string): Promise<PostTripView | null> {
+  const { data, error } = await supabase.rpc('post_trip_view', { p_post_id: postId });
+  if (error) {
+    console.warn('[fetchPostTripView]', error);
+    return null;
+  }
+  if (!data) return null;
+  const obj = data as { trip?: unknown; location?: unknown; events?: unknown; photos?: unknown };
+  if (!obj.trip) return null;
+  return {
+    trip: obj.trip as Record<string, unknown>,
+    location: (obj.location as Record<string, unknown>) ?? null,
+    events: (obj.events as Record<string, unknown>[]) ?? [],
+    photos: (obj.photos as Record<string, unknown>[]) ?? [],
+  };
 }
 
 /** Add the current user's reaction to a post (idempotent via unique constraint). */

@@ -88,6 +88,11 @@ export interface PostRow {
   species: string | null;
   size_inches: number | null;
   fly_name: string | null;
+  /** Denormalized catch facts captured at publish time; display-only. */
+  depth_ft: number | null;
+  presentation: string | null;
+  /** Water/location name — only set when the author opts in to share location. */
+  location_name: string | null;
   /** From catches.caught_by_user_id (115); null = the author caught it. */
   caught_by_user_id: string | null;
   /** Array of remote https photo urls captured at publish time. */
@@ -110,6 +115,18 @@ export interface FeedPost {
   post: PostRow;
   author: Profile | null;
   reactions: PostReactionSummary[];
+  /** Live comment count on this post (visible comments only). */
+  commentCount?: number;
+}
+
+/** DB row: post_comments table, plus the author profile joined client-side. */
+export interface PostComment {
+  id: string;
+  post_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  author: Profile | null;
 }
 
 export type SessionMemberRole = 'owner' | 'member';

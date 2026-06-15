@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
-import { TripEvent, CatchData, FlyChangeData } from '@/src/types';
+import { TripEvent, CatchData, FlyChangeData, Photo } from '@/src/types';
+import { buildAlbumPhotoUrlsByCatchId, resolveCatchDisplayPhotoUrls } from '@/src/utils/catchPhotos';
 
 export interface FlyStat {
   name: string;
@@ -13,6 +14,7 @@ export interface BiggestFishCatch {
   sizeInches: number | null;
   weightLb: number | null;
   weightOz: number | null;
+  fly: string | null;
   photoUrl: string | null;
   timestamp: string | null;
 }
@@ -122,27 +124,52 @@ export async function fetchProfileStats(
 
   // Biggest fish: rank by length (size_inches), then by total weight as a
   // tiebreaker. One row per catch; only catches with a recorded size qualify.
-  const biggestFish: BiggestFishCatch[] = catchEvents
-    .map(e => {
-      const d = e.data as CatchData;
-      return {
-        id: e.id,
-        species: d.species ?? null,
-        sizeInches: d.size_inches ?? null,
-        weightLb: d.weight_lb ?? null,
-        weightOz: d.weight_oz ?? null,
-        photoUrl: d.photo_url ?? d.photo_urls?.[0] ?? null,
-        timestamp: e.timestamp ?? null,
-      };
-    })
-    .filter(c => c.sizeInches != null)
+  const resolveFlyName = (d: CatchData): string | null => {
+    if (!d.active_fly_event_id) return null;
+    const fe = flyEvents.find(f => f.id === d.active_fly_event_id);
+    if (!fe) return null;
+    const fd = fe.data as FlyChangeData;
+    return d.caught_on_fly === 'dropper' && fd.pattern2 ? fd.pattern2 : fd.pattern;
+  };
+
+  const topCatchEvents = catchEvents
+    .filter(e => (e.data as CatchData).size_inches != null)
     .sort((a, b) => {
-      if (b.sizeInches! !== a.sizeInches!) return b.sizeInches! - a.sizeInches!;
-      const aw = (a.weightLb ?? 0) * 16 + (a.weightOz ?? 0);
-      const bw = (b.weightLb ?? 0) * 16 + (b.weightOz ?? 0);
+      const da = a.data as CatchData;
+      const db = b.data as CatchData;
+      if (db.size_inches! !== da.size_inches!) return db.size_inches! - da.size_inches!;
+      const aw = (da.weight_lb ?? 0) * 16 + (da.weight_oz ?? 0);
+      const bw = (db.weight_lb ?? 0) * 16 + (db.weight_oz ?? 0);
       return bw - aw;
     })
     .slice(0, 3);
+
+  // A catch's photos may live in the `photos` table keyed by catch_id (= catch event id)
+  // rather than in the event JSON (e.g. added via edit mode). Merge that source the same
+  // way the trip timeline does, so biggest-fish thumbnails actually appear.
+  let albumByCatchId = new Map<string, string[]>();
+  const topCatchIds = topCatchEvents.map(e => e.id);
+  if (topCatchIds.length > 0) {
+    const { data: photoRows } = await supabase
+      .from('photos')
+      .select('catch_id, url, display_order, created_at')
+      .in('catch_id', topCatchIds);
+    albumByCatchId = buildAlbumPhotoUrlsByCatchId((photoRows ?? []) as Photo[]);
+  }
+
+  const biggestFish: BiggestFishCatch[] = topCatchEvents.map(e => {
+    const d = e.data as CatchData;
+    return {
+      id: e.id,
+      species: d.species ?? null,
+      sizeInches: d.size_inches ?? null,
+      weightLb: d.weight_lb ?? null,
+      weightOz: d.weight_oz ?? null,
+      fly: resolveFlyName(d),
+      photoUrl: resolveCatchDisplayPhotoUrls(e.id, d, albumByCatchId)[0] ?? null,
+      timestamp: e.timestamp ?? null,
+    };
+  });
 
   trips.forEach((t: any) => {
     const d = new Date(t.start_time);

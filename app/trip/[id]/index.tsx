@@ -1284,6 +1284,7 @@ export default function TripDashboardScreen() {
             setInput={setAiInput}
             loading={aiLoading}
             onSend={handleAskAI}
+            onMatchBug={() => router.push('/bug-matcher')}
             scrollRef={aiScrollRef}
             styles={styles}
             colors={colors}
@@ -2375,6 +2376,7 @@ function AIGuideTab({
   setInput,
   loading,
   onSend,
+  onMatchBug,
   scrollRef,
   strategySlot,
   styles,
@@ -2389,6 +2391,7 @@ function AIGuideTab({
   setInput: (v: string) => void;
   loading: boolean;
   onSend: () => void;
+  onMatchBug: () => void;
   scrollRef: RefObject<ScrollView | null>;
   strategySlot?: ReactNode;
   styles: any;
@@ -2459,6 +2462,16 @@ function AIGuideTab({
           <Text style={styles.aiContextNote}>
             AI uses your trip history, current conditions, and fishing data to give personalized advice.
           </Text>
+          {/* Bug Matcher runs fully offline (bundled dataset), so it stays available with no signal. */}
+          <Pressable
+            style={styles.aiMatchBugButton}
+            onPress={onMatchBug}
+            accessibilityRole="button"
+            accessibilityLabel="Match a bug"
+          >
+            <MaterialCommunityIcons name="bug" size={16} color={colors.primary} />
+            <Text style={styles.aiMatchBugButtonText}>Match a bug</Text>
+          </Pressable>
           {chatMessages}
           {thinkingRow}
           <OfflineGuideActionStack
@@ -2493,6 +2506,17 @@ function AIGuideTab({
 
         {thinkingRow}
       </ScrollView>
+
+      {/* Identify the bug you're seeing on the water, then match it to a fly. */}
+      <Pressable
+        style={styles.aiMatchBugButton}
+        onPress={onMatchBug}
+        accessibilityRole="button"
+        accessibilityLabel="Match a bug"
+      >
+        <MaterialCommunityIcons name="bug" size={16} color={colors.primary} />
+        <Text style={styles.aiMatchBugButtonText}>Match a bug</Text>
+      </Pressable>
 
       {/* Input */}
       <View style={styles.aiInputRow}>
@@ -3820,6 +3844,25 @@ function createTripDashboardStyles(colors: ThemeColors) {
     color: colors.textInverse,
     fontWeight: '600',
     fontSize: FontSize.md,
+  },
+  aiMatchBugButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: Spacing.xs,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: BorderRadius.full,
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.xs,
+  },
+  aiMatchBugButtonText: {
+    color: colors.primary,
+    fontWeight: '600',
+    fontSize: FontSize.sm,
   },
 
   });

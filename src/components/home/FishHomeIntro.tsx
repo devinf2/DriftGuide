@@ -3,7 +3,7 @@ import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
 const HERO_IMAGE = require('@/assets/images/home-hero.png');
@@ -17,6 +17,8 @@ type Props = {
   briefingLoading?: boolean;
   /** Number of nearby waters we ranked (0 if none) */
   rankedWatersCount?: number;
+  /** Optional element overlaid in the top-right of the hero photo (e.g. streak badge). */
+  heroAccessory?: ReactNode;
 };
 
 function timeGreeting(): string {
@@ -44,6 +46,7 @@ export function FishHomeIntro({
   userFirstName,
   briefingLoading = false,
   rankedWatersCount = 0,
+  heroAccessory,
 }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(
@@ -77,6 +80,12 @@ export function FishHomeIntro({
           paddingBottom: Spacing.md,
           justifyContent: 'flex-end',
           minHeight: HERO_MIN_HEIGHT,
+        },
+        heroAccessory: {
+          position: 'absolute',
+          top: Spacing.sm,
+          right: Spacing.sm,
+          zIndex: 2,
         },
         labelRow: {
           flexDirection: 'row',
@@ -147,6 +156,7 @@ export function FishHomeIntro({
             contentFit="cover"
             contentPosition="bottom"
           />
+          {heroAccessory ? <View style={styles.heroAccessory}>{heroAccessory}</View> : null}
           <View style={styles.heroContent}>
             <View style={styles.labelRow}>
               <MaterialCommunityIcons

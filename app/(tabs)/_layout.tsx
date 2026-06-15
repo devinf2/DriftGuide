@@ -79,10 +79,10 @@ export default function TabLayout() {
         <Tabs.Screen
           name="friends"
           options={{
-            title: 'Friends',
+            title: 'Feed',
             tabBarBadge: incomingFriendRequestCount > 0 ? Math.min(incomingFriendRequestCount, 99) : undefined,
             tabBarIcon: ({ color, size }) => (
-              <MaterialCommunityIcons name="account-multiple" color={color} size={size} />
+              <MaterialIcons name="dynamic-feed" color={color} size={size} />
             ),
           }}
         />

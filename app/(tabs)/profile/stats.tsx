@@ -1,5 +1,6 @@
 import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { SinglePhotoZoomModal } from '@/src/components/SinglePhotoZoomModal';
+import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 import { PLAN_TRIP_FAB_MAP_CLEARANCE } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -8,7 +9,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useAuthStore } from '@/src/stores/authStore';
 import { endOfMonth, startOfMonth, subMonths } from 'date-fns';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -74,11 +75,13 @@ function BiggestFishRow({
   styles: any;
   colors: ThemeColors;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const weight = formatFishWeight(fish.weightLb, fish.weightOz);
   const meta = [fish.sizeInches != null ? `${fish.sizeInches}"` : null, weight]
     .filter(Boolean)
     .join(' · ');
   const photo = fish.photoUrl?.trim();
+  const showPhoto = Boolean(photo) && !imageFailed;
 
   return (
     <View style={styles.fishRow}>
@@ -88,13 +91,41 @@ function BiggestFishRow({
           {fish.species || 'Unknown species'}
         </Text>
         {meta ? <Text style={styles.fishMeta}>{meta}</Text> : null}
+        {fish.fly ? (
+          <View style={styles.fishFlyRow}>
+            {getBundledFlyImageSource(fish.fly) ? (
+              <Image
+                source={getBundledFlyImageSource(fish.fly)!}
+                style={styles.fishFlyImage}
+                contentFit="contain"
+              />
+            ) : (
+              <MaterialCommunityIcons name="hook" size={14} color={colors.primary} />
+            )}
+            <Text style={styles.fishFly} numberOfLines={1}>
+              {fish.fly}
+            </Text>
+          </View>
+        ) : null}
       </View>
-      {photo ? (
+      {showPhoto && photo ? (
         <Pressable onPress={() => onPressPhoto(photo)} style={styles.fishThumbWrap}>
           {photo.startsWith('http') ? (
-            <OfflineTripPhotoImage remoteUri={photo} maxPixelSize={150} style={styles.fishThumb} contentFit="cover" />
+            <OfflineTripPhotoImage
+              remoteUri={photo}
+              maxPixelSize={150}
+              style={styles.fishThumb}
+              contentFit="cover"
+              onError={() => setImageFailed(true)}
+            />
           ) : (
-            <Image source={{ uri: photo }} style={styles.fishThumb} contentFit="cover" cachePolicy="memory-disk" />
+            <Image
+              source={{ uri: photo }}
+              style={styles.fishThumb}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              onError={() => setImageFailed(true)}
+            />
           )}
           <View style={styles.fishThumbBadge}>
             <MaterialCommunityIcons name="magnify-plus-outline" size={12} color={colors.textInverse} />
@@ -109,10 +140,51 @@ function BiggestFishRow({
   );
 }
 
+function FlyBlock({
+  label,
+  name,
+  meta,
+  styles,
+  colors,
+}: {
+  label: string;
+  name: string | null;
+  meta: string | null;
+  styles: any;
+  colors: ThemeColors;
+}) {
+  const img = name ? getBundledFlyImageSource(name) : null;
+  return (
+    <View style={styles.flyBlock}>
+      <Text style={styles.flyBlockLabel}>{label}</Text>
+      {name ? (
+        <View style={styles.flyRow}>
+          {img ? (
+            <Image source={img} style={styles.flyImage} contentFit="contain" />
+          ) : (
+            <View style={[styles.flyImage, styles.flyImageEmpty]}>
+              <MaterialCommunityIcons name="hook" size={20} color={colors.textTertiary} />
+            </View>
+          )}
+          <View style={styles.flyTextCol}>
+            <Text style={styles.flyName} numberOfLines={1}>
+              {name}
+            </Text>
+            {meta ? <Text style={styles.flyMeta}>{meta}</Text> : null}
+          </View>
+        </View>
+      ) : (
+        <Text style={styles.flyMeta}>—</Text>
+      )}
+    </View>
+  );
+}
+
 export default function ProfileStatsScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStatsStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { user } = useAuthStore();
   const { forUserId: forUserIdParam, ownerName: ownerNameParam } = useLocalSearchParams<{
     forUserId?: string | string[];
@@ -164,13 +236,28 @@ export default function ProfileStatsScreen() {
   const chartContentWidth = monthCount > 0 ? monthCount * barWidth : chartVisibleWidth;
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[
-        styles.content,
-        { paddingBottom: insets.bottom + Spacing.xl + PLAN_TRIP_FAB_MAP_CLEARANCE },
-      ]}
-    >
+    <>
+      <Stack.Screen
+        options={{
+          headerLeft: () => (
+            <Pressable
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/profile'))}
+              hitSlop={8}
+              style={styles.headerBack}
+            >
+              <MaterialCommunityIcons name="chevron-left" size={28} color={colors.textInverse} />
+              <Text style={styles.headerBackText}>Profile</Text>
+            </Pressable>
+          ),
+        }}
+      />
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + Spacing.xl + PLAN_TRIP_FAB_MAP_CLEARANCE },
+        ]}
+      >
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Text style={styles.sectionTitle}>{reportTitle}</Text>
@@ -305,39 +392,28 @@ export default function ProfileStatsScreen() {
               <Text style={styles.sectionTitleStandalone}>Flies</Text>
               {stats.favoriteFly || stats.bestFly ? (
                 <View style={styles.fliesCol}>
-                  <View style={styles.flyBlock}>
-                    <Text style={styles.flyBlockLabel}>Favorite</Text>
-                    {stats.favoriteFly ? (
-                      <>
-                        <Text style={styles.flyName} numberOfLines={1}>
-                          {stats.favoriteFly.name}
-                        </Text>
-                        <Text style={styles.flyMeta}>
-                          {stats.favoriteFly.uses} {stats.favoriteFly.uses === 1 ? 'use' : 'uses'}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={styles.flyMeta}>—</Text>
-                    )}
-                  </View>
-                  <View style={styles.flyBlock}>
-                    <Text style={styles.flyBlockLabel}>Best</Text>
-                    {stats.bestFly ? (
-                      <>
-                        <Text style={styles.flyName} numberOfLines={1}>
-                          {stats.bestFly.name}
-                        </Text>
-                        <Text style={styles.flyMeta}>
-                          {stats.bestFly.uses > 0
-                            ? (stats.bestFly.fishCaught / stats.bestFly.uses).toFixed(1)
-                            : '0'}{' '}
-                          fish/use
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={styles.flyMeta}>—</Text>
-                    )}
-                  </View>
+                  <FlyBlock
+                    label="Favorite"
+                    name={stats.favoriteFly?.name ?? null}
+                    meta={
+                      stats.favoriteFly
+                        ? `${stats.favoriteFly.uses} ${stats.favoriteFly.uses === 1 ? 'use' : 'uses'}`
+                        : null
+                    }
+                    styles={styles}
+                    colors={colors}
+                  />
+                  <FlyBlock
+                    label="Best"
+                    name={stats.bestFly?.name ?? null}
+                    meta={
+                      stats.bestFly
+                        ? `${stats.bestFly.uses > 0 ? (stats.bestFly.fishCaught / stats.bestFly.uses).toFixed(1) : '0'} fish/use`
+                        : null
+                    }
+                    styles={styles}
+                    colors={colors}
+                  />
                 </View>
               ) : (
                 <Text style={styles.emptyText}>No fly data yet</Text>
@@ -375,7 +451,8 @@ export default function ProfileStatsScreen() {
         onClose={() => setZoomPhotoUri(null)}
         closeButtonTop={insets.top + Spacing.lg}
       />
-    </ScrollView>
+      </ScrollView>
+    </>
   );
 }
 
@@ -383,6 +460,8 @@ function createStatsStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     content: { padding: Spacing.xl },
+    headerBack: { flexDirection: 'row', alignItems: 'center' },
+    headerBackText: { color: colors.textInverse, fontSize: FontSize.md, marginLeft: -2 },
     section: { marginTop: Spacing.lg },
     card: {
       backgroundColor: colors.surface,
@@ -514,6 +593,18 @@ function createStatsStyles(colors: ThemeColors) {
     fishInfo: { flex: 1 },
     fishSpecies: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
     fishMeta: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },
+    fishFlyRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+    fishFlyImage: { width: 22, height: 22, borderRadius: 4 },
+    fishFly: { fontSize: FontSize.sm, color: colors.primary, flexShrink: 1 },
+    flyRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+    flyImage: {
+      width: 44,
+      height: 44,
+      borderRadius: BorderRadius.sm,
+      backgroundColor: colors.borderLight,
+    },
+    flyImageEmpty: { alignItems: 'center', justifyContent: 'center' },
+    flyTextCol: { flex: 1 },
     fishThumbWrap: { position: 'relative' },
     fishThumb: {
       width: 56,

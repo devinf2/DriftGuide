@@ -382,11 +382,10 @@ export default function HomeScreen() {
   );
 
   /**
-   * WS-G insertion point: a self-contained streak/milestone card mounts at the top of the home
-   * layout (rendered just above the "Right now near you" hero). It renders nothing until there's
-   * a streak/PB/milestone, so a guest/new user with no data sees nothing.
+   * WS-G: a self-contained streak/milestone badge overlays the top-right of the home hero photo.
+   * It renders nothing until there's a streak/PB/milestone, so a guest/new user sees nothing.
    */
-  const homeMilestoneSlot: ReactNode = <StreakMilestoneCard />;
+  const streakBadge: ReactNode = <StreakMilestoneCard variant="badge" />;
   const setFromHomeHotSpots = usePlanTripHomeSuggestionsStore((s) => s.setFromHomeHotSpots);
 
   useEffect(() => {
@@ -625,14 +624,12 @@ export default function HomeScreen() {
           listHeaderComponent={
             showHomeDiscoveryInChat ? (
               <View>
-                {/* WS-G INSERTION POINT: mount a self-contained streak/milestone card here. */}
-                {/* Drop your component in this slot (it renders above the hero) — no restructuring needed. */}
-                {homeMilestoneSlot}
-
+                {/* WS-G: streak/milestone badge overlays the hero photo's top-right corner. */}
                 <FishHomeIntro
                   userFirstName={profileFirstName(profile)}
                   briefingLoading={hotSpotLoading}
                   rankedWatersCount={hotSpotList.length}
+                  heroAccessory={streakBadge}
                 />
 
                 {/* "Right now near you": where to fish + what to tie on, zero data entry; renders for guests. */}
