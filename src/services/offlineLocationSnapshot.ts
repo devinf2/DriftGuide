@@ -34,6 +34,30 @@ export function filterLocationsByHomeState(
   });
 }
 
+/**
+ * Build the offline location snapshot for a user, degrading gracefully by country:
+ * - US (or any profile with a resolvable home state) → filter by state bbox.
+ * - Non-US / no usable state → fall back to the full visible list (no state filter),
+ *   so international users still get an offline catalog. We cap the count to keep the
+ *   snapshot small when there is no geographic filter to narrow it down.
+ *
+ * Pure aside from the inputs; safe to unit test.
+ */
+export const OFFLINE_SNAPSHOT_FALLBACK_LIMIT = 500;
+
+export function buildOfflineLocationSnapshot(
+  locations: Location[],
+  opts: { homeState?: string | null; homeCountry?: string | null },
+): Location[] {
+  const stateCode = normalizeHomeStateCode(opts.homeState ?? null);
+  if (stateCode) {
+    return filterLocationsByHomeState(locations, opts.homeState);
+  }
+  // No usable US state: keep a bounded slice of the full active list so non-US
+  // users (and US users who skipped a state) still have something offline.
+  return activeLocationsOnly(locations).slice(0, OFFLINE_SNAPSHOT_FALLBACK_LIMIT);
+}
+
 export async function saveOfflineLocationsSnapshot(
   userId: string,
   locations: Location[],

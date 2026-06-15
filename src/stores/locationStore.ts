@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Location } from '@/src/types';
 import { supabase } from '@/src/services/supabase';
 import {
-  filterLocationsByHomeState,
+  buildOfflineLocationSnapshot,
   loadOfflineLocationsSnapshot,
   saveOfflineLocationsSnapshot,
 } from '@/src/services/offlineLocationSnapshot';
@@ -60,9 +60,14 @@ export const useLocationStore = create<LocationState>()(
             const uid = useAuthStore.getState().user?.id;
             const list = locationsVisibleToViewer(activeLocationsOnly(data as Location[]), uid);
             set({ locations: list });
-            const home = useAuthStore.getState().profile?.home_state;
-            if (uid && home?.trim()) {
-              const forSnap = filterLocationsByHomeState(list, home);
+            if (uid) {
+              const profile = useAuthStore.getState().profile;
+              // US (or any profile with a resolvable state) filters by state bbox;
+              // non-US degrades to a bounded full-list snapshot inside the helper.
+              const forSnap = buildOfflineLocationSnapshot(list, {
+                homeState: profile?.home_state,
+                homeCountry: profile?.home_country,
+              });
               await saveOfflineLocationsSnapshot(uid, forSnap);
             }
           } else {
