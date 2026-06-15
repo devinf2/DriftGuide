@@ -3,6 +3,7 @@ import { FishHomeHatchSection } from '@/src/components/home/FishHomeHatchSection
 import { FishHomeIntro } from '@/src/components/home/FishHomeIntro';
 import { FishHomePlannedSection } from '@/src/components/home/FishHomePlannedSection';
 import { FishHomeRightNow } from '@/src/components/home/FishHomeRightNow';
+import { StreakMilestoneCard } from '@/src/components/home/StreakMilestoneCard';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { FishHomeSpotsSection } from '@/src/components/home/FishHomeSpotsSection';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -382,10 +383,10 @@ export default function HomeScreen() {
 
   /**
    * WS-G insertion point: a self-contained streak/milestone card mounts at the top of the home
-   * layout (rendered just above the "Right now near you" hero). WS-G can replace this null with
-   * their own component — keep it null-safe so a guest/new user with no streak renders nothing.
+   * layout (rendered just above the "Right now near you" hero). It renders nothing until there's
+   * a streak/PB/milestone, so a guest/new user with no data sees nothing.
    */
-  const homeMilestoneSlot: ReactNode = null;
+  const homeMilestoneSlot: ReactNode = <StreakMilestoneCard />;
   const setFromHomeHotSpots = usePlanTripHomeSuggestionsStore((s) => s.setFromHomeHotSpots);
 
   useEffect(() => {

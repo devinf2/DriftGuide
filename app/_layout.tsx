@@ -13,6 +13,8 @@ import 'react-native-reanimated';
 
 import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/googleOAuth';
 import { isGuestAllowedRoute } from '@/src/auth/guestRoutes';
+import { useNotificationResponseRouting } from '@/src/hooks/useNotificationResponseRouting';
+import { configureNotificationHandler } from '@/src/services/pushNotifications';
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
@@ -66,6 +68,9 @@ export const unstable_settings = {
 SplashScreen.preventAutoHideAsync();
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Display foreground push notifications (WS-G). Safe to call at module load.
+configureNotificationHandler();
 
 /** Production builds: `__DEV__` is false → no `require` → dev overlay never loads or ships. */
 const OfflineSimOverlay: ComponentType | undefined = __DEV__
@@ -367,6 +372,9 @@ export default function RootLayout() {
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
   const authLoading = useAuthStore((s) => s.isLoading);
+
+  // WS-G: route to the right screen when a push notification is tapped (and on cold start).
+  useNotificationResponseRouting();
 
   useEffect(() => {
     if (error) throw error;
