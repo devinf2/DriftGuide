@@ -19,3 +19,8 @@ verify_jwt = false
 # Public vector tiles for the Public/Private Land overlay — read-only, no auth required.
 [functions.land-tiles]
 verify_jwt = false
+
+# First-party analytics ingest. Accepts anon + authed; JWT not required (service-role insert
+# happens inside the function, table stays RLS-locked).
+[functions.analytics-ingest]
+verify_jwt = false

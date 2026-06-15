@@ -15,6 +15,7 @@ import { applyOAuthReturnUrl, isPasswordRecoveryDeepLink } from '@/src/auth/goog
 import { GlobalOfflineBanner } from '@/src/components/GlobalOfflineBanner';
 import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
+import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
@@ -369,6 +370,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded && !authLoading) {
       void SplashScreen.hideAsync();
+      track(AnalyticsEvents.APP_OPEN);
     }
   }, [loaded, authLoading]);
 
