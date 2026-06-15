@@ -10,6 +10,30 @@ export type MonthActivity = 0 | 1 | 2 | 3;
 
 export type HatchCategory = 'midge' | 'mayfly' | 'caddis' | 'stone' | 'terrestrial' | 'stillwater';
 
+/** Life stage a recommended pattern imitates; mirrors FlyPresentation grouping in pickers. */
+export type HatchFlyStage = 'nymph' | 'emerger' | 'dry' | 'streamer';
+
+export type HatchFly = {
+  /**
+   * Pattern name. MUST resolve via getBundledFlyImageSource (src/constants/flyImages.ts)
+   * so the matching-flies strip always has a bundled image. Guarded by a vitest test.
+   */
+  name: string;
+  stage: HatchFlyStage;
+  /** Suggested hook size hint (free string, e.g. '#18–22'); derived from the entry's sizes. */
+  size?: string;
+};
+
+/** Display order for life-stage labels in the matching-flies strip. */
+export const HATCH_FLY_STAGE_ORDER: HatchFlyStage[] = ['nymph', 'emerger', 'dry', 'streamer'];
+
+export const HATCH_FLY_STAGE_LABELS: Record<HatchFlyStage, string> = {
+  nymph: 'Nymph',
+  emerger: 'Emerger',
+  dry: 'Dry',
+  streamer: 'Streamer',
+};
+
 export type DaypartWeights = {
   dawn: number;
   morning: number;
@@ -46,6 +70,11 @@ export type DriftGuideHatchChartEntry = {
   tip: string;
   /** One-line for chips */
   peakSummary: string;
+  /**
+   * Curated patterns that imitate this hatch, grouped by life stage. Every name resolves to a
+   * bundled image via getBundledFlyImageSource (verified by a vitest test). Offline-only.
+   */
+  flies: HatchFly[];
 };
 
 export const DRIFTGUIDE_HATCH_CHART_INTRO =
@@ -63,6 +92,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Slow runs, eddies, tailouts, dam outflows',
     tip: 'Dry cluster or griffiths over a zebra midge dropper covers most winter lies.',
     peakSummary: 'Year-round; winter–early spring peak',
+    flies: [
+      { name: 'Zebra Midge', stage: 'nymph', size: '#18–22' },
+      { name: 'Black Beauty', stage: 'nymph', size: '#18–22' },
+      { name: 'Brassie', stage: 'nymph', size: '#18–22' },
+      { name: 'Top Secret Midge', stage: 'emerger', size: '#20–24' },
+      { name: 'Griffiths Gnat', stage: 'dry', size: '#18–22' },
+    ],
   },
   {
     id: 'bwo',
@@ -75,6 +111,15 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Seams, soft banks, slicks below riffles',
     tip: 'Treat spinners separately—quiet film, long leader.',
     peakSummary: 'Spring & fall double peak',
+    flies: [
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#18–20' },
+      { name: 'WD-40', stage: 'nymph', size: '#18–22' },
+      { name: 'Juju Baetis', stage: 'nymph', size: '#18–22' },
+      { name: 'RS2', stage: 'emerger', size: '#18–22' },
+      { name: 'Sparkle Dun', stage: 'emerger', size: '#18–20' },
+      { name: 'Parachute Adams', stage: 'dry', size: '#18–22' },
+      { name: 'Comparadun', stage: 'dry', size: '#18–20' },
+    ],
   },
   {
     id: 'march-brown',
@@ -87,6 +132,14 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Riffle tails, pockets, willow lines',
     tip: 'Soft-hackle or emerger swing when they ignore high dries.',
     peakSummary: 'Apr–Jun by elevation',
+    flies: [
+      { name: 'Hares Ear Nymph', stage: 'nymph', size: '#12–14' },
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#12–14' },
+      { name: 'Soft Hackle', stage: 'emerger', size: '#12–14' },
+      { name: 'March Brown Wet', stage: 'emerger', size: '#12–14' },
+      { name: 'March Brown', stage: 'dry', size: '#12–14' },
+      { name: 'Gray Drake', stage: 'dry', size: '#12–14' },
+    ],
   },
   {
     id: 'skwala',
@@ -99,6 +152,12 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Boulders, grassy banks, inside bends',
     tip: 'Short drifts tight to banks beat long mid-river casts.',
     peakSummary: 'Mar–May low elevation first',
+    flies: [
+      { name: "Pat's Rubber Legs", stage: 'nymph', size: '#8–12' },
+      { name: 'Girdle Bug', stage: 'nymph', size: '#8–12' },
+      { name: 'Chubby Chernobyl', stage: 'dry', size: '#8–12' },
+      { name: 'Stimulator', stage: 'dry', size: '#10–12' },
+    ],
   },
   {
     id: 'salmonfly',
@@ -111,6 +170,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Fast pockets, willows, root wads',
     tip: 'If they refuse foam, try one size smaller or a drowned adult.',
     peakSummary: 'May–Jul upstream wave',
+    flies: [
+      { name: "Pat's Rubber Legs", stage: 'nymph', size: '#4–8' },
+      { name: 'Girdle Bug', stage: 'nymph', size: '#4–8' },
+      { name: 'Kamikaze Salmonfly', stage: 'dry', size: '#4–8' },
+      { name: 'Chubby Chernobyl', stage: 'dry', size: '#4–8' },
+      { name: 'Stimulator', stage: 'dry', size: '#6–8' },
+    ],
   },
   {
     id: 'golden',
@@ -123,6 +189,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Riffles, pockets, rocky drops',
     tip: 'Trim legs so the fly rides upright in broken water.',
     peakSummary: 'Jun–Aug after big stones',
+    flies: [
+      { name: 'Golden Stone Nymph', stage: 'nymph', size: '#10–14' },
+      { name: "Pat's Rubber Legs", stage: 'nymph', size: '#10–14' },
+      { name: 'Yellow Sally', stage: 'dry', size: '#12–16' },
+      { name: 'Stimulator', stage: 'dry', size: '#10–14' },
+      { name: 'Chubby Chernobyl', stage: 'dry', size: '#10–14' },
+    ],
   },
   {
     id: 'pmd',
@@ -135,6 +208,14 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Slicks, back eddies, riffle exits',
     tip: 'Match dun vs spinner vs emerger; 6x on flat slicks.',
     peakSummary: 'Jun–Sep',
+    flies: [
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#16–18' },
+      { name: 'Frenchie', stage: 'nymph', size: '#16–18' },
+      { name: 'Sparkle Dun', stage: 'emerger', size: '#16–18' },
+      { name: 'CDC Emerger', stage: 'emerger', size: '#16–18' },
+      { name: 'Pale Morning Dun', stage: 'dry', size: '#16–18' },
+      { name: 'Comparadun', stage: 'dry', size: '#16–18' },
+    ],
   },
   {
     id: 'green-drake',
@@ -147,6 +228,12 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Deep pools, tailouts below fast water',
     tip: 'Be ready to switch nymph to dry when the hatch tightens fish.',
     peakSummary: 'Jul–Aug select waters',
+    flies: [
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#10–14' },
+      { name: 'Hares Ear Nymph', stage: 'nymph', size: '#10–14' },
+      { name: 'Green Drake', stage: 'dry', size: '#10–14' },
+      { name: 'Klinkhammer', stage: 'emerger', size: '#10–14' },
+    ],
   },
   {
     id: 'trico',
@@ -159,6 +246,11 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Flat slicks, backwaters, fertile runs',
     tip: 'Spinner falls before sun hits the film.',
     peakSummary: 'Jul–Sep',
+    flies: [
+      { name: 'WD-40', stage: 'nymph', size: '#20–24' },
+      { name: 'Trico', stage: 'dry', size: '#20–24' },
+      { name: 'Griffiths Gnat', stage: 'dry', size: '#20–24' },
+    ],
   },
   {
     id: 'caddis',
@@ -171,6 +263,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Bank foam, riffle crests, brush',
     tip: 'Skate or skitter first; dead-drift emerger if refused.',
     peakSummary: 'Apr–Oct; evenings midsummer',
+    flies: [
+      { name: 'Sparkle Pupa', stage: 'nymph', size: '#14–18' },
+      { name: 'Soft Hackle', stage: 'emerger', size: '#14–18' },
+      { name: 'X-Caddis', stage: 'emerger', size: '#14–18' },
+      { name: 'Elk Hair Caddis', stage: 'dry', size: '#14–18' },
+      { name: 'Goddard Caddis', stage: 'dry', size: '#14–18' },
+    ],
   },
   {
     id: 'oct-caddis',
@@ -183,6 +282,12 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Undercut banks, pockets, tailouts',
     tip: 'One big fly tight to the bank beats fan-casting mid-river.',
     peakSummary: 'Sep–Nov',
+    flies: [
+      { name: 'Sparkle Pupa', stage: 'nymph', size: '#8–10' },
+      { name: 'Prince Nymph', stage: 'nymph', size: '#8–12' },
+      { name: 'Orange Stimulator', stage: 'dry', size: '#6–10' },
+      { name: 'Stimulator', stage: 'dry', size: '#6–10' },
+    ],
   },
   {
     id: 'callibaetis',
@@ -195,6 +300,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Weed edges, drop-offs, inlets',
     tip: 'Deep nymphs until risers appear, then film emergers.',
     peakSummary: 'May–Sep stillwaters',
+    flies: [
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#14–18' },
+      { name: 'Hares Ear Nymph', stage: 'nymph', size: '#14–18' },
+      { name: 'Sparkle Dun', stage: 'emerger', size: '#14–18' },
+      { name: 'Parachute Adams', stage: 'dry', size: '#14–18' },
+      { name: 'Woolly Bugger', stage: 'streamer', size: '#8–12' },
+    ],
   },
   {
     id: 'terrestrial',
@@ -207,6 +319,14 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Grass lines, willows, fence rows',
     tip: 'Land tight to the bank; one plop then drift.',
     peakSummary: 'Jul–Sep',
+    flies: [
+      { name: "Dave's Hopper", stage: 'dry', size: '#8–12' },
+      { name: 'Morrish Hopper', stage: 'dry', size: '#8–12' },
+      { name: 'Chernobyl Ant', stage: 'dry', size: '#8–12' },
+      { name: 'Hippie Stomper', stage: 'dry', size: '#10–14' },
+      { name: 'Beetle', stage: 'dry', size: '#12–16' },
+      { name: 'Ant', stage: 'dry', size: '#14–16' },
+    ],
   },
   {
     id: 'mahogany',
@@ -219,6 +339,13 @@ export const DRIFTGUIDE_HATCH_CHART_ENTRIES: DriftGuideHatchChartEntry[] = [
     water: 'Soft edges, foam in low flows',
     tip: 'Low clear water: fewer false casts before changing fly.',
     peakSummary: 'Sep–Nov',
+    flies: [
+      { name: 'Pheasant Tail Nymph', stage: 'nymph', size: '#16–18' },
+      { name: 'Frenchie', stage: 'nymph', size: '#16–18' },
+      { name: 'RS2', stage: 'emerger', size: '#16–18' },
+      { name: 'Red Quill', stage: 'dry', size: '#16–18' },
+      { name: 'Parachute Adams', stage: 'dry', size: '#16–18' },
+    ],
   },
 ];
 
@@ -234,6 +361,17 @@ export function hatchEntriesSortedByCategory(entries: DriftGuideHatchChartEntry[
 export function hatchActivityForMonth(entry: DriftGuideHatchChartEntry, monthIndex0: number): MonthActivity {
   const m = Math.max(0, Math.min(11, monthIndex0));
   return entry.monthActivity[m] ?? 0;
+}
+
+/** Group an entry's matching flies by life stage, in HATCH_FLY_STAGE_ORDER (empty stages dropped). */
+export function hatchFliesByStage(
+  entry: DriftGuideHatchChartEntry,
+): { stage: HatchFlyStage; label: string; flies: HatchFly[] }[] {
+  return HATCH_FLY_STAGE_ORDER.map((stage) => ({
+    stage,
+    label: HATCH_FLY_STAGE_LABELS[stage],
+    flies: entry.flies.filter((f) => f.stage === stage),
+  })).filter((g) => g.flies.length > 0);
 }
 
 export function entriesStrongThisMonth(
