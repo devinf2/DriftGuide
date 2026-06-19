@@ -27,6 +27,8 @@ type PostCardProps = {
   /** Map for the "caught by <friend>" attribution label. */
   profileByUserId: Record<string, { display_name: string }>;
   onOpenTrip?: () => void;
+  /** Open the post author's profile (tap on avatar/name). */
+  onOpenAuthor?: () => void;
   onToggleReaction: (reaction: PostReaction) => void;
   onOpenComments?: () => void;
   commentCount?: number;
@@ -61,6 +63,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
     },
     avatarLetter: { color: colors.textInverse, fontWeight: '700', fontSize: FontSize.sm },
+    authorTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
     headerText: { flex: 1 },
     authorName: { fontSize: FontSize.sm, fontWeight: '700', color: colors.text },
     metaLine: { fontSize: FontSize.xs, color: colors.textTertiary, marginTop: 1 },
@@ -120,6 +123,7 @@ export function PostCard({
   authorIsMe,
   profileByUserId,
   onOpenTrip,
+  onOpenAuthor,
   onToggleReaction,
   onOpenComments,
   commentCount = 0,
@@ -145,22 +149,30 @@ export function PostCard({
   return (
     <View style={styles.card}>
       <View style={styles.header}>
-        {author?.avatar_url ? (
-          <Image source={{ uri: author.avatar_url }} style={styles.avatar} contentFit="cover" />
-        ) : (
-          <View style={styles.avatarFallback}>
-            <Text style={styles.avatarLetter}>{profileInitialLetter(author)}</Text>
+        <Pressable
+          style={styles.authorTap}
+          onPress={onOpenAuthor}
+          disabled={!onOpenAuthor}
+          accessibilityRole={onOpenAuthor ? 'button' : undefined}
+          accessibilityLabel={onOpenAuthor ? `${profileDisplayName(author)} profile` : undefined}
+        >
+          {author?.avatar_url ? (
+            <Image source={{ uri: author.avatar_url }} style={styles.avatar} contentFit="cover" />
+          ) : (
+            <View style={styles.avatarFallback}>
+              <Text style={styles.avatarLetter}>{profileInitialLetter(author)}</Text>
+            </View>
+          )}
+          <View style={styles.headerText}>
+            <Text style={styles.authorName} numberOfLines={1}>
+              {profileDisplayName(author)}
+            </Text>
+            <Text style={styles.metaLine} numberOfLines={1}>
+              {formatRelativeTime(post.created_at)}
+              {caughtBy ? ` · caught by ${caughtBy}` : ''}
+            </Text>
           </View>
-        )}
-        <View style={styles.headerText}>
-          <Text style={styles.authorName} numberOfLines={1}>
-            {profileDisplayName(author)}
-          </Text>
-          <Text style={styles.metaLine} numberOfLines={1}>
-            {formatRelativeTime(post.created_at)}
-            {caughtBy ? ` · caught by ${caughtBy}` : ''}
-          </Text>
-        </View>
+        </Pressable>
         {authorIsMe && onDelete ? (
           <Pressable
             style={styles.overflowBtn}

@@ -16,6 +16,8 @@ export const NOTIFICATION_UUID_RE =
  *   'trip_reminder' | 'log_catches' -> /trip/:id/summary
  *   'conditions'                    -> /spot/:id
  *   'post_created' | 'post_reaction'-> /friends (the social feed)
+ *   'friend_request'                -> /friends/manage?seg=requests (the Requests tab)
+ *   'friend_accept'                 -> /profile/friend/:actorId (the new friend's profile)
  *   'stats'                         -> /profile/stats
  */
 export function routeForNotificationData(
@@ -39,6 +41,13 @@ export function routeForNotificationData(
     case 'post_created':
     case 'post_reaction':
       return '/friends';
+    case 'friend_request':
+      return '/friends/manage?seg=requests';
+    case 'friend_accept': {
+      const id = typeof data.actorId === 'string' ? data.actorId : null;
+      if (id && NOTIFICATION_UUID_RE.test(id)) return `/profile/friend/${id}`;
+      return '/friends/manage';
+    }
     case 'stats':
       return '/profile/stats';
     default:

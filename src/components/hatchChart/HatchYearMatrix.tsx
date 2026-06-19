@@ -1,8 +1,12 @@
-import { DRIFTGUIDE_HATCH_CHART_ENTRIES, MONTH_LABELS_SHORT } from '@/src/data/driftGuideHatchChart';
+import {
+  DRIFTGUIDE_HATCH_CHART_ENTRIES,
+  hatchEntriesSortedByMonthActivity,
+  MONTH_LABELS_SHORT,
+} from '@/src/data/driftGuideHatchChart';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { activityCellColor } from '@/src/components/hatchChart/hatchChartTheme';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 type Props = {
@@ -14,6 +18,13 @@ export function HatchYearMatrix({ currentMonthIndex0, colors }: Props) {
   const currentColumnBorder = colors.water;
   const [truncatedRowIds, setTruncatedRowIds] = useState<Set<string>>(() => new Set());
   const [nameTipRowId, setNameTipRowId] = useState<string | null>(null);
+
+  // Rows ordered hottest-this-month first, matching the hatch list below. Label column and the
+  // per-month cells both iterate this so the rows stay aligned.
+  const rows = useMemo(
+    () => hatchEntriesSortedByMonthActivity(DRIFTGUIDE_HATCH_CHART_ENTRIES, currentMonthIndex0),
+    [currentMonthIndex0],
+  );
 
   const onRowLabelTextLayout = useCallback(
     (rowId: string, shortLabel: string, lines: { text: string }[]) => {
@@ -66,7 +77,7 @@ export function HatchYearMatrix({ currentMonthIndex0, colors }: Props) {
       <View style={styles.grid}>
         <View style={styles.labelColumn}>
           <View style={styles.headerLabelSpacer} />
-          {DRIFTGUIDE_HATCH_CHART_ENTRIES.map((row) => {
+          {rows.map((row) => {
             const isTruncated = truncatedRowIds.has(row.id);
             const labelBody = (
               <Text
@@ -129,7 +140,7 @@ export function HatchYearMatrix({ currentMonthIndex0, colors }: Props) {
               >
                 {m}
               </Text>
-              {DRIFTGUIDE_HATCH_CHART_ENTRIES.map((entry) => {
+              {rows.map((entry) => {
                 const level = entry.monthActivity[monthIndex] ?? 0;
                 return (
                   <View

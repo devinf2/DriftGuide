@@ -177,12 +177,17 @@ export default function FeedScreen() {
                 : `/feed/trip/${item.post.id}`) as never,
             )
         : undefined;
+      const onOpenAuthor = () =>
+        authorIsMe
+          ? router.push('/profile' as never)
+          : router.push({ pathname: '/friends/friend/[id]', params: { id: item.post.author_id } });
       return (
         <PostCard
           item={item}
           authorIsMe={authorIsMe}
           profileByUserId={profileNameMap}
           onOpenTrip={onOpenTrip}
+          onOpenAuthor={onOpenAuthor}
           onToggleReaction={(reaction) => toggleReaction(mode, item.post.id, reaction)}
           onOpenComments={() =>
             setCommentsTarget({ postId: item.post.id, authorId: item.post.author_id })

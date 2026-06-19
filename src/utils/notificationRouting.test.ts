@@ -22,6 +22,22 @@ describe('routeForNotificationData', () => {
     expect(routeForNotificationData({ type: 'post_reaction' })).toBe('/friends');
   });
 
+  it('routes friend requests to the Requests tab', () => {
+    expect(routeForNotificationData({ type: 'friend_request', actorId: UUID })).toBe(
+      '/friends/manage?seg=requests',
+    );
+  });
+
+  it('routes friend accepts to the new friend profile, falling back when the id is bad', () => {
+    expect(routeForNotificationData({ type: 'friend_accept', actorId: UUID })).toBe(
+      `/profile/friend/${UUID}`,
+    );
+    expect(routeForNotificationData({ type: 'friend_accept', actorId: 'nope' })).toBe(
+      '/friends/manage',
+    );
+    expect(routeForNotificationData({ type: 'friend_accept' })).toBe('/friends/manage');
+  });
+
   it('routes stats payloads to the stats screen', () => {
     expect(routeForNotificationData({ type: 'stats' })).toBe('/profile/stats');
   });

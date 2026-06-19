@@ -5,17 +5,21 @@ import { hatchCategoryColor } from '@/src/components/hatchChart/hatchChartTheme'
 import type { DriftGuideHatchChartEntry } from '@/src/data/driftGuideHatchChart';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type Props = {
   entry: DriftGuideHatchChartEntry;
   currentMonthIndex0: number;
   colors: ThemeColors;
+  /** Controlled expanded state (drives the rig-note detail + any expanded children). */
+  open: boolean;
+  onToggle: () => void;
+  /** Rendered inside the expanded section, after the rig notes (e.g. the matching-flies strip). */
+  expandedExtra?: ReactNode;
 };
 
-export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors }: Props) {
-  const [open, setOpen] = useState(false);
+export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors, open, onToggle, expandedExtra }: Props) {
   const [chartW, setChartW] = useState(280);
   const accent = hatchCategoryColor(entry.category, colors);
 
@@ -29,40 +33,48 @@ export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors }: Prop
 
   return (
     <View style={styles.card}>
+      {/* Tapping anywhere on the hatch (title or charts) toggles the rig-notes + flies dropdown. */}
       <Pressable
-        onPress={() => setOpen((o) => !o)}
-        style={({ pressed }) => [styles.topRow, pressed && { opacity: 0.9 }]}
+        onPress={onToggle}
+        style={({ pressed }) => [pressed && { opacity: 0.9 }]}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
-        accessibilityHint="Shows or hides sizes, water, and tip"
+        accessibilityHint="Shows or hides sizes, water, tip, and matching flies"
       >
-        <View style={[styles.catStripe, { backgroundColor: accent }]} />
-        <View style={styles.topMain}>
-          <View style={styles.titleRow}>
+        <View style={styles.topRow}>
+          <View style={[styles.catStripe, { backgroundColor: accent }]} />
+          <View style={styles.topMain}>
             <Text style={styles.name} numberOfLines={2}>
               {entry.name}
             </Text>
-            <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textTertiary} />
+            <Text style={styles.summary} numberOfLines={2}>
+              {entry.peakSummary}
+            </Text>
           </View>
-          <Text style={styles.summary} numberOfLines={2}>
-            {entry.peakSummary}
+        </View>
+
+        <View style={styles.chartBlock} onLayout={onLayout}>
+          <Text style={styles.sectionLabel}>Season by month</Text>
+          <HatchMonthHeatstrip
+            months={entry.monthActivity}
+            currentMonthIndex0={currentMonthIndex0}
+            category={entry.category}
+            colors={colors}
+          />
+          <View style={styles.sparkWrap}>
+            <HatchActivitySparkline months={entry.monthActivity} strokeColor={accent} width={chartW} height={sparkH} />
+          </View>
+          <HatchDaypartBar daypart={entry.daypart} colors={colors} accent={accent} />
+        </View>
+
+        {/* Dropdown affordance, directly above where the content opens (below the time-of-day scale). */}
+        <View style={[styles.expandToggle, { borderTopColor: colors.border }]}>
+          <Text style={[styles.expandLabel, { color: accent }]}>
+            {open ? 'Hide rig notes & flies' : 'Rig notes & matching flies'}
           </Text>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={accent} />
         </View>
       </Pressable>
-
-      <View style={styles.chartBlock} onLayout={onLayout}>
-        <Text style={styles.sectionLabel}>Season by month</Text>
-        <HatchMonthHeatstrip
-          months={entry.monthActivity}
-          currentMonthIndex0={currentMonthIndex0}
-          category={entry.category}
-          colors={colors}
-        />
-        <View style={styles.sparkWrap}>
-          <HatchActivitySparkline months={entry.monthActivity} strokeColor={accent} width={chartW} height={sparkH} />
-        </View>
-        <HatchDaypartBar daypart={entry.daypart} colors={colors} accent={accent} />
-      </View>
 
       {open ? (
         <View style={[styles.detail, { borderTopColor: colors.border }]}>
@@ -78,6 +90,7 @@ export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors }: Prop
             <Text style={styles.detailKey}>Tip </Text>
             {entry.tip}
           </Text>
+          {expandedExtra}
         </View>
       ) : null}
     </View>
@@ -106,13 +119,7 @@ function createCardStyles(colors: ThemeColors, accent: string) {
       paddingRight: Spacing.sm,
       paddingLeft: Spacing.sm,
     },
-    titleRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: Spacing.xs,
-    },
     name: {
-      flex: 1,
       fontSize: FontSize.md,
       fontWeight: '800',
       color: colors.text,
@@ -122,6 +129,21 @@ function createCardStyles(colors: ThemeColors, accent: string) {
       color: colors.textSecondary,
       marginTop: 4,
       lineHeight: 18,
+    },
+    expandToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: Spacing.xs,
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      borderTopWidth: StyleSheet.hairlineWidth,
+    },
+    expandLabel: {
+      fontSize: FontSize.xs,
+      fontWeight: '800',
+      textTransform: 'uppercase',
+      letterSpacing: 0.4,
     },
     chartBlock: {
       paddingHorizontal: Spacing.md,

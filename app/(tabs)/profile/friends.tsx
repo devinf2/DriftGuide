@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter, useSegments } from 'expo-router';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { BorderRadius, FontSize, Spacing } from '@/src/constants/theme';
@@ -71,6 +71,14 @@ function parseSegParam(raw: string | string[] | undefined): Seg | null {
 export default function FriendsScreen() {
   const { colors } = useAppTheme();
   const router = useRouter();
+  const routeSegments = useSegments();
+  // This screen is mounted in both the Profile tab (/profile/friends → segments include
+  // 'profile') and the Feed tab (/friends/manage → no 'profile' segment). Open a friend's
+  // profile inside whichever tab's stack we're in so we don't hijack the Feed tab (which
+  // would otherwise leave the user stuck on a friend's profile there with no way back).
+  const friendProfilePath = (routeSegments as string[]).includes('profile')
+    ? '/profile/friend/[id]'
+    : '/friends/friend/[id]';
   const { seg: segParam } = useLocalSearchParams<{ seg?: string | string[] }>();
   const { user, profile, fetchProfile } = useAuthStore();
   const { friendships, loading, refresh, accept, remove } = useFriendsStore();
@@ -273,7 +281,12 @@ export default function FriendsScreen() {
     }
 
     return (
-      <View style={[styles.findResultCard, { borderColor: colors.border }]}>
+      <Pressable
+        onPress={() => router.push({ pathname: friendProfilePath, params: { id: otherId } })}
+        style={({ pressed }) => [styles.findResultCard, { borderColor: colors.border }, pressed && { opacity: 0.88 }]}
+        accessibilityRole="button"
+        accessibilityLabel={`${displayName?.trim() || 'Angler'} profile`}
+      >
         <View style={styles.findResultRow}>
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} style={styles.findResultAvatar} contentFit="cover" />
@@ -294,7 +307,7 @@ export default function FriendsScreen() {
           </View>
           {action}
         </View>
-      </View>
+      </Pressable>
     );
   };
 
@@ -571,7 +584,7 @@ export default function FriendsScreen() {
                 return (
                   <Pressable
                     key={`${f.profile_min}-${f.profile_max}`}
-                    onPress={() => router.push({ pathname: '/friends/friend/[id]', params: { id: oid } })}
+                    onPress={() => router.push({ pathname: friendProfilePath, params: { id: oid } })}
                     style={({ pressed }) => [pressed && { opacity: 0.88 }]}
                     accessibilityRole="button"
                     accessibilityLabel={`${label} profile`}

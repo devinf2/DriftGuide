@@ -4,8 +4,9 @@ import {
   DRIFTGUIDE_HATCH_CHART_ENTRIES,
   DRIFTGUIDE_HATCH_CHART_INTRO,
   entriesStrongThisMonth,
-  hatchEntriesSortedByCategory,
+  hatchEntriesSortedByMonthActivity,
   hatchFliesByStage,
+  resolveHatchChartEntry,
   type DriftGuideHatchChartEntry,
   type HatchFly,
 } from '@/src/data/driftGuideHatchChart';
@@ -16,8 +17,9 @@ import type { FlyChangeData } from '@/src/types';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { useCallback, useMemo } from 'react';
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Image, type LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /** Parse the first hook size out of a hint like '#18–22' for FlyChangeData.size. */
@@ -110,15 +112,11 @@ function createStyles(colors: ThemeColors) {
       lineHeight: 18,
       fontStyle: 'italic',
     },
-    fliesCard: {
-      backgroundColor: colors.surface,
-      borderRadius: BorderRadius.lg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      marginTop: -Spacing.xs,
-      marginBottom: Spacing.md,
-      paddingVertical: Spacing.sm,
-      paddingHorizontal: Spacing.md,
+    fliesInline: {
+      marginTop: Spacing.sm,
+      paddingTop: Spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
     },
     fliesHeader: {
       fontSize: FontSize.xs,
@@ -178,7 +176,7 @@ function MatchingFliesStrip({ entry, colors, styles, onSelectFly }: MatchingFlie
   if (groups.length === 0) return null;
 
   return (
-    <View style={styles.fliesCard}>
+    <View style={styles.fliesInline}>
       <Text style={styles.fliesHeader}>Matching flies</Text>
       {groups.map((group) => (
         <View key={group.stage} style={{ marginBottom: Spacing.sm }}>
@@ -226,7 +224,43 @@ export default function HatchChartScreen() {
     () => entriesStrongThisMonth(DRIFTGUIDE_HATCH_CHART_ENTRIES, monthIndex0, 2),
     [monthIndex0],
   );
-  const sorted = useMemo(() => hatchEntriesSortedByCategory(DRIFTGUIDE_HATCH_CHART_ENTRIES), []);
+  const sorted = useMemo(
+    () => hatchEntriesSortedByMonthActivity(DRIFTGUIDE_HATCH_CHART_ENTRIES, monthIndex0),
+    [monthIndex0],
+  );
+
+  // Deep-link: a `focus` param (entry id or hatch name) opens that hatch expanded and scrolls to it.
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const focusEntry = useMemo(
+    () => (focus ? resolveHatchChartEntry(Array.isArray(focus) ? focus[0] : focus) : undefined),
+    [focus],
+  );
+
+  // Expanded entries (multiple may be open). Seed with the focused hatch.
+  const [openIds, setOpenIds] = useState<Set<string>>(() =>
+    focusEntry ? new Set([focusEntry.id]) : new Set(),
+  );
+  const toggleOpen = useCallback((id: string) => {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Scroll the focused entry into view once its row has been laid out.
+  const scrollRef = useRef<ScrollView>(null);
+  const didScrollRef = useRef(false);
+  const handleEntryLayout = useCallback(
+    (id: string, e: LayoutChangeEvent) => {
+      if (didScrollRef.current || !focusEntry || id !== focusEntry.id) return;
+      didScrollRef.current = true;
+      const y = e.nativeEvent.layout.y;
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - Spacing.md), animated: true });
+    },
+    [focusEntry],
+  );
 
   const handleSelectFly = useCallback((fly: HatchFly, entry: DriftGuideHatchChartEntry) => {
     // Build the catch fly-picker payload now so wiring is trivial later.
@@ -241,6 +275,7 @@ export default function HatchChartScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingBottom: Spacing.xl + insets.bottom }]}
     >
@@ -275,11 +310,19 @@ export default function HatchChartScreen() {
 
       <HatchYearMatrix currentMonthIndex0={monthIndex0} colors={colors} />
 
-      <Text style={styles.sectionTitle}>Each hatch — graphs + tap for rig notes</Text>
+      <Text style={styles.sectionTitle}>Hottest this month first — tap for rig notes + flies</Text>
       {sorted.map((e) => (
-        <View key={e.id}>
-          <HatchEntryVisualCard entry={e} currentMonthIndex0={monthIndex0} colors={colors} />
-          <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+        <View key={e.id} onLayout={(ev) => handleEntryLayout(e.id, ev)}>
+          <HatchEntryVisualCard
+            entry={e}
+            currentMonthIndex0={monthIndex0}
+            colors={colors}
+            open={openIds.has(e.id)}
+            onToggle={() => toggleOpen(e.id)}
+            expandedExtra={
+              <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+            }
+          />
         </View>
       ))}
 

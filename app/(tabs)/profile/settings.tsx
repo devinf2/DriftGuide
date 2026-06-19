@@ -477,7 +477,20 @@ export default function ProfileSettingsScreen() {
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: signOut },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await signOut();
+              // On success the root AuthGate redirects to the sign-in screen automatically.
+            } catch {
+              Alert.alert('Could not sign out', 'Please try again.');
+            }
+          })();
+        },
+      },
     ]);
   };
 

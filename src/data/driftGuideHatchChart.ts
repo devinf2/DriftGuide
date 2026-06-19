@@ -357,6 +357,22 @@ export function hatchEntriesSortedByCategory(entries: DriftGuideHatchChartEntry[
   );
 }
 
+/**
+ * Sort hottest-this-month first: highest current-month activity on top, with category order and
+ * name as stable tie-breakers so equally-active hatches keep a predictable order.
+ */
+export function hatchEntriesSortedByMonthActivity(
+  entries: DriftGuideHatchChartEntry[],
+  monthIndex0: number,
+): DriftGuideHatchChartEntry[] {
+  return [...entries].sort(
+    (a, b) =>
+      hatchActivityForMonth(b, monthIndex0) - hatchActivityForMonth(a, monthIndex0) ||
+      CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
+      a.name.localeCompare(b.name),
+  );
+}
+
 /** 0-based month (Date.getMonth()) */
 export function hatchActivityForMonth(entry: DriftGuideHatchChartEntry, monthIndex0: number): MonthActivity {
   const m = Math.max(0, Math.min(11, monthIndex0));
@@ -380,4 +396,70 @@ export function entriesStrongThisMonth(
   minLevel: MonthActivity = 2,
 ): DriftGuideHatchChartEntry[] {
   return entries.filter((e) => hatchActivityForMonth(e, monthIndex0) >= minLevel);
+}
+
+/**
+ * Extra keywords that should resolve to a chart entry, keyed by entry id. Lets a hatch brief
+ * row like "Caddisfly" or "Baetis" deep-link to the right calendar entry even though the entry's
+ * `name`/`shortLabel` use different wording.
+ */
+const HATCH_ENTRY_ALIASES: Record<string, string[]> = {
+  bwo: ['baetis', 'blue winged olive', 'blue wing olive', 'bluewing'],
+  pmd: ['pale morning dun', 'pmd'],
+  caddis: ['caddis', 'caddisfly', 'elk hair caddis'],
+  'oct-caddis': ['october caddis', 'oct caddis'],
+  callibaetis: ['calli', 'callibaetis'],
+  golden: ['sally', 'yellow sally', 'golden stone'],
+  salmonfly: ['salmonfly', 'salmon fly', 'pteronarcys'],
+  skwala: ['skwala'],
+  trico: ['trico', 'tricos', 'tricorythodes'],
+  'green-drake': ['green drake', 'flav', 'drunella'],
+  'march-brown': ['march brown', 'gray drake', 'grey drake'],
+  mahogany: ['mahogany', 'paraleptophlebia'],
+  midge: ['midge', 'midges', 'chironomid'],
+  terrestrial: ['terrestrial', 'terrestrials', 'hopper', 'grasshopper', 'ant', 'beetle'],
+};
+
+/** Lowercase, drop parentheticals/punctuation, collapse whitespace — for fuzzy name matching. */
+function normalizeHatchQuery(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resolve a free-form hatch name (e.g. from a hatch brief row's `insect`) to a calendar entry.
+ * Tries id/shortLabel/name exact-ish matches, then alias keywords, then loose containment.
+ * Returns undefined when nothing matches confidently.
+ */
+export function resolveHatchChartEntry(
+  query: string,
+  entries: DriftGuideHatchChartEntry[] = DRIFTGUIDE_HATCH_CHART_ENTRIES,
+): DriftGuideHatchChartEntry | undefined {
+  const q = normalizeHatchQuery(query);
+  if (!q) return undefined;
+
+  // 1) Direct match against id / shortLabel / name.
+  for (const e of entries) {
+    if (q === e.id || q === normalizeHatchQuery(e.shortLabel) || q === normalizeHatchQuery(e.name)) {
+      return e;
+    }
+  }
+
+  // 2) Alias keyword match (longest alias first so "october caddis" beats "caddis").
+  const aliasHits = entries
+    .flatMap((e) => (HATCH_ENTRY_ALIASES[e.id] ?? []).map((alias) => ({ e, alias })))
+    .filter(({ alias }) => q.includes(alias))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  if (aliasHits.length > 0) return aliasHits[0].e;
+
+  // 3) Loose containment against the entry name (either direction).
+  for (const e of entries) {
+    const name = normalizeHatchQuery(e.name);
+    if (name && (name.includes(q) || q.includes(name))) return e;
+  }
+
+  return undefined;
 }

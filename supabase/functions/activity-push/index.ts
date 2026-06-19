@@ -31,7 +31,7 @@ const BATCH_SIZE = 200;
 
 interface ActivityEventRow {
   id: string;
-  type: "post_created" | "post_reaction";
+  type: "post_created" | "post_reaction" | "friend_request" | "friend_accept";
   actor_id: string;
   recipient_id: string | null;
   post_id: string | null;
@@ -63,8 +63,29 @@ function resolveRecipients(
       data: { type: event.type, postId: event.post_id, actorId: event.actor_id },
     }));
   }
-  // post_reaction
+  // Remaining types are all targeted (recipient_id set; never fanned out).
   if (!event.recipient_id || event.recipient_id === event.actor_id) return [];
+  if (event.type === "friend_request") {
+    return [
+      {
+        userId: event.recipient_id,
+        title: "New friend request",
+        body: `${name} sent you a friend request.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  if (event.type === "friend_accept") {
+    return [
+      {
+        userId: event.recipient_id,
+        title: "Friend request accepted",
+        body: `${name} accepted your friend request.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  // post_reaction
   return [
     {
       userId: event.recipient_id,
@@ -117,7 +138,8 @@ Deno.serve(async (req: Request) => {
   // Pull a bounded batch of unprocessed events (partial index on processed_at IS NULL).
   const { data: events, error: evErr } = await admin
     .from("activity_events")
-    .select("id, type, actor_id, recipient_id, post_id")
+    // Column is event_type; alias to `type` so the row shape matches ActivityEventRow.
+    .select("id, type:event_type, actor_id, recipient_id, post_id")
     .is("processed_at", null)
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);
