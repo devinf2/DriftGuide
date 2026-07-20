@@ -88,6 +88,7 @@ import { OfflineTripPhotoImage } from '@/src/components/OfflineTripPhotoImage';
 import { isTripPinned, reconcileTripPhotoCache, togglePinTrip } from '@/src/services/tripPhotoOfflineCache';
 import { createTripSurveyStyles, TRIP_SURVEY_CLARITY_OPTIONS } from './survey';
 import { buildShareTripUrl } from '@/src/constants/shareLinks';
+import { TAB_BAR_EXTRA } from '@/src/constants/mapTabChrome';
 
 type TabKey = 'fishing' | 'photos' | 'conditions' | 'map';
 
@@ -127,10 +128,12 @@ function exitTripSummary(
 const TRIP_PHOTOS_DEBUG = typeof __DEV__ !== 'undefined' && __DEV__;
 
 export default function TripSummaryScreen() {
-  const { id, returnTo, friendId } = useLocalSearchParams<{
+  const { id, returnTo, friendId, focusCatchEventId, focusNonce } = useLocalSearchParams<{
     id: string;
     returnTo?: string;
     friendId?: string;
+    focusCatchEventId?: string;
+    focusNonce?: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -141,7 +144,6 @@ export default function TripSummaryScreen() {
   const { colors: themeColors } = useAppTheme();
   const styles = useMemo(() => createTripSummaryStyles(themeColors), [themeColors]);
   const surveyStyles = useMemo(() => createTripSurveyStyles(themeColors), [themeColors]);
-  const [journalEditMode, setJournalEditMode] = useState(false);
   const [trip, setTrip] = useState<Trip | null>(null);
   /** Visibility gate for shared links: set only when a non-owner viewer is denied. */
   const [accessGate, setAccessGate] = useState<TripShareAccess | null>(null);
@@ -197,11 +199,6 @@ export default function TripSummaryScreen() {
   );
 
   useEffect(() => {
-    if (!isOwnTrip) setJournalEditMode(false);
-  }, [isOwnTrip]);
-
-  useEffect(() => {
-    setJournalEditMode(false);
     setTripPinPlacement(null);
   }, [id]);
 
@@ -606,6 +603,22 @@ export default function TripSummaryScreen() {
     [events, trip?.location?.name, albumPhotoUrlsByCatchId],
   );
 
+  // Deep-link from the home Welcome tab: once events load, open the tapped catch's full-screen
+  // photo viewer (falls back to the text detail sheet if that catch has no photo).
+  const focusHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusCatchEventId) return;
+    // Key on the nonce so each tap (even for the same catch) opens once, without re-firing when
+    // events refetch mid-view.
+    const focusKey = `${focusCatchEventId}:${focusNonce ?? ''}`;
+    if (focusHandledRef.current === focusKey) return;
+    const ev = events.find((e) => e.id === focusCatchEventId && e.event_type === 'catch');
+    if (!ev) return;
+    focusHandledRef.current = focusKey;
+    setActiveTab('fishing');
+    handleMapCatchWaypointPress(focusCatchEventId, { event: ev });
+  }, [focusCatchEventId, focusNonce, events, handleMapCatchWaypointPress]);
+
   const persistTripPins = useCallback(
     async (nextTrip: Trip, nextEvents: TripEvent[]): Promise<boolean> => {
       if (nextTrip.user_id !== user?.id) {
@@ -751,23 +764,6 @@ export default function TripSummaryScreen() {
       /* dismissed */
     }
   }, [trip?.id]);
-
-  const tripDurationLabel = useMemo(() => {
-    if (!trip) return '';
-    let ms: number | null | undefined = trip.active_fishing_ms;
-    if ((ms == null || ms === 0) && events.length > 0) {
-      const inferred = inferActiveFishingMsFromPauseResumeEvents(
-        trip.start_time,
-        trip.end_time,
-        events,
-      );
-      if (inferred != null) ms = inferred;
-    }
-    return formatTripDuration(trip.start_time, trip.end_time, {
-      imported: trip.imported,
-      activeFishingMs: ms ?? undefined,
-    });
-  }, [trip, events]);
 
   const persistTripReview = useCallback(
     async (payload: {
@@ -1033,7 +1029,10 @@ export default function TripSummaryScreen() {
         </Pressable>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            Summary
+            {trip.location?.name || 'Unknown Location'}
+          </Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {formatTripDate(trip.start_time)}
           </Text>
         </View>
         <View style={styles.headerActions}>
@@ -1118,17 +1117,6 @@ export default function TripSummaryScreen() {
             ) : null}
             <Pressable
               style={styles.summaryHeaderMenuRow}
-              onPress={() => {
-                setSummaryHeaderMenuVisible(false);
-                setJournalEditMode((v) => !v);
-              }}
-            >
-              <Text style={styles.summaryHeaderMenuLabel}>
-                {journalEditMode ? 'Done editing journal' : 'Edit journal'}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={styles.summaryHeaderMenuRow}
               disabled={deleting}
               onPress={() => {
                 setSummaryHeaderMenuVisible(false);
@@ -1191,100 +1179,6 @@ export default function TripSummaryScreen() {
           saving={photoVisSaving}
         />
       ) : null}
-
-      {/* Date & Location */}
-      <View style={styles.dateLocationRow}>
-        <Text style={styles.dateLocationName} numberOfLines={1}>
-          {trip.location?.name || 'Unknown Location'}
-        </Text>
-        <Text style={styles.dateLocationDate}>{formatTripDate(trip.start_time)}</Text>
-      </View>
-
-      {/* Stats Card — three columns: Fish | Duration | Rating (shared value row height for alignment) */}
-      <View style={styles.statsCard}>
-        <View style={styles.statItem}>
-          <View style={styles.statValueSlot}>
-            <Text style={styles.statValue}>{trip.total_fish}</Text>
-          </View>
-          <Text style={styles.statLabel}>Fish</Text>
-        </View>
-        <View style={[styles.statItem, styles.statItemMiddle]}>
-          <View style={styles.statValueSlot}>
-            <Text
-              style={[styles.statValue, styles.statValueDuration]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.55}
-            >
-              {tripDurationLabel}
-            </Text>
-          </View>
-          <Text style={styles.statLabel}>Duration</Text>
-        </View>
-        <View style={styles.statItem}>
-          <View style={[styles.statValueSlot, styles.statValueSlotRating]}>
-            {isOwnTrip ? (
-              <>
-                <Pressable
-                  onPress={() => openReviewModal()}
-                  hitSlop={12}
-                  style={({ pressed }) => [styles.statRatingPencil, { opacity: pressed ? 0.6 : 1 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Edit trip review"
-                >
-                  <MaterialIcons
-                    name="edit"
-                    size={15}
-                    color={
-                      trip.rating != null ||
-                      (trip.user_reported_clarity != null && trip.user_reported_clarity !== 'unknown') ||
-                      normalizeTripNote(trip.notes) != null
-                        ? themeColors.primary
-                        : themeColors.textSecondary
-                    }
-                  />
-                </Pressable>
-                <Pressable
-                  onPress={() => openReviewModal()}
-                  style={styles.statRatingTap}
-                  disabled={ratingNoteSaving}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    trip.rating != null ? `Trip rating ${trip.rating} out of 5` : 'Set trip rating'
-                  }
-                >
-                  {ratingNoteSaving ? (
-                    <ActivityIndicator size="small" color={themeColors.primary} />
-                  ) : (
-                    <>
-                      <Text style={styles.statValue}>
-                        {trip.rating != null ? String(trip.rating) : '—'}
-                      </Text>
-                      <MaterialIcons
-                        name={trip.rating != null ? 'star' : 'star-border'}
-                        size={26}
-                        color={trip.rating != null ? themeColors.warning : themeColors.border}
-                      />
-                    </>
-                  )}
-                </Pressable>
-              </>
-            ) : (
-              <View style={styles.statRatingTap}>
-                <Text style={styles.statValue}>
-                  {trip.rating != null ? String(trip.rating) : '—'}
-                </Text>
-                <MaterialIcons
-                  name={trip.rating != null ? 'star' : 'star-border'}
-                  size={26}
-                  color={trip.rating != null ? themeColors.warning : themeColors.border}
-                />
-              </View>
-            )}
-          </View>
-          <Text style={styles.statLabel}>Rating</Text>
-        </View>
-      </View>
 
       <Modal
         visible={reviewModalVisible}
@@ -1415,12 +1309,16 @@ export default function TripSummaryScreen() {
             userId={user.id}
             isConnected={isConnected}
             events={events}
-            editMode={isOwnTrip && journalEditMode}
+            editMode={isOwnTrip}
             onEventsChange={setEvents}
             onTripPatch={(patch) => setTrip((t) => (t ? { ...t, ...patch } : null))}
             onCatchPhotoPress={handleCatchPhotoPress}
             onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
             tripAlbumPhotos={mergedAlbumPhotos}
+            focusCatchEventId={focusCatchEventId ?? null}
+            showRecap={isOwnTrip && trip.status === 'completed'}
+            onEditRating={isOwnTrip ? openReviewModal : undefined}
+            contentBottomInset={TAB_BAR_EXTRA + insets.bottom + Spacing.md}
           />
         </View>
       ) : null}
@@ -1527,7 +1425,7 @@ export default function TripSummaryScreen() {
           isConnected={isConnected}
           albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
           isOwnTrip={isOwnTrip}
-          editMode={isOwnTrip && journalEditMode}
+          editMode={isOwnTrip}
           tripPinPlacement={tripPinPlacement}
           onRequestEditTripPin={isOwnTrip ? openTripPinPlacement : undefined}
           onPlacementMove={handleTripPinPlacementMove}
@@ -2159,7 +2057,9 @@ function createTripSummaryStyles(c: ThemeColors) {
   },
   headerCenter: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    marginHorizontal: Spacing.md,
   },
   headerActions: {
     flexDirection: 'row',
@@ -2168,8 +2068,14 @@ function createTripSummaryStyles(c: ThemeColors) {
   },
   headerTitle: {
     fontSize: FontSize.lg,
-    fontWeight: '700',
+    fontWeight: '800',
     color: c.textInverse,
+  },
+  headerSubtitle: {
+    fontSize: FontSize.xs,
+    color: c.textInverse,
+    opacity: 0.82,
+    marginTop: 1,
   },
 
   summaryHeaderMenuOverlay: {
@@ -2223,88 +2129,6 @@ function createTripSummaryStyles(c: ThemeColors) {
     color: c.textSecondary,
   },
 
-  dateLocationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xs,
-    paddingBottom: Spacing.xs,
-  },
-  dateLocationName: {
-    flex: 1,
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: c.text,
-    marginRight: Spacing.sm,
-  },
-  dateLocationDate: {
-    fontSize: FontSize.sm,
-    color: c.textSecondary,
-  },
-
-  statsCard: {
-    flexDirection: 'row',
-    backgroundColor: c.surface,
-    borderRadius: BorderRadius.md,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.md,
-    gap: Spacing.sm,
-    shadowColor: c.shadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    minWidth: 0,
-  },
-  statItemMiddle: {
-    paddingHorizontal: Spacing.xs,
-  },
-  /** Same fixed height for all three stat columns so values + labels line up */
-  statValueSlot: {
-    height: 44,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statValueDuration: {
-    width: '100%',
-    textAlign: 'center',
-  },
-  statValueSlotRating: {
-    position: 'relative',
-  },
-  statRatingPencil: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    zIndex: 1,
-    padding: 2,
-  },
-  statRatingTap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  statValue: {
-    fontSize: FontSize.xl,
-    fontWeight: '700',
-    color: c.primary,
-  },
-  statLabel: {
-    fontSize: FontSize.xs,
-    color: c.textSecondary,
-    marginTop: 4,
-    textAlign: 'center',
-  },
 
   tabPane: {
     flex: 1,

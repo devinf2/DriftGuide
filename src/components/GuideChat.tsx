@@ -12,8 +12,10 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
 import { effectiveIsAppOnline } from '@/src/utils/netReachability';
 import NetInfo from '@react-native-community/netinfo';
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -58,6 +60,12 @@ export interface GuideChatProps {
   refreshControl?: ReactElement<RefreshControlProps>;
   /** Full layout only: e.g. notifications bell, top-right above the message list. */
   topBarAccessory?: ReactNode;
+  /** Fired when the composer gains focus — hosts can expand the chat to full screen. */
+  onRequestExpand?: () => void;
+  /** When true, the chat is hosted full screen; renders a grabber to minimize back. */
+  expanded?: boolean;
+  /** Called when the user taps the grabber to leave full screen. */
+  onRequestCollapse?: () => void;
 }
 
 const DEFAULT_TITLE = 'AI Fishing Guide';
@@ -94,6 +102,22 @@ function createStyles(colors: ThemeColors) {
       fontSize: FontSize.md,
       fontWeight: '600',
       color: colors.primary,
+    },
+    // Full-screen grabber: tap to minimize the chat back into the sectioned home.
+    collapseHandle: {
+      alignItems: 'center',
+      paddingTop: Spacing.sm,
+      paddingBottom: Spacing.xs,
+      gap: 3,
+    },
+    grabber: {
+      width: 40,
+      height: 5,
+      borderRadius: BorderRadius.full,
+      backgroundColor: colors.border,
+    },
+    grabberChevron: {
+      marginTop: -1,
     },
     messages: {
       flex: 1,
@@ -203,6 +227,9 @@ export default function GuideChat({
   listHeaderComponent,
   refreshControl,
   topBarAccessory,
+  onRequestExpand,
+  expanded = false,
+  onRequestCollapse,
 }: GuideChatProps) {
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -297,11 +324,11 @@ export default function GuideChat({
     }
   };
 
-  // iOS: offset must match top inset on this view only. Extra “tab bar” fudge here
-  // increases KeyboardAvoidingView bottom padding (RN: keyboardY = screenY - offset),
-  // which shows up as a gap between the composer and the keyboard on tab screens.
+  // iOS: offset = the view's distance from the top of the screen (RN: keyboardY = screenY - offset).
+  // Too-large an offset over-pads the bottom and leaves a gap above the keyboard. Expanded, the chat
+  // fills from the top so its origin is 0 — the inner paddingTop is separate and must NOT feed in here.
   const keyboardVerticalOffsetIos =
-    variant === 'full' ? contentTopPadding : Math.max(insets.top, 64);
+    variant === 'full' ? (expanded ? 0 : contentTopPadding) : Math.max(insets.top, 64);
 
   return (
     <KeyboardAvoidingView
@@ -317,6 +344,27 @@ export default function GuideChat({
           </Pressable>
         </View>
       )}
+
+      {variant === 'full' && expanded ? (
+        <Pressable
+          onPress={() => {
+            Keyboard.dismiss();
+            onRequestCollapse?.();
+          }}
+          style={styles.collapseHandle}
+          accessibilityRole="button"
+          accessibilityLabel="Minimize guide chat"
+          hitSlop={10}
+        >
+          <View style={styles.grabber} />
+          <Ionicons
+            name="chevron-down"
+            size={15}
+            color={colors.textTertiary}
+            style={styles.grabberChevron}
+          />
+        </Pressable>
+      ) : null}
 
       {variant === 'full' && Boolean(topBarAccessory) ? (
         <View
@@ -407,6 +455,7 @@ export default function GuideChat({
           }
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
+          onFocus={onRequestExpand}
           onSubmitEditing={sendMessage}
           editable={!loading}
         />

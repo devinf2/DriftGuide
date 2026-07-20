@@ -34,6 +34,10 @@ export type TripDashboardTimelineRowsProps = {
   onFlyViewPress?: (event: TripEvent) => void;
   onRowMenuPress?: (event: TripEvent, index: number) => void;
   showRowMenu?: boolean;
+  /** Recap treatment: species-forward catch titles + a gold ring on the standout fish. */
+  emphasizeCatches?: boolean;
+  /** With `emphasizeCatches`, the catch event id that gets the gold "fish of the day" ring. */
+  biggestCatchEventId?: string | null;
   attributionLabelForEvent?: (event: TripEvent) => string | undefined;
   attributionAvatarUriForEvent?: (event: TripEvent) => string | null | undefined;
   compactAttributionLabels?: boolean;
@@ -91,6 +95,8 @@ export function TripDashboardTimelineRows({
   onFlyViewPress,
   onRowMenuPress,
   showRowMenu = true,
+  emphasizeCatches = false,
+  biggestCatchEventId = null,
   attributionLabelForEvent,
   attributionAvatarUriForEvent,
   compactAttributionLabels = false,
@@ -122,6 +128,20 @@ export function TripDashboardTimelineRows({
             : null;
         const isCatch = event.event_type === 'catch';
         const catchData = isCatch ? (event.data as CatchData) : null;
+        // Recap treatment: lead the row with the species + size, drop the fly to the subtitle,
+        // and ring the standout fish in gold. Off everywhere else (active trip, group/peer feeds).
+        const emphasizeThis = emphasizeCatches && catchData != null;
+        const rowTitle = emphasizeThis
+          ? `${catchData!.species?.trim() || 'Fish caught'}${
+              catchData!.size_inches != null ? ` · ${catchData!.size_inches}"` : ''
+            }`
+          : title;
+        const rowSubtitle = emphasizeThis
+          ? [catchFly, catchData!.released ? 'Released' : null].filter(Boolean).join(' · ') || null
+          : subtitle;
+        const isBiggestCatch =
+          emphasizeThis && biggestCatchEventId != null && event.id === biggestCatchEventId;
+        const ringStyle = isBiggestCatch ? { borderColor: colors.warning } : null;
         const catchDetailLines = catchData ? getCatchDetailLines(catchData, catchFly) : [];
         const isCatchExpanded = isCatch && expandedCatchIds.has(event.id);
         const catchHeroUrl =
@@ -198,6 +218,7 @@ export function TripDashboardTimelineRows({
                     styles.timelineNode,
                     styles.timelineNodeCatch,
                     styles.timelineNodeCatchPhoto,
+                    ringStyle,
                   ]}
                 >
                   <TimelineCatchNodePhoto
@@ -215,6 +236,7 @@ export function TripDashboardTimelineRows({
                     event.event_type === 'bite' && styles.timelineNodeBite,
                     event.event_type === 'catch' && styles.timelineNodeCatch,
                     event.event_type === 'note' && styles.timelineNodeNote,
+                    ringStyle,
                   ]}
                 >
                   {event.event_type === 'fly_change' && flySlot ? (
@@ -261,16 +283,16 @@ export function TripDashboardTimelineRows({
                 isCatch
                   ? catchHasExpandableDetails
                     ? isCatchExpanded
-                      ? `Collapse catch details, ${title}`
-                      : `Expand catch details, ${title}`
-                    : title
+                      ? `Collapse catch details, ${rowTitle}`
+                      : `Expand catch details, ${rowTitle}`
+                    : rowTitle
                   : bodyPress
-                    ? title
+                    ? rowTitle
                     : undefined
               }
             >
-              <Text style={styles.timelineRowTitle}>{title}</Text>
-              {subtitle ? <Text style={styles.timelineRowSubtitle}>{subtitle}</Text> : null}
+              <Text style={styles.timelineRowTitle}>{rowTitle}</Text>
+              {rowSubtitle ? <Text style={styles.timelineRowSubtitle}>{rowSubtitle}</Text> : null}
               {isCatch && isCatchExpanded && catchData ? (
                 <CatchDetailsBlock data={catchData} flyLabel={catchFly} styles={styles} />
               ) : null}

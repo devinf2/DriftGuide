@@ -18,6 +18,14 @@ function conditionTierLabel(stars: number): string {
   return 'Tough';
 }
 
+/** Tier color drives the score pill + top-pick accent so the ranking reads at a glance. */
+function tierColor(colors: ThemeColors, stars: number): string {
+  if (stars >= 4.25) return colors.success;
+  if (stars >= 3.25) return colors.secondary;
+  if (stars >= 2) return colors.warning;
+  return colors.textTertiary;
+}
+
 function outlookLabel(stars: number): { text: string; positive: boolean } {
   if (stars >= 4) return { text: 'Strong', positive: true };
   if (stars >= 2.5) return { text: 'Mixed', positive: false };
@@ -46,155 +54,166 @@ function createStyles(colors: ThemeColors) {
     card: {
       backgroundColor: colors.surface,
       borderRadius: BorderRadius.lg,
-      paddingVertical: Spacing.md,
-      paddingHorizontal: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm + Spacing.xs, // 12 — tighter so all 3 waters fit without scrolling
       marginBottom: Spacing.sm,
-      borderWidth: 1,
-      borderColor: 'transparent',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      // A soft lift so each water reads as its own tappable surface.
+      shadowColor: colors.shadow,
+      shadowOpacity: 1,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 2,
     },
     cardTopPick: {
       borderColor: colors.secondary,
+      borderWidth: 1.5,
+    },
+    // A tinted rail down the left edge ties the card to its tier color.
+    accentRail: {
+      position: 'absolute',
+      left: 0,
+      top: Spacing.sm + Spacing.xs,
+      bottom: Spacing.sm + Spacing.xs,
+      width: 3,
+      borderTopRightRadius: BorderRadius.full,
+      borderBottomRightRadius: BorderRadius.full,
     },
     topRow: {
       flexDirection: 'row',
-      alignItems: 'flex-start',
-      justifyContent: 'space-between',
+      alignItems: 'center',
       gap: Spacing.sm,
+    },
+    rank: {
+      width: 26,
+      height: 26,
+      borderRadius: BorderRadius.full,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    rankText: {
+      fontSize: FontSize.xs,
+      fontWeight: '800',
     },
     titleBlock: {
       flex: 1,
       minWidth: 0,
     },
+    nameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.xs,
+    },
     name: {
-      fontSize: FontSize.sm,
+      flexShrink: 1,
+      fontSize: FontSize.md,
       fontWeight: '700',
       color: colors.text,
     },
-    badge: {
-      alignSelf: 'flex-start',
-      marginTop: Spacing.xs,
+    topPickTag: {
+      flexShrink: 0,
       backgroundColor: colors.secondary,
       paddingHorizontal: Spacing.sm,
-      paddingVertical: 3,
-      borderRadius: BorderRadius.sm,
+      paddingVertical: 2,
+      borderRadius: BorderRadius.full,
     },
-    badgeText: {
-      fontSize: 10,
+    topPickTagText: {
+      fontSize: 9,
       fontWeight: '800',
       color: colors.textInverse,
-      letterSpacing: 0.5,
-    },
-    ratingColumn: {
-      alignItems: 'flex-end',
-      flexShrink: 0,
-    },
-    ratingBlock: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingTop: 1,
-    },
-    ratingBlockSecond: {
-      marginTop: 3,
-    },
-    ratingNum: {
-      fontSize: FontSize.sm,
-      fontWeight: '700',
-      color: colors.warning,
-    },
-    ratingNumSecondary: {
-      fontSize: FontSize.xs,
-      fontWeight: '700',
-      color: colors.warning,
+      letterSpacing: 0.6,
     },
     metaRow: {
-      marginTop: Spacing.sm,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: Spacing.sm,
+      gap: Spacing.xs,
+      marginTop: 2,
     },
     meta: {
-      flex: 1,
-      minWidth: 0,
+      flexShrink: 1,
       fontSize: FontSize.xs,
       color: colors.textTertiary,
     },
-    reportLink: {
+    communityChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
       flexShrink: 0,
+    },
+    communityChipText: {
       fontSize: FontSize.xs,
       fontWeight: '600',
-      color: colors.secondary,
-      textDecorationLine: 'underline',
+      color: colors.textSecondary,
     },
-    metricsRow: {
+    // Solid tier-colored score pill — the headline ranking signal.
+    scorePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 5,
+      borderRadius: BorderRadius.full,
+      flexShrink: 0,
+    },
+    scoreNum: {
+      fontSize: FontSize.sm,
+      fontWeight: '800',
+      color: colors.textInverse,
+    },
+    // Condition pills wrap onto a second line rather than cramping.
+    pillsRow: {
       marginTop: Spacing.sm,
       flexDirection: 'row',
-      gap: 4,
-      paddingVertical: 2,
+      flexWrap: 'wrap',
+      gap: Spacing.xs,
     },
-    metricCard: {
-      flex: 1,
-      minWidth: 0,
+    conditionPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
       backgroundColor: colors.surfaceElevated,
-      borderRadius: BorderRadius.sm,
-      paddingVertical: 6,
-      paddingHorizontal: 4,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      alignItems: 'center',
+      borderRadius: BorderRadius.full,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 4,
     },
-    metricIcon: {
-      marginBottom: 2,
-    },
-    metricLabel: {
-      fontSize: 9,
-      color: colors.textTertiary,
-      marginBottom: 1,
-      textAlign: 'center',
-    },
-    metricValue: {
-      fontSize: 10,
+    conditionValue: {
+      fontSize: FontSize.xs,
       fontWeight: '700',
       color: colors.text,
-      textAlign: 'center',
     },
-    metricValueHighlight: {
-      color: colors.secondary,
+    conditionValueHighlight: {
+      color: colors.success,
     },
   });
 }
 
-function MetricMini({
+function ConditionPill({
   icon,
-  label,
   value,
   valueHighlight,
   colors,
   styles,
 }: {
   icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
-  label: string;
   value: string;
   valueHighlight?: boolean;
   colors: ThemeColors;
   styles: ReturnType<typeof createStyles>;
 }) {
   return (
-    <View style={styles.metricCard}>
+    <View style={styles.conditionPill}>
       <MaterialCommunityIcons
         name={icon}
-        size={14}
-        color={colors.textTertiary}
-        style={styles.metricIcon}
+        size={13}
+        color={valueHighlight ? colors.success : colors.textSecondary}
       />
-      <Text style={styles.metricLabel} numberOfLines={1}>
-        {label}
-      </Text>
       <Text
-        style={[styles.metricValue, valueHighlight && styles.metricValueHighlight]}
+        style={[styles.conditionValue, valueHighlight && styles.conditionValueHighlight]}
         numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.75}
       >
         {value}
       </Text>
@@ -205,10 +224,13 @@ function MetricMini({
 export function RecommendedSpotCard({
   data,
   isTopPick,
+  rank,
   onPress,
 }: {
   data: HomeHotSpotData;
   isTopPick: boolean;
+  /** 1-based standing within the ranked list; shown as a numbered chip. */
+  rank?: number;
   onPress: () => void;
 }) {
   const { colors } = useAppTheme();
@@ -233,67 +255,99 @@ export function RecommendedSpotCard({
         ? `${(flow / 1000).toFixed(flow >= 10000 ? 0 : 1)}k cfs`
         : `${Math.round(flow)} cfs`
       : '—';
-  const tempStr = `${Math.round(c.temperature.temp_f)}°F`;
-  const windStr = windCompassFromSpeed(c.wind.speed_mph);
+  const tempStr = Number.isFinite(c.temperature.temp_f)
+    ? `${Math.round(c.temperature.temp_f)}°F`
+    : null;
+  const windStr = Number.isFinite(c.wind.speed_mph)
+    ? windCompassFromSpeed(c.wind.speed_mph)
+    : null;
   const clarity = clarityShort(c.water.clarity);
+  const flowVal = flowStr === '—' ? null : flowStr;
 
-  const metaParts = [dist, tier, clarity].filter(Boolean).join(' · ');
+  // Only show a pill when we actually have the reading — an empty "—" pill reads as broken.
+  const conditionPills: {
+    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+    value: string;
+    valueHighlight?: boolean;
+  }[] = [
+    tempStr ? { icon: 'thermometer' as const, value: tempStr } : null,
+    flowVal ? { icon: 'waves' as const, value: flowVal } : null,
+    windStr ? { icon: 'weather-windy' as const, value: windStr } : null,
+    { icon: 'chart-line' as const, value: outlook.text, valueHighlight: outlook.positive },
+  ].filter((p): p is NonNullable<typeof p> => p != null);
+
+  // Drop unknown clarity ("—") so the meta line never trails a lone dash.
+  const metaParts = [dist, tier, clarity === '—' ? null : clarity]
+    .filter(Boolean)
+    .join(' · ');
+  const tint = tierColor(colors, scoreStars);
+  const hasCommunity = data.communityRatingAvg != null && (data.communityRatingCount ?? 0) > 0;
 
   return (
     <Pressable
       onPress={onPress}
       style={[styles.card, isTopPick && styles.cardTopPick]}
       accessibilityRole="button"
+      accessibilityLabel={`${data.location.name}, ${tier} conditions, ${scoreStars.toFixed(1)} out of five`}
       accessibilityHint="Opens full fishing report, conditions, and map for this water"
     >
+      <View style={[styles.accentRail, { backgroundColor: tint }]} />
       <View style={styles.topRow}>
-        <View style={styles.titleBlock}>
-          <Text style={styles.name} numberOfLines={2}>
-            {data.location.name}
-          </Text>
-          {isTopPick ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>TOP PICK</Text>
-            </View>
-          ) : null}
-        </View>
-        <View style={styles.ratingColumn}>
-          <View style={styles.ratingBlock}>
-            <Text style={styles.ratingNum}>{scoreStars.toFixed(1)}</Text>
-            <Ionicons name="star" size={14} color={colors.warning} accessibilityLabel="out of five" />
+        {rank != null ? (
+          <View
+            style={[
+              styles.rank,
+              isTopPick
+                ? { backgroundColor: tint }
+                : { backgroundColor: colors.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.rankText, { color: isTopPick ? colors.textInverse : colors.textSecondary }]}>
+              {rank}
+            </Text>
           </View>
-          {data.communityRatingAvg != null && (data.communityRatingCount ?? 0) > 0 ? (
-            <View style={[styles.ratingBlock, styles.ratingBlockSecond]}>
-              <Text style={styles.ratingNumSecondary}>{data.communityRatingAvg.toFixed(1)}</Text>
-              <Ionicons name="star" size={12} color={colors.warning} accessibilityLabel="Location rating out of five" />
-            </View>
-          ) : null}
+        ) : null}
+        <View style={styles.titleBlock}>
+          <View style={styles.nameRow}>
+            <Text style={styles.name} numberOfLines={1}>
+              {data.location.name}
+            </Text>
+            {isTopPick ? (
+              <View style={styles.topPickTag}>
+                <Text style={styles.topPickTagText}>TOP PICK</Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.metaRow}>
+            <Text style={styles.meta} numberOfLines={1}>
+              {metaParts}
+            </Text>
+            {hasCommunity ? (
+              <View style={styles.communityChip}>
+                <Ionicons name="people" size={11} color={colors.textSecondary} />
+                <Text style={styles.communityChipText}>
+                  {data.communityRatingAvg!.toFixed(1)}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+        <View style={[styles.scorePill, { backgroundColor: tint }]}>
+          <Ionicons name="star" size={12} color={colors.textInverse} />
+          <Text style={styles.scoreNum}>{scoreStars.toFixed(1)}</Text>
         </View>
       </View>
-      <View style={styles.metaRow}>
-        <Text style={styles.meta} numberOfLines={1}>
-          {metaParts}
-        </Text>
-        <Text style={styles.reportLink}>Fishing report</Text>
-      </View>
-      <View style={styles.metricsRow}>
-        <MetricMini
-          icon="thermometer"
-          label="Temp"
-          value={tempStr}
-          colors={colors}
-          styles={styles}
-        />
-        <MetricMini icon="waves" label="Flow" value={flowStr} colors={colors} styles={styles} />
-        <MetricMini icon="weather-windy" label="Wind" value={windStr} colors={colors} styles={styles} />
-        <MetricMini
-          icon="chart-line"
-          label="Outlook"
-          value={outlook.text}
-          valueHighlight={outlook.positive}
-          colors={colors}
-          styles={styles}
-        />
+      <View style={styles.pillsRow}>
+        {conditionPills.map((p) => (
+          <ConditionPill
+            key={p.icon}
+            icon={p.icon}
+            value={p.value}
+            valueHighlight={p.valueHighlight}
+            colors={colors}
+            styles={styles}
+          />
+        ))}
       </View>
     </Pressable>
   );

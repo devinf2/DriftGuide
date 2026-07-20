@@ -32,7 +32,6 @@ import { buildAlbumPhotoUrlsByCatchId, resolveCatchHeroPhotoUrl } from '@/src/ut
 import type { MapCameraStatePayload } from '@/src/utils/mapViewport';
 import { tripStartEndDisplayCoords } from '@/src/utils/tripStartEndFromEvents';
 import { isRnMapboxNativeLinked } from '@/src/utils/rnmapboxNative';
-import { getAnnotationsLayerID } from '@rnmapbox/maps';
 
 export type JournalWaypoint = {
   id: string;
@@ -290,7 +289,10 @@ export function JournalTripRouteMapView({
   );
   const rawMod = useMemo(() => loadMapbox(), []);
   /** Style layer id for PointAnnotation bitmaps — insert route line below this so pins paint on top. */
-  const pointAnnotationLayerBelowId = useMemo(() => getAnnotationsLayerID('PointAnnotations'), []);
+  const pointAnnotationLayerBelowId = useMemo(() => {
+    const fn = rawMod?.getAnnotationsLayerID as ((name: string) => string) | undefined;
+    return fn?.('PointAnnotations');
+  }, [rawMod]);
   const tokenApplied = useRef(false);
   const cameraRef = useRef<
     | (CameraControl & {

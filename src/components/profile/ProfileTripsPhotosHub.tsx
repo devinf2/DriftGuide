@@ -140,6 +140,8 @@ type ProfileTripsPhotosHubProps = {
 export type ProfileTripsPhotosHubRef = {
   /** Call when the profile screen is scrolled near the bottom (loads next trips or photo page). */
   loadMoreFromScroll: () => void;
+  /** Deep-link (e.g. "See all" from the home Welcome tab): switch to the Photos view. */
+  showPhotos: () => void;
 };
 
 const TRIPS_PAGE = 8;
@@ -559,7 +561,11 @@ export const ProfileTripsPhotosHub = forwardRef<ProfileTripsPhotosHubRef, Profil
     photosLoadingMore,
   ]);
 
-  useImperativeHandle(ref, () => ({ loadMoreFromScroll }), [loadMoreFromScroll]);
+  useImperativeHandle(
+    ref,
+    () => ({ loadMoreFromScroll, showPhotos: () => setMediaTab('photos') }),
+    [loadMoreFromScroll],
+  );
 
   const tripPhotoUrlsMap = useMemo(() => {
     const map: Record<string, string[]> = {};

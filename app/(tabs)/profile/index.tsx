@@ -16,7 +16,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -118,6 +118,14 @@ export default function ProfileScreen() {
     useCallback(() => {
       void refreshFriends(userId);
     }, [userId, refreshFriends]),
+  );
+
+  // Deep-link from the home Welcome "See all": open the Photos view.
+  const { media } = useLocalSearchParams<{ media?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (media === 'photos') profileHubRef.current?.showPhotos();
+    }, [media]),
   );
 
   const onRefresh = useCallback(async () => {

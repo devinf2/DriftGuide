@@ -1,26 +1,24 @@
 import { DriftGuideMessage } from '@/src/components/home/DriftGuideMessage';
+import { HatchMonthHeatstrip } from '@/src/components/hatchChart/HatchMonthHeatstrip';
 import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { findHatchEntryForFly } from '@/src/data/driftGuideHatchChart';
 import { getFlyOfTheDay } from '@/src/services/ai';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
-  buildRightNowTake,
   chooseRecommendedFly,
   selectPrimeHatchesForMonth,
   type RecommendedFly,
 } from '@/src/utils/homeRightNow';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useState } from 'react';
+import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     card: {
-      backgroundColor: colors.surface,
-      borderRadius: BorderRadius.lg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
       overflow: 'hidden',
     },
     headerRow: {
@@ -37,36 +35,28 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 1.1,
       textTransform: 'uppercase',
     },
-    take: {
-      fontSize: FontSize.md,
-      color: colors.text,
-      lineHeight: 22,
-      paddingHorizontal: Spacing.md,
-      paddingTop: Spacing.sm,
-      paddingBottom: Spacing.md,
-    },
     flyRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: Spacing.md,
+      gap: Spacing.lg,
       marginHorizontal: Spacing.md,
       marginBottom: Spacing.md,
-      padding: Spacing.sm,
-      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      borderRadius: BorderRadius.lg,
       backgroundColor: colors.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },
     flyImage: {
-      width: 56,
-      height: 56,
-      borderRadius: BorderRadius.sm,
+      width: 128,
+      height: 128,
+      borderRadius: BorderRadius.md,
       backgroundColor: colors.background,
     },
     flyImageFallback: {
-      width: 56,
-      height: 56,
-      borderRadius: BorderRadius.sm,
+      width: 128,
+      height: 128,
+      borderRadius: BorderRadius.md,
       backgroundColor: colors.background,
       alignItems: 'center',
       justifyContent: 'center',
@@ -83,15 +73,47 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 0.6,
     },
     flyName: {
-      fontSize: FontSize.lg,
+      fontSize: FontSize.xl,
       fontWeight: '700',
       color: colors.text,
-      marginTop: 1,
+      marginTop: 2,
     },
     flyMeta: {
-      fontSize: FontSize.sm,
+      fontSize: FontSize.md,
       color: colors.textSecondary,
-      marginTop: 2,
+      marginTop: 3,
+    },
+    viewNowButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: 4,
+      marginTop: Spacing.sm,
+      paddingVertical: 6,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.full,
+      backgroundColor: colors.secondary,
+    },
+    viewNowText: {
+      fontSize: FontSize.xs,
+      fontWeight: '800',
+      color: colors.textInverse,
+    },
+    hatchCal: {
+      marginHorizontal: Spacing.md,
+      marginBottom: Spacing.md,
+      padding: Spacing.md,
+      borderRadius: BorderRadius.lg,
+      backgroundColor: colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    hatchCalTitle: { fontSize: FontSize.sm, fontWeight: '700', color: colors.text },
+    hatchCalSub: {
+      fontSize: FontSize.xs,
+      color: colors.textSecondary,
+      marginTop: 1,
+      marginBottom: Spacing.sm,
     },
     hatchChips: {
       flexDirection: 'row',
@@ -174,16 +196,6 @@ export function FishHomeRightNow({
   const [aiFlyMeta, setAiFlyMeta] = useState<string | null>(null);
 
   const hasLocation = userCoords != null;
-  const take = useMemo(
-    () =>
-      buildRightNowTake({
-        rankedWatersCount,
-        primeHatches,
-        recommendedFly: localFly,
-        hasLocation,
-      }),
-    [rankedWatersCount, primeHatches, localFly, hasLocation],
-  );
 
   /** Upgrade the local pick with the AI fly_of_the_day once we have a user (guests keep the local pick). */
   useEffect(() => {
@@ -216,24 +228,45 @@ export function FishHomeRightNow({
       ? aiFlyMeta ?? undefined
       : localFly.sizes ?? (localFly.forHatch ? localFly.forHatch.peakSummary : undefined);
 
+  /** The hatch this fly belongs to, so "View now" can deep-link straight to it on the calendar. */
+  const targetHatch = useMemo(
+    () => findHatchEntryForFly(flyName) ?? localFly.forHatch ?? primeHatches[0]?.entry,
+    [flyName, localFly.forHatch, primeHatches],
+  );
+
+  const openHatchCalendar = useCallback(() => {
+    router.push({
+      pathname: '/home/hatch-chart',
+      params: targetHatch ? { focus: targetHatch.id } : {},
+    });
+  }, [targetHatch]);
+
   const showFallback = rankedWatersCount === 0 && !hasLocation && Boolean(onBrowseMap);
 
   return (
     <DriftGuideMessage>
       <View style={styles.card}>
         <View style={styles.headerRow}>
-          <MaterialCommunityIcons name="map-marker-radius" size={16} color={colors.secondary} />
-          <Text style={styles.headerTitle}>Right now near you</Text>
+          <MaterialCommunityIcons name="hook" size={16} color={colors.secondary} />
+          <Text style={styles.headerTitle}>Suggested Fly</Text>
         </View>
 
-        <Text style={styles.take}>{take}</Text>
-
-        <View style={styles.flyRow}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.flyRow,
+            { marginTop: Spacing.sm },
+            pressed && targetHatch ? { opacity: 0.85 } : null,
+          ]}
+          onPress={targetHatch ? openHatchCalendar : undefined}
+          disabled={!targetHatch}
+          accessibilityRole="button"
+          accessibilityLabel={`View ${flyName} on the hatch calendar`}
+        >
           {flyImage ? (
-            <Image source={flyImage} style={styles.flyImage} contentFit="cover" />
+            <Image source={flyImage} style={styles.flyImage} contentFit="contain" />
           ) : (
             <View style={styles.flyImageFallback}>
-              <MaterialCommunityIcons name="hook" size={24} color={colors.textTertiary} />
+              <MaterialCommunityIcons name="hook" size={52} color={colors.textTertiary} />
             </View>
           )}
           <View style={styles.flyTextCol}>
@@ -246,8 +279,33 @@ export function FishHomeRightNow({
                 {flyMeta}
               </Text>
             ) : null}
+            {targetHatch ? (
+              <View style={styles.viewNowButton}>
+                <Text style={styles.viewNowText}>View now</Text>
+                <MaterialCommunityIcons name="chevron-right" size={16} color={colors.textInverse} />
+              </View>
+            ) : null}
           </View>
-        </View>
+        </Pressable>
+
+        {/* The suggested fly's own hatch calendar — when it peaks through the year. */}
+        {targetHatch ? (
+          <Pressable
+            style={styles.hatchCal}
+            onPress={openHatchCalendar}
+            accessibilityRole="button"
+            accessibilityLabel={`${targetHatch.name} hatch calendar. Open full chart.`}
+          >
+            <Text style={styles.hatchCalTitle}>{targetHatch.name} · hatch calendar</Text>
+            <Text style={styles.hatchCalSub}>{targetHatch.peakSummary}</Text>
+            <HatchMonthHeatstrip
+              months={targetHatch.monthActivity}
+              currentMonthIndex0={monthIndex0}
+              category={targetHatch.category}
+              colors={colors}
+            />
+          </Pressable>
+        ) : null}
 
         {primeHatches.length > 0 ? (
           <View style={styles.hatchChips}>

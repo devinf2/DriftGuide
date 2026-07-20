@@ -106,6 +106,55 @@ async function fetchCommentCounts(postIds: string[]): Promise<Map<string, number
   return counts;
 }
 
+function mapCommentRow(
+  r: Record<string, unknown>,
+  profiles: Record<string, Profile>,
+): PostComment {
+  return {
+    id: String(r.id),
+    post_id: String(r.post_id),
+    author_id: String(r.author_id),
+    body: String(r.body ?? ''),
+    created_at: String(r.created_at),
+    author: profiles[String(r.author_id)] ?? null,
+  };
+}
+
+/**
+ * Fetch up to 2 most-recent visible comments per post for the feed-card preview.
+ * Returns each post's comments oldest-first (Instagram stacks the newest at the bottom).
+ */
+async function fetchRecentComments(postIds: string[]): Promise<Map<string, PostComment[]>> {
+  const byPost = new Map<string, PostComment[]>();
+  if (postIds.length === 0) return byPost;
+  const { data, error } = await supabase
+    .from('post_comments')
+    .select('*')
+    .in('post_id', postIds)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.warn('[fetchRecentComments]', error);
+    return byPost;
+  }
+  // Keep the 2 newest rows per post (data arrives newest-first).
+  const keptByPost = new Map<string, Record<string, unknown>[]>();
+  for (const r of (data as Record<string, unknown>[]) ?? []) {
+    const pid = String(r.post_id);
+    const list = keptByPost.get(pid) ?? [];
+    if (list.length >= 2) continue;
+    list.push(r);
+    keptByPost.set(pid, list);
+  }
+  const kept = Array.from(keptByPost.values()).flat();
+  const profiles = await fetchAuthorProfiles(kept.map((r) => String(r.author_id)));
+  for (const [pid, rows] of keptByPost) {
+    // Reverse so the two comments read oldest → newest, matching the modal order.
+    byPost.set(pid, rows.map((r) => mapCommentRow(r, profiles)).reverse());
+  }
+  return byPost;
+}
+
 async function fetchAuthorProfiles(authorIds: string[]): Promise<Record<string, Profile>> {
   const unique = Array.from(new Set(authorIds));
   if (unique.length === 0) return {};
@@ -136,10 +185,11 @@ export async function fetchFeedPage(
   const posts = ((data as Record<string, unknown>[]) ?? []).map(normalizePostRow);
   if (posts.length === 0) return [];
 
-  const [profiles, reactions, commentCounts] = await Promise.all([
+  const [profiles, reactions, commentCounts, recentComments] = await Promise.all([
     fetchAuthorProfiles(posts.map((p) => p.author_id)),
     fetchReactionSummaries(posts.map((p) => p.id)),
     fetchCommentCounts(posts.map((p) => p.id)),
+    fetchRecentComments(posts.map((p) => p.id)),
   ]);
 
   const reactionsByPost = new Map<string, PostReactionSummary[]>();
@@ -154,6 +204,7 @@ export async function fetchFeedPage(
     author: profiles[post.author_id] ?? null,
     reactions: reactionsByPost.get(post.id) ?? [],
     commentCount: commentCounts.get(post.id) ?? 0,
+    recentComments: recentComments.get(post.id) ?? [],
   }));
 }
 
@@ -187,10 +238,11 @@ export async function fetchMyPosts(opts?: {
   const posts = ((data as Record<string, unknown>[]) ?? []).map(normalizePostRow);
   if (posts.length === 0) return [];
 
-  const [profiles, reactions, commentCounts] = await Promise.all([
+  const [profiles, reactions, commentCounts, recentComments] = await Promise.all([
     fetchAuthorProfiles([uid]),
     fetchReactionSummaries(posts.map((p) => p.id)),
     fetchCommentCounts(posts.map((p) => p.id)),
+    fetchRecentComments(posts.map((p) => p.id)),
   ]);
 
   const reactionsByPost = new Map<string, PostReactionSummary[]>();
@@ -205,6 +257,7 @@ export async function fetchMyPosts(opts?: {
     author: profiles[post.author_id] ?? null,
     reactions: reactionsByPost.get(post.id) ?? [],
     commentCount: commentCounts.get(post.id) ?? 0,
+    recentComments: recentComments.get(post.id) ?? [],
   }));
 }
 
@@ -222,14 +275,7 @@ export async function listComments(postId: string): Promise<PostComment[]> {
   }
   const rows = (data as Record<string, unknown>[]) ?? [];
   const profiles = await fetchAuthorProfiles(rows.map((r) => String(r.author_id)));
-  return rows.map((r) => ({
-    id: String(r.id),
-    post_id: String(r.post_id),
-    author_id: String(r.author_id),
-    body: String(r.body ?? ''),
-    created_at: String(r.created_at),
-    author: profiles[String(r.author_id)] ?? null,
-  }));
+  return rows.map((r) => mapCommentRow(r, profiles));
 }
 
 /** Add a comment to a post as the current user. Returns the created comment or null. */

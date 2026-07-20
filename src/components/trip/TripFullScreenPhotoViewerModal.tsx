@@ -128,6 +128,9 @@ export function TripFullScreenPhotoViewerModal({
             contentContainerStyle={[styles.scrollContent, { paddingBottom: paddingBottom + Spacing.xl }]}
             showsVerticalScrollIndicator={false}
           >
+            {/* Tapping the black backdrop (letterbox bars, empty space) closes the viewer.
+                The photo's own gesture handlers absorb taps on the image itself. */}
+            <Pressable style={styles.backdrop} onPress={onClose}>
             {slides.length > 1 ? (
               <FlatList
                 ref={pagerRef}
@@ -205,6 +208,7 @@ export function TripFullScreenPhotoViewerModal({
                 </Text>
               ))}
             </View>
+            </Pressable>
           </ScrollView>
         </View>
       ) : null}
@@ -228,6 +232,9 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     scrollContent: {
+      flexGrow: 1,
+    },
+    backdrop: {
       flexGrow: 1,
     },
     singleImage: {

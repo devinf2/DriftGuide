@@ -11,31 +11,34 @@ import {
   type HatchFly,
 } from '@/src/data/driftGuideHatchChart';
 import { hatchCategoryColor } from '@/src/components/hatchChart/hatchChartTheme';
+import { HatchFlyDetailModal } from '@/src/components/hatchChart/HatchFlyDetailModal';
+import { AddFlySheet } from '@/src/components/fly/AddFlySheet';
+import { FlyImagePreviewModal } from '@/src/components/fly/FlyImagePreviewModal';
 import { getBundledFlyImageSource } from '@/src/constants/flyImages';
+import { bundledCatalogIdForName } from '@/src/constants/bundledFlyCatalog';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import type { FlyChangeData } from '@/src/types';
+import type { Fly, FlyCatalog } from '@/src/types';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { useAuthStore } from '@/src/stores/authStore';
+import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
+import { getFlyCatalogOrBundled, fetchFliesOrCache } from '@/src/services/flyService';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Image, type LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image, type ImageSourcePropType, type LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/** Parse the first hook size out of a hint like '#18–22' for FlyChangeData.size. */
-function parseFlySize(size: string | undefined): number | null {
-  if (!size) return null;
-  const m = size.match(/\d+/);
-  return m ? Number(m[0]) : null;
-}
-
-/** Build a catch fly-picker payload from a tapped matching fly. */
-function flyToFlyChangeData(fly: HatchFly): FlyChangeData {
+/** Resolve a tapped matching fly to a catalog entry (real match by name, else a bundled stub). */
+function resolveCatalogFlyForHatchFly(fly: HatchFly, catalog: FlyCatalog[]): FlyCatalog {
+  const match = catalog.find((c) => c.name.toLowerCase() === fly.name.toLowerCase());
+  if (match) return match;
   return {
-    pattern: fly.name,
-    size: parseFlySize(fly.size),
-    color: null,
+    id: bundledCatalogIdForName(fly.name),
+    name: fly.name,
+    type: 'fly',
     photo_url: null,
+    presentation: null,
   };
 }
 
@@ -217,6 +220,22 @@ export default function HatchChartScreen() {
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const { user } = useAuthStore();
+  const { isConnected } = useNetworkStatus();
+  const [catalog, setCatalog] = useState<FlyCatalog[]>([]);
+  const [ownedFlyNames, setOwnedFlyNames] = useState<Set<string>>(new Set());
+
+  // Tapped matching fly → detail sheet.
+  const [selectedFly, setSelectedFly] = useState<{
+    fly: HatchFly;
+    entry: DriftGuideHatchChartEntry;
+  } | null>(null);
+  // Add-to-fly-box flow (reuses the fly box's AddFlySheet).
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
+  const [initialCatalogFly, setInitialCatalogFly] = useState<FlyCatalog | null>(null);
+  // Full-screen fly image preview.
+  const [previewImage, setPreviewImage] = useState<{ source: ImageSourcePropType; title: string } | null>(null);
+
   const now = useMemo(() => new Date(), []);
   const monthIndex0 = now.getMonth();
   const monthName = format(now, 'MMMM');
@@ -262,18 +281,60 @@ export default function HatchChartScreen() {
     [focusEntry],
   );
 
-  const handleSelectFly = useCallback((fly: HatchFly, entry: DriftGuideHatchChartEntry) => {
-    // Build the catch fly-picker payload now so wiring is trivial later.
-    const flyChange = flyToFlyChangeData(fly);
-    // TODO(WS-E): pre-fill the catch fly-picker with `flyChange`. The hatch chart is a standalone
-    // pushed screen with no active trip/catch context, so opening TripFlyPatternPickerModal /
-    // CatchDetailsModal from here needs a cross-screen flow (navigate to active trip, then open the
-    // picker seeded with this FlyChangeData). Left as a callback to avoid an intrusive refactor.
-    void flyChange;
-    void entry;
+  // Catalog powers name→catalog resolution when adding a tapped fly to the box.
+  useEffect(() => {
+    void getFlyCatalogOrBundled().then(setCatalog);
   }, []);
 
+  // The user's owned patterns drive the "In your fly box" indicator; refresh on focus.
+  const refreshOwnedFlies = useCallback(async () => {
+    if (!user) {
+      setOwnedFlyNames(new Set());
+      return;
+    }
+    try {
+      const flies = await fetchFliesOrCache(user.id);
+      setOwnedFlyNames(new Set(flies.map((f) => f.name.toLowerCase())));
+    } catch (e) {
+      console.warn('[hatch-chart] load owned flies failed', e);
+    }
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshOwnedFlies();
+    }, [refreshOwnedFlies]),
+  );
+
+  const handleSelectFly = useCallback((fly: HatchFly, entry: DriftGuideHatchChartEntry) => {
+    setSelectedFly({ fly, entry });
+  }, []);
+
+  const handleAddToFlyBox = useCallback(() => {
+    if (!selectedFly) return;
+    const catalogFly = resolveCatalogFlyForHatchFly(selectedFly.fly, catalog);
+    setInitialCatalogFly(catalogFly);
+    setSelectedFly(null);
+    setAddSheetOpen(true);
+  }, [selectedFly, catalog]);
+
+  const handleFlySaved = useCallback((fly: Fly) => {
+    setOwnedFlyNames((prev) => new Set(prev).add(fly.name.toLowerCase()));
+    void refreshOwnedFlies();
+  }, [refreshOwnedFlies]);
+
+  const handleViewFlyImage = useCallback(() => {
+    if (!selectedFly) return;
+    const source = getBundledFlyImageSource(selectedFly.fly.name);
+    if (source) setPreviewImage({ source, title: selectedFly.fly.name });
+  }, [selectedFly]);
+
+  const selectedInFlyBox = selectedFly
+    ? ownedFlyNames.has(selectedFly.fly.name.toLowerCase())
+    : false;
+
   return (
+    <>
     <ScrollView
       ref={scrollRef}
       style={styles.scroll}
@@ -331,5 +392,39 @@ export default function HatchChartScreen() {
         the water.
       </Text>
     </ScrollView>
+
+    <HatchFlyDetailModal
+      visible={selectedFly != null}
+      fly={selectedFly?.fly ?? null}
+      entry={selectedFly?.entry ?? null}
+      inFlyBox={selectedInFlyBox}
+      canAddToFlyBox={user != null}
+      onClose={() => setSelectedFly(null)}
+      onAddToFlyBox={handleAddToFlyBox}
+      onViewImage={handleViewFlyImage}
+    />
+
+    {user ? (
+      <AddFlySheet
+        visible={addSheetOpen}
+        onClose={() => {
+          setAddSheetOpen(false);
+          setInitialCatalogFly(null);
+        }}
+        userId={user.id}
+        isConnected={isConnected}
+        catalog={catalog}
+        initialCatalogFly={initialCatalogFly}
+        onSaved={handleFlySaved}
+      />
+    ) : null}
+
+    <FlyImagePreviewModal
+      visible={previewImage != null}
+      onClose={() => setPreviewImage(null)}
+      imageSource={previewImage?.source ?? null}
+      title={previewImage?.title ?? null}
+    />
+    </>
   );
 }

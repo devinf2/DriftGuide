@@ -54,7 +54,7 @@ export default function TabLayout() {
           name="home"
           options={{
             title: 'Home',
-            tabBarLabel: 'Fish',
+            tabBarLabel: 'Home',
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="fish" color={color} size={size} />
             ),

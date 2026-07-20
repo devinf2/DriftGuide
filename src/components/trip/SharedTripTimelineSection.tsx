@@ -100,6 +100,14 @@ export interface SharedTripTimelineSectionProps {
   tripAlbumPhotos?: Photo[];
   /** Poll interval ms for Group when online (default 15000). */
   groupPollMs?: number;
+  /** Deep-link: auto-expand this catch's row (its `TripEvent.id`) in the own-trip timeline. */
+  focusCatchEventId?: string | null;
+  /** Lead the Fishing tab with the trip recap (hero + highlights). In a session it shows on Group, You, and each peer. */
+  showRecap?: boolean;
+  /** Opens the trip review modal from the recap Rating tile. */
+  onEditRating?: () => void;
+  /** Extra bottom padding so the scroll clears an overlapping tab bar. */
+  contentBottomInset?: number;
 }
 
 export function SharedTripTimelineSection({
@@ -114,6 +122,10 @@ export function SharedTripTimelineSection({
   onRequestEditTripPin,
   tripAlbumPhotos = [],
   groupPollMs = 15000,
+  focusCatchEventId = null,
+  showRecap = false,
+  onEditRating,
+  contentBottomInset,
 }: SharedTripTimelineSectionProps) {
   const { colors } = useAppTheme();
   const sessionId = trip.shared_session_id ?? null;
@@ -323,6 +335,10 @@ export function SharedTripTimelineSection({
         colorTokens={colors}
         eventSyncStatusForEvent={showTimelineSync ? eventSyncStatusForEvent : undefined}
         tripAlbumPhotos={tripAlbumPhotos}
+        focusCatchEventId={focusCatchEventId}
+        showRecap={showRecap}
+        onEditRating={onEditRating}
+        contentBottomInset={contentBottomInset}
       />
     );
   }
@@ -351,6 +367,12 @@ export function SharedTripTimelineSection({
     timelineMode === 'group' || timelineMode === trip.id
       ? trip
       : peerTripForPeerMode ?? trip;
+
+  // Recap on Group, You, and each peer. A peer only gets the trip-level tiles (duration/rating)
+  // once we actually have their trip loaded — otherwise those would show the viewer's numbers.
+  const isPeerMode = timelineMode !== 'group' && timelineMode !== trip.id;
+  const showRecapForMode = showRecap && (!isPeerMode || peerTripForPeerMode != null);
+  const recapVariant: 'trip' | 'group' = timelineMode === 'group' ? 'group' : 'trip';
 
   const chipStyle = (active: boolean) => ({
     borderColor: active ? colors.primary : colors.border,
@@ -477,6 +499,11 @@ export function SharedTripTimelineSection({
           onRequestEditTripPin={timelineMode === trip.id ? onRequestEditTripPin : undefined}
           colorTokens={colors}
           eventSyncStatusForEvent={showTimelineSync ? eventSyncStatusForEvent : undefined}
+          focusCatchEventId={timelineMode === trip.id ? focusCatchEventId : null}
+          showRecap={showRecapForMode}
+          recapVariant={recapVariant}
+          onEditRating={timelineMode === trip.id ? onEditRating : undefined}
+          contentBottomInset={contentBottomInset}
           compactAttributionLabels={timelineMode === trip.id}
           attributionLabelForEvent={(ev) => {
             if (timelineMode === 'group') {

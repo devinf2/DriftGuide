@@ -2,10 +2,8 @@ import { TAB_BAR_EXTRA } from '@/src/constants/mapTabChrome';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useRequireAuth } from '@/src/auth/useRequireAuth';
 import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
-import { useAuthStore } from '@/src/stores/authStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { usePathname, useRouter } from 'expo-router';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -19,6 +17,12 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/** Standard bottom-sheet feel: backdrop fades, sheet slides. Exit duration gates the unmount so it plays out. */
+const SHEET_EXIT_MS = 220;
 
 const FAB_GAP_ABOVE_TAB = 12;
 const FAB_SIZE = 64;
@@ -102,10 +106,19 @@ function createStyles(colors: ThemeColors) {
       color: colors.text,
       fontWeight: '500',
     },
-    sheetBackdrop: {
+    modalRoot: {
       flex: 1,
+    },
+    // Backdrop fades independently of the sheet's slide (standard bottom-sheet motion).
+    backdropFill: {
+      ...StyleSheet.absoluteFillObject,
       backgroundColor: 'rgba(0,0,0,0.45)',
-      justifyContent: 'flex-end',
+    },
+    sheetAnchor: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
     },
     sheet: {
       backgroundColor: colors.surface,
@@ -123,40 +136,48 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border,
       marginBottom: Spacing.xs,
     },
-    postCard: {
+    // Primary action: a full-width filled hero so "Fish Now" reads as the main intent of the sheet.
+    fishNowHero: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: Spacing.md,
-      backgroundColor: colors.background,
-      borderRadius: BorderRadius.md,
-      padding: Spacing.md,
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.lg,
+      paddingVertical: Spacing.lg,
+      paddingHorizontal: Spacing.lg,
     },
-    postAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface },
-    postAvatarFallback: {
+    fishNowIconWrap: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      backgroundColor: 'rgba(255,255,255,0.18)',
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: colors.border,
     },
-    postCardText: { flex: 1 },
-    postCardTitle: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
-    postCardSub: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 1 },
-    actionRow: {
+    fishNowText: { flex: 1 },
+    fishNowTitle: { fontSize: FontSize.lg, fontWeight: '800', color: colors.textInverse },
+    fishNowSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.82)', marginTop: 1 },
+    // Secondary trip actions sit side-by-side under the hero.
+    tripRow: {
       flexDirection: 'row',
-      alignItems: 'center',
       gap: Spacing.md,
+    },
+    tripTile: {
+      flex: 1,
+      gap: Spacing.sm,
       backgroundColor: colors.background,
       borderRadius: BorderRadius.md,
-      padding: Spacing.md,
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.md,
     },
-    actionIcon: {
+    tripIcon: {
       width: 44,
       height: 44,
       borderRadius: 22,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    actionTitle: { flex: 1, fontSize: FontSize.md, fontWeight: '600', color: colors.text },
+    tripTitle: { fontSize: FontSize.md, fontWeight: '600', color: colors.text },
   });
 }
 
@@ -181,6 +202,8 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   const insets = useSafeAreaInsets();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Keeps the Modal mounted through the sheet's slide-out so the exit animation plays.
+  const [rendered, setRendered] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
   const [menuAnchorKind, setMenuAnchorKind] = useState<MenuAnchorKind>('fab');
   const fabWrapRef = useRef<View>(null);
@@ -188,8 +211,6 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const requireAuth = useRequireAuth();
   const mapAddLocationOpen = useAddLocationFlowStore((s) => s.mapSheetActive);
-  const profile = useAuthStore((s) => s.profile);
-  const avatarUrl = profile?.avatar_url ?? null;
   const tabBarMode = placement === 'tabBar';
 
   useEffect(() => {
@@ -221,6 +242,16 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
   useEffect(() => {
     closeMenu();
   }, [pathname, closeMenu]);
+
+  // Open mounts immediately; close waits out the slide-out before unmounting the Modal.
+  useEffect(() => {
+    if (menuOpen) {
+      setRendered(true);
+      return;
+    }
+    const t = setTimeout(() => setRendered(false), SHEET_EXIT_MS);
+    return () => clearTimeout(t);
+  }, [menuOpen]);
 
   const openFabMenu = useCallback(() => {
     setMenuAnchorKind('fab');
@@ -265,19 +296,6 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
     router.push('/trip/import-past');
   }, [closeMenu, requireAuth, router]);
 
-  // Bug Matcher is an offline reference tool (no account needed); no auth gate.
-  const onMatchBug = useCallback(() => {
-    closeMenu();
-    router.push('/bug-matcher');
-  }, [closeMenu, router]);
-
-  // Posting is account-bound (RLS); guests sign in first (WS-B).
-  const onCreatePost = useCallback(() => {
-    closeMenu();
-    if (!requireAuth('Sign in to post to the feed.')) return;
-    router.push('/post/new');
-  }, [closeMenu, requireAuth, router]);
-
   if (hideDuringAddLocation) {
     return null;
   }
@@ -294,7 +312,7 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
     floatingBottom += GUIDE_COMPOSER_LIFT;
   }
 
-  const actionRows: {
+  const tripTiles: {
     key: string;
     title: string;
     icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -302,9 +320,7 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
     onPress: () => void;
   }[] = [
     { key: 'plan', title: 'Plan a Trip', icon: 'calendar-check', color: '#3B7DAE', onPress: onPlanTrip },
-    { key: 'fishNow', title: 'Fish Now', icon: 'hook', color: '#2E9E5B', onPress: onFishNow },
     { key: 'import', title: 'Import a trip', icon: 'tray-arrow-down', color: '#C9742E', onPress: onLogPastTrips },
-    { key: 'matchBug', title: 'Match a bug', icon: 'bug', color: '#7E57C2', onPress: onMatchBug },
   ];
 
   const createSheet = (
@@ -312,40 +328,38 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
       <View style={styles.grabber} />
 
       <Pressable
-        style={({ pressed }) => [styles.postCard, pressed && styles.menuRowPressed]}
-        onPress={onCreatePost}
+        style={({ pressed }) => [styles.fishNowHero, pressed && styles.menuRowPressed]}
+        onPress={onFishNow}
         accessibilityRole="button"
-        accessibilityLabel="Create a post"
+        accessibilityLabel="Fish Now"
+        accessibilityHint="Starts a fishing session now"
       >
-        {avatarUrl ? (
-          <Image source={{ uri: avatarUrl }} style={styles.postAvatar} contentFit="cover" />
-        ) : (
-          <View style={[styles.postAvatar, styles.postAvatarFallback]}>
-            <MaterialCommunityIcons name="fish" size={22} color={colors.primary} />
-          </View>
-        )}
-        <View style={styles.postCardText}>
-          <Text style={styles.postCardTitle}>Create a post</Text>
-          <Text style={styles.postCardSub}>What&apos;s on your mind?</Text>
+        <View style={styles.fishNowIconWrap}>
+          <MaterialCommunityIcons name="hook" size={28} color={colors.textInverse} />
         </View>
-        <MaterialCommunityIcons name="image-multiple" size={24} color={colors.secondary} />
+        <View style={styles.fishNowText}>
+          <Text style={styles.fishNowTitle}>Fish Now</Text>
+          <Text style={styles.fishNowSub}>Start a session on the water</Text>
+        </View>
+        <MaterialCommunityIcons name="chevron-right" size={26} color={colors.textInverse} />
       </Pressable>
 
-      {actionRows.map((r) => (
-        <Pressable
-          key={r.key}
-          style={({ pressed }) => [styles.actionRow, pressed && styles.menuRowPressed]}
-          onPress={r.onPress}
-          accessibilityRole="button"
-          accessibilityLabel={r.title}
-        >
-          <View style={[styles.actionIcon, { backgroundColor: `${r.color}22` }]}>
-            <MaterialCommunityIcons name={r.icon} size={24} color={r.color} />
-          </View>
-          <Text style={styles.actionTitle}>{r.title}</Text>
-          <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textTertiary} />
-        </Pressable>
-      ))}
+      <View style={styles.tripRow}>
+        {tripTiles.map((t) => (
+          <Pressable
+            key={t.key}
+            style={({ pressed }) => [styles.tripTile, pressed && styles.menuRowPressed]}
+            onPress={t.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={t.title}
+          >
+            <View style={[styles.tripIcon, { backgroundColor: `${t.color}22` }]}>
+              <MaterialCommunityIcons name={t.icon} size={24} color={t.color} />
+            </View>
+            <Text style={styles.tripTitle}>{t.title}</Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 
@@ -371,15 +385,31 @@ export function PlanTripFab({ placement = 'floating' }: PlanTripFabProps) {
         </View>
       ) : null}
 
-      <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={closeMenu}>
-        <Pressable style={styles.sheetBackdrop} onPress={closeMenu}>
-          <Pressable
-            style={[styles.sheet, { paddingBottom: tabBarBottomPad + Spacing.lg }]}
-            onPress={() => {}}
-          >
-            {createSheet}
-          </Pressable>
-        </Pressable>
+      <Modal visible={rendered} transparent animationType="none" onRequestClose={closeMenu}>
+        {menuOpen ? (
+          <View style={styles.modalRoot}>
+            <AnimatedPressable
+              style={styles.backdropFill}
+              entering={FadeIn.duration(200)}
+              exiting={FadeOut.duration(SHEET_EXIT_MS)}
+              onPress={closeMenu}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+            />
+            <Animated.View
+              style={styles.sheetAnchor}
+              entering={SlideInDown.duration(280)}
+              exiting={SlideOutDown.duration(SHEET_EXIT_MS)}
+            >
+              <Pressable
+                style={[styles.sheet, { paddingBottom: tabBarBottomPad + Spacing.lg }]}
+                onPress={() => {}}
+              >
+                {createSheet}
+              </Pressable>
+            </Animated.View>
+          </View>
+        ) : null}
       </Modal>
     </>
   );

@@ -12,9 +12,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 
 import { PostCard } from '@/src/components/feed/PostCard';
 import { PostCommentsModal } from '@/src/components/feed/PostCommentsModal';
+import { useRequireAuth } from '@/src/auth/useRequireAuth';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useEffectiveSafeTopInset } from '@/src/hooks/useEffectiveSafeTopInset';
 import { blockUser, deletePost, reportPost } from '@/src/services/feedService';
@@ -56,6 +58,27 @@ function createStyles(colors: ThemeColors) {
     segmentActive: { backgroundColor: colors.primary },
     segmentText: { fontSize: FontSize.sm, fontWeight: '700', color: colors.textSecondary },
     segmentTextActive: { color: colors.textInverse },
+    compose: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      marginHorizontal: Spacing.md,
+      marginBottom: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    composeAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.background },
+    composeAvatarFallback: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    composePlaceholder: { flex: 1, fontSize: FontSize.md, color: colors.textSecondary },
     empty: { alignItems: 'center', padding: Spacing.xl, gap: Spacing.sm },
     emptyText: { fontSize: FontSize.sm, color: colors.textSecondary, textAlign: 'center' },
     footer: { padding: Spacing.lg, alignItems: 'center' },
@@ -70,6 +93,14 @@ export default function FeedScreen() {
 
   const me = useAuthStore((s) => s.user);
   const myId = me?.id ?? null;
+  const myAvatarUrl = useAuthStore((s) => s.profile?.avatar_url ?? null);
+  const requireAuth = useRequireAuth();
+
+  const onCreatePost = useCallback(() => {
+    // Posting is account-bound (RLS); guests sign in first.
+    if (!requireAuth('Sign in to post to the feed.')) return;
+    router.push('/post/new' as never);
+  }, [requireAuth, router]);
 
   const friendships = useFriendsStore((s) => s.friendships);
   const friendProfiles = useFriendsStore((s) => s.profileByUserId);
@@ -193,6 +224,7 @@ export default function FeedScreen() {
             setCommentsTarget({ postId: item.post.id, authorId: item.post.author_id })
           }
           commentCount={item.commentCount}
+          recentComments={item.recentComments}
           onReport={authorIsMe ? undefined : () => handleModeration(item)}
           onDelete={authorIsMe ? () => handleDelete(item) : undefined}
         />
@@ -235,6 +267,23 @@ export default function FeedScreen() {
               </Pressable>
             ))}
           </View>
+
+          <Pressable
+            style={styles.compose}
+            onPress={onCreatePost}
+            accessibilityRole="button"
+            accessibilityLabel="Create a post"
+          >
+            {myAvatarUrl ? (
+              <Image source={{ uri: myAvatarUrl }} style={styles.composeAvatar} contentFit="cover" />
+            ) : (
+              <View style={[styles.composeAvatar, styles.composeAvatarFallback]}>
+                <MaterialIcons name="person" size={22} color={colors.textTertiary} />
+              </View>
+            )}
+            <Text style={styles.composePlaceholder}>What&apos;s on your mind?</Text>
+            <MaterialIcons name="photo-library" size={22} color={colors.primary} />
+          </Pressable>
         </View>
 
         {state.loading && state.posts.length === 0 ? (

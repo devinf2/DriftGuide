@@ -21,6 +21,7 @@ import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { supabase } from '@/src/services/supabase';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
+import { useLocationStore } from '@/src/stores/locationStore';
 import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import { needsProfileOnboarding } from '@/src/utils/profileOnboarding';
 
@@ -150,8 +151,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (user?.id) void useLocationFavoritesStore.getState().refresh(user.id);
-    else useLocationFavoritesStore.getState().reset();
+    if (user?.id) {
+      void useLocationFavoritesStore.getState().refresh(user.id);
+      // Warm the location catalog (and its offline snapshot) at launch so Home/Report open ready —
+      // online this fetches + caches; offline it loads the saved snapshot. Never blocks the splash.
+      void useLocationStore.getState().fetchLocations();
+    } else {
+      useLocationFavoritesStore.getState().reset();
+    }
   }, [user?.id]);
 
   useEffect(() => {

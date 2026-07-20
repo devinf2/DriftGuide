@@ -9,24 +9,23 @@ import { isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    // Overlay the top strip rather than taking layout space, so content isn't pushed down.
     bar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 1000,
+      elevation: 1000,
       backgroundColor: colors.warning,
       paddingHorizontal: Spacing.md,
-      paddingBottom: Spacing.sm,
+      paddingBottom: Spacing.xs,
     },
     text: {
-      fontSize: FontSize.sm,
+      fontSize: FontSize.xs,
       fontWeight: '700',
       color: colors.textInverse,
       textAlign: 'center',
-    },
-    sub: {
-      marginTop: 2,
-      fontSize: FontSize.xs,
-      fontWeight: '500',
-      color: colors.textInverse,
-      textAlign: 'center',
-      opacity: 0.95,
     },
   });
 }
@@ -57,16 +56,13 @@ export function GlobalOfflineBanner() {
 
   return (
     <View
-      style={[styles.bar, { paddingTop: Math.max(insets.top, Spacing.sm) }]}
+      style={[styles.bar, { paddingTop: Math.max(insets.top, Spacing.xs) }]}
       accessibilityRole="alert"
     >
-      <Text style={styles.text}>
-        {__DEV__ && simulateOffline ? 'Simulated offline' : 'Offline mode'}
-      </Text>
-      <Text style={styles.sub}>
+      <Text style={styles.text} numberOfLines={1}>
         {__DEV__ && simulateOffline
-          ? 'Dev toggle — using saved data where available.'
-          : 'Using saved data where available — reconnect for live reports.'}
+          ? 'Simulated offline — using saved data'
+          : 'Offline mode — using saved data'}
       </Text>
     </View>
   );

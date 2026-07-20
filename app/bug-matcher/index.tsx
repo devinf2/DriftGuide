@@ -8,6 +8,10 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
+  TouchableOpacity,
+  useWindowDimensions,
+  type ImageSourcePropType,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -41,6 +45,7 @@ import {
 import type { HatchCategory } from '@/src/data/driftGuideHatchChart';
 import { identifyBugFromImage, type BugIdResult } from '@/src/services/ai';
 import { MatchingFliesGrid } from '@/src/components/bugMatcher/MatchingFliesGrid';
+import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 
 const CATEGORY_LABELS: Record<HatchCategory, string> = {
   midge: 'Midge',
@@ -56,32 +61,92 @@ function sizeHintFor(insect: Insect): string {
   return minHook === maxHook ? `#${minHook}` : `#${minHook}–${maxHook}`;
 }
 
-/** Reusable horizontal chip row for one filter step. */
-function ChipRow<T extends string>({
+/**
+ * Insects have no bundled art yet, so use the first of their curated flies that
+ * resolves to a bundled image as the match card thumbnail.
+ */
+function representativeFlyImage(insect: Insect): ImageSourcePropType | null {
+  for (const name of fliesForInsect(insect)) {
+    const source = getBundledFlyImageSource(name);
+    if (source) return source;
+  }
+  return null;
+}
+
+/** A single filter step rendered as a labelled dropdown with a modal option list. */
+function FilterDropdown<T extends string>({
+  label,
   options,
   selected,
   onSelect,
+  colors,
   styles,
 }: {
+  label: string;
   options: { key: T; label: string }[];
   selected: T | null;
   onSelect: (value: T | null) => void;
+  colors: ThemeColors;
   styles: ReturnType<typeof createStyles>;
 }) {
+  const [open, setOpen] = useState(false);
+  const disabled = options.length === 0;
+  const selectedLabel = options.find((o) => o.key === selected)?.label ?? null;
+
   return (
-    <View style={styles.chipWrap}>
-      {options.map((opt) => {
-        const isOn = selected === opt.key;
-        return (
-          <Pressable
-            key={opt.key}
-            style={[styles.chip, isOn && styles.chipActive]}
-            onPress={() => onSelect(isOn ? null : opt.key)}
-          >
-            <Text style={[styles.chipText, isOn && styles.chipTextActive]}>{opt.label}</Text>
-          </Pressable>
-        );
-      })}
+    <View style={styles.filterStep}>
+      <Text style={styles.filterLabel}>{label}</Text>
+      <Pressable
+        style={[styles.dropdownTrigger, disabled && styles.dropdownTriggerDisabled]}
+        onPress={() => !disabled && setOpen(true)}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${selectedLabel ?? 'Select'}. Open menu.`}
+      >
+        <Text
+          style={[styles.dropdownValue, !selectedLabel && styles.dropdownValueMuted]}
+          numberOfLines={1}
+        >
+          {disabled ? 'None available' : (selectedLabel ?? 'Select')}
+        </Text>
+        <Ionicons name="chevron-down" size={18} color={colors.textSecondary} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setOpen(false)}>
+          <TouchableOpacity style={styles.modalCard} activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>{label}</Text>
+            <ScrollView style={styles.optionScroll}>
+              <TouchableOpacity
+                style={[styles.optionRow, !selected && styles.optionRowActive]}
+                onPress={() => {
+                  onSelect(null);
+                  setOpen(false);
+                }}
+              >
+                <Text style={[styles.optionText, !selected && styles.optionTextActive]}>Select</Text>
+                {!selected ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+              </TouchableOpacity>
+              {options.map((opt) => {
+                const isOn = selected === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[styles.optionRow, isOn && styles.optionRowActive]}
+                    onPress={() => {
+                      onSelect(isOn ? null : opt.key);
+                      setOpen(false);
+                    }}
+                  >
+                    <Text style={[styles.optionText, isOn && styles.optionTextActive]}>{opt.label}</Text>
+                    {isOn ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -91,6 +156,10 @@ export default function BugMatcherScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
   const effectiveTop = useEffectiveSafeTopInset();
+  const { height: windowHeight } = useWindowDimensions();
+  // Reserve a fixed matches area so the layout never shifts when results appear,
+  // leaving a bit more room for the filters/photo path below.
+  const matchesPaneHeight = Math.round(windowHeight * 0.42);
 
   const [filters, setFilters] = useState<BugMatcherFilters>({});
   const [selectedInsectId, setSelectedInsectId] = useState<string | null>(null);
@@ -126,6 +195,8 @@ export default function BugMatcherScreen() {
   );
 
   const hasAnyFilter = Object.values(filters).some(Boolean);
+  // The matches pane shows every bug by default and narrows as traits are picked.
+  const shownCandidates = candidates;
 
   const resetKey = useCallback(() => {
     setFilters({});
@@ -204,133 +275,24 @@ export default function BugMatcherScreen() {
         <View style={styles.backButton} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {/* ---- AI photo path ---- */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Snap a photo</Text>
-          <Text style={styles.sectionSub}>
-            Let AI identify the bug and suggest flies. Needs a connection.
-          </Text>
-          <View style={styles.photoButtons}>
-            <Pressable style={styles.photoButton} onPress={() => pickPhoto('camera')} disabled={aiLoading}>
-              <Ionicons name="camera-outline" size={20} color={colors.surface} />
-              <Text style={styles.photoButtonText}>Take photo</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.photoButton, styles.photoButtonAlt]}
-              onPress={() => pickPhoto('library')}
-              disabled={aiLoading}
-            >
-              <Ionicons name="image-outline" size={20} color={colors.primary} />
-              <Text style={[styles.photoButtonText, styles.photoButtonTextAlt]}>Upload</Text>
-            </Pressable>
-          </View>
-
-          {photoUri ? (
-            <View style={styles.aiResultCard}>
-              <Image source={{ uri: photoUri }} style={styles.aiPhoto} resizeMode="cover" />
-              {aiLoading ? (
-                <View style={styles.aiLoadingRow}>
-                  <ActivityIndicator color={colors.primary} />
-                  <Text style={styles.aiLoadingText}>Identifying…</Text>
-                </View>
-              ) : aiError ? (
-                <View style={styles.aiErrorBox}>
-                  <Text style={styles.aiErrorText}>{aiError}</Text>
-                  <Pressable onPress={clearAi}>
-                    <Text style={styles.linkText}>Dismiss</Text>
-                  </Pressable>
-                </View>
-              ) : aiResult ? (
-                <View style={styles.aiResultBody}>
-                  <Text style={styles.aiInsectName}>{aiResult.insect}</Text>
-                  <Text style={styles.aiMeta}>
-                    {[
-                      aiResult.category !== 'unknown' ? aiResult.category : null,
-                      aiResult.lifeStage !== 'unknown' ? aiResult.lifeStage : null,
-                      `${Math.round(aiResult.confidence * 100)}% confidence`,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </Text>
-                  {aiResult.note ? <Text style={styles.aiNote}>{aiResult.note}</Text> : null}
-                  <Text style={styles.subhead}>Try these flies</Text>
-                  <MatchingFliesGrid
-                    flyNames={
-                      aiMatchedInsect ? fliesForInsect(aiMatchedInsect) : aiResult.flies
-                    }
-                    sizeHint={aiMatchedInsect ? sizeHintFor(aiMatchedInsect) : null}
-                    colors={colors}
-                  />
-                  <Pressable onPress={clearAi} style={styles.clearLink}>
-                    <Text style={styles.linkText}>Clear photo</Text>
-                  </Pressable>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or narrow by features</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
-        {/* ---- Offline feature key ---- */}
-        {selectedInsect ? (
+      {selectedInsect ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <InsectDetail
             insect={selectedInsect}
             onBack={() => setSelectedInsectId(null)}
             colors={colors}
             styles={styles}
           />
-        ) : (
-          <>
-            <FilterStep label="Type" styles={styles}>
-              <ChipRow
-                options={categoryOpts}
-                selected={filters.category ?? null}
-                onSelect={(v) => setFilters((f) => ({ ...f, category: v as HatchCategory | null }))}
-                styles={styles}
-              />
-            </FilterStep>
-            <FilterStep label="Size" styles={styles}>
-              <ChipRow
-                options={sizeOpts}
-                selected={filters.size ?? null}
-                onSelect={(v) => setFilters((f) => ({ ...f, size: v as SizeBucket | null }))}
-                styles={styles}
-              />
-            </FilterStep>
-            <FilterStep label="Body color" styles={styles}>
-              <ChipRow
-                options={colorOpts}
-                selected={filters.color ?? null}
-                onSelect={(v) => setFilters((f) => ({ ...f, color: v as InsectBodyColor | null }))}
-                styles={styles}
-              />
-            </FilterStep>
-            <FilterStep label="Wing / profile" styles={styles}>
-              <ChipRow
-                options={profileOpts}
-                selected={filters.profile ?? null}
-                onSelect={(v) => setFilters((f) => ({ ...f, profile: v as InsectProfile | null }))}
-                styles={styles}
-              />
-            </FilterStep>
-            <FilterStep label="Life stage" styles={styles}>
-              <ChipRow
-                options={stageOpts}
-                selected={filters.lifeStage ?? null}
-                onSelect={(v) => setFilters((f) => ({ ...f, lifeStage: v as InsectLifeStage | null }))}
-                styles={styles}
-              />
-            </FilterStep>
-
+        </ScrollView>
+      ) : (
+        <>
+          {/* ---- Pinned matches: always visible, empty until the angler picks a trait ---- */}
+          <View style={[styles.matchesPane, { height: matchesPaneHeight }]}>
             <View style={styles.candidatesHeader}>
               <Text style={styles.sectionTitle}>
-                {candidates.length} {candidates.length === 1 ? 'match' : 'matches'}
+                {hasAnyFilter
+                  ? `${shownCandidates.length} ${shownCandidates.length === 1 ? 'match' : 'matches'}`
+                  : 'All bugs'}
               </Text>
               {hasAnyFilter ? (
                 <Pressable onPress={resetKey} hitSlop={8}>
@@ -338,45 +300,165 @@ export default function BugMatcherScreen() {
                 </Pressable>
               ) : null}
             </View>
-
-            {candidates.map((insect) => (
-              <Pressable
-                key={insect.id}
-                style={styles.candidateCard}
-                onPress={() => setSelectedInsectId(insect.id)}
+            {shownCandidates.length === 0 ? (
+              <Text style={styles.emptyMatches}>
+                No bugs match those traits — try clearing one.
+              </Text>
+            ) : (
+              <ScrollView
+                style={styles.matchesScroll}
+                contentContainerStyle={styles.matchesScrollContent}
+                keyboardShouldPersistTaps="handled"
               >
-                <View style={styles.candidateMain}>
-                  <Text style={styles.candidateName}>{insect.commonName}</Text>
-                  <Text style={styles.candidateMeta}>
-                    {CATEGORY_LABELS[insect.category]} · {sizeHintFor(insect)}
-                  </Text>
-                  <Text style={styles.candidateNote} numberOfLines={2}>
-                    {insect.idNote}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-              </Pressable>
-            ))}
-          </>
-        )}
-      </ScrollView>
-    </View>
-  );
-}
+                {shownCandidates.map((insect) => {
+                    const thumb = representativeFlyImage(insect);
+                    return (
+                      <Pressable
+                        key={insect.id}
+                        style={styles.candidateCard}
+                        onPress={() => setSelectedInsectId(insect.id)}
+                      >
+                        {thumb ? (
+                          <Image source={thumb} style={styles.candidateThumb} resizeMode="contain" />
+                        ) : (
+                          <View style={[styles.candidateThumb, styles.candidateThumbPlaceholder]}>
+                            <Ionicons name="bug-outline" size={22} color={colors.textTertiary} />
+                          </View>
+                        )}
+                        <View style={styles.candidateMain}>
+                          <Text style={styles.candidateName}>{insect.commonName}</Text>
+                          <Text style={styles.candidateMeta}>
+                            {CATEGORY_LABELS[insect.category]} · {sizeHintFor(insect)}
+                          </Text>
+                          <Text style={styles.candidateNote} numberOfLines={2}>
+                            {insect.idNote}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
+          </View>
 
-function FilterStep({
-  label,
-  children,
-  styles,
-}: {
-  label: string;
-  children: React.ReactNode;
-  styles: ReturnType<typeof createStyles>;
-}) {
-  return (
-    <View style={styles.filterStep}>
-      <Text style={styles.filterLabel}>{label}</Text>
-      {children}
+          <ScrollView
+            style={styles.lowerScroll}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* ---- AI photo path ---- */}
+            <Text style={styles.sectionTitle}>Snap a photo</Text>
+            <Text style={styles.sectionHint}>Let AI ID the bug, or narrow by features below.</Text>
+            <View style={styles.photoButtons}>
+              <Pressable style={styles.photoButton} onPress={() => pickPhoto('camera')} disabled={aiLoading}>
+                <Ionicons name="camera-outline" size={20} color={colors.surface} />
+                <Text style={styles.photoButtonText}>Take photo</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.photoButton, styles.photoButtonAlt]}
+                onPress={() => pickPhoto('library')}
+                disabled={aiLoading}
+              >
+                <Ionicons name="image-outline" size={20} color={colors.primary} />
+                <Text style={[styles.photoButtonText, styles.photoButtonTextAlt]}>Upload</Text>
+              </Pressable>
+            </View>
+
+            {photoUri ? (
+              <View style={styles.aiResultCard}>
+                <Image source={{ uri: photoUri }} style={styles.aiPhoto} resizeMode="cover" />
+                {aiLoading ? (
+                  <View style={styles.aiLoadingRow}>
+                    <ActivityIndicator color={colors.primary} />
+                    <Text style={styles.aiLoadingText}>Identifying…</Text>
+                  </View>
+                ) : aiError ? (
+                  <View style={styles.aiErrorBox}>
+                    <Text style={styles.aiErrorText}>{aiError}</Text>
+                    <Pressable onPress={clearAi}>
+                      <Text style={styles.linkText}>Dismiss</Text>
+                    </Pressable>
+                  </View>
+                ) : aiResult ? (
+                  <View style={styles.aiResultBody}>
+                    <Text style={styles.aiInsectName}>{aiResult.insect}</Text>
+                    <Text style={styles.aiMeta}>
+                      {[
+                        aiResult.category !== 'unknown' ? aiResult.category : null,
+                        aiResult.lifeStage !== 'unknown' ? aiResult.lifeStage : null,
+                        `${Math.round(aiResult.confidence * 100)}% confidence`,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </Text>
+                    {aiResult.note ? <Text style={styles.aiNote}>{aiResult.note}</Text> : null}
+                    <Text style={styles.subhead}>Try these flies</Text>
+                    <MatchingFliesGrid
+                      flyNames={aiMatchedInsect ? fliesForInsect(aiMatchedInsect) : aiResult.flies}
+                      sizeHint={aiMatchedInsect ? sizeHintFor(aiMatchedInsect) : null}
+                      colors={colors}
+                    />
+                    <Pressable onPress={clearAi} style={styles.clearLink}>
+                      <Text style={styles.linkText}>Clear photo</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or narrow by features</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* ---- Feature key ---- */}
+            <View style={styles.filterGrid}>
+              <FilterDropdown
+                label="Type"
+                options={categoryOpts}
+                selected={filters.category ?? null}
+                onSelect={(v) => setFilters((f) => ({ ...f, category: v as HatchCategory | null }))}
+                colors={colors}
+                styles={styles}
+              />
+              <FilterDropdown
+                label="Size"
+                options={sizeOpts}
+                selected={filters.size ?? null}
+                onSelect={(v) => setFilters((f) => ({ ...f, size: v as SizeBucket | null }))}
+                colors={colors}
+                styles={styles}
+              />
+              <FilterDropdown
+                label="Body color"
+                options={colorOpts}
+                selected={filters.color ?? null}
+                onSelect={(v) => setFilters((f) => ({ ...f, color: v as InsectBodyColor | null }))}
+                colors={colors}
+                styles={styles}
+              />
+              <FilterDropdown
+                label="Wing / profile"
+                options={profileOpts}
+                selected={filters.profile ?? null}
+                onSelect={(v) => setFilters((f) => ({ ...f, profile: v as InsectProfile | null }))}
+                colors={colors}
+                styles={styles}
+              />
+              <FilterDropdown
+                label="Life stage"
+                options={stageOpts}
+                selected={filters.lifeStage ?? null}
+                onSelect={(v) => setFilters((f) => ({ ...f, lifeStage: v as InsectLifeStage | null }))}
+                colors={colors}
+                styles={styles}
+              />
+            </View>
+          </ScrollView>
+        </>
+      )}
     </View>
   );
 }
@@ -435,10 +517,26 @@ function createStyles(colors: ThemeColors) {
     },
     backButton: { width: 40, alignItems: 'flex-start' },
     headerTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
+    lowerScroll: { flex: 1 },
     content: { padding: Spacing.md, paddingBottom: Spacing.xxl },
-    section: { marginBottom: Spacing.lg },
     sectionTitle: { fontSize: FontSize.lg, fontWeight: '700', color: colors.text },
-    sectionSub: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2, marginBottom: Spacing.md },
+    sectionHint: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2, marginBottom: Spacing.md },
+    matchesPane: {
+      paddingHorizontal: Spacing.md,
+      paddingTop: Spacing.sm,
+      paddingBottom: Spacing.sm,
+      backgroundColor: colors.background,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    matchesScroll: { flex: 1 },
+    matchesScrollContent: { paddingBottom: Spacing.xs },
+    emptyMatches: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      fontStyle: 'italic',
+      paddingVertical: Spacing.sm,
+    },
     photoButtons: { flexDirection: 'row', gap: Spacing.sm },
     photoButton: {
       flex: 1,
@@ -482,20 +580,57 @@ function createStyles(colors: ThemeColors) {
     divider: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginVertical: Spacing.md },
     dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
     dividerText: { fontSize: FontSize.sm, color: colors.textSecondary },
-    filterStep: { marginBottom: Spacing.md },
-    filterLabel: { fontSize: FontSize.sm, fontWeight: '700', color: colors.textSecondary, marginBottom: Spacing.sm },
-    chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-    chip: {
-      paddingVertical: Spacing.xs + 2,
-      paddingHorizontal: Spacing.md,
-      borderRadius: BorderRadius.full,
+    filterGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+    },
+    filterStep: { width: '48.5%', marginBottom: Spacing.sm },
+    filterLabel: { fontSize: FontSize.xs, fontWeight: '700', color: colors.textSecondary, marginBottom: 4 },
+    dropdownTrigger: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: Spacing.xs,
+      paddingVertical: Spacing.xs + 1,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
     },
-    chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-    chipText: { fontSize: FontSize.sm, color: colors.text },
-    chipTextActive: { color: colors.surface, fontWeight: '600' },
+    dropdownTriggerDisabled: { opacity: 0.5 },
+    dropdownValue: { flex: 1, fontSize: FontSize.sm, color: colors.text, fontWeight: '600' },
+    dropdownValueMuted: { color: colors.textTertiary, fontWeight: '400' },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      padding: Spacing.lg,
+    },
+    modalCard: {
+      backgroundColor: colors.surface,
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+    },
+    modalTitle: {
+      fontSize: FontSize.sm,
+      fontWeight: '700',
+      color: colors.textSecondary,
+      marginBottom: Spacing.sm,
+    },
+    optionScroll: { maxHeight: 360 },
+    optionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.sm,
+      borderRadius: BorderRadius.sm,
+    },
+    optionRowActive: { backgroundColor: `${colors.primary}18` },
+    optionText: { fontSize: FontSize.md, color: colors.text },
+    optionTextActive: { fontWeight: '700', color: colors.primary },
     candidatesHeader: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -513,6 +648,14 @@ function createStyles(colors: ThemeColors) {
       padding: Spacing.md,
       marginBottom: Spacing.sm,
     },
+    candidateThumb: {
+      width: 52,
+      height: 52,
+      borderRadius: BorderRadius.sm,
+      marginRight: Spacing.md,
+      backgroundColor: colors.background,
+    },
+    candidateThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
     candidateMain: { flex: 1, marginRight: Spacing.sm },
     candidateName: { fontSize: FontSize.md, fontWeight: '700', color: colors.text },
     candidateMeta: { fontSize: FontSize.sm, color: colors.textSecondary, marginTop: 2 },

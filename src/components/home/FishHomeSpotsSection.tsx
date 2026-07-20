@@ -1,11 +1,11 @@
 import { DriftGuideMessage } from '@/src/components/home/DriftGuideMessage';
 import { RecommendedSpotCard, recommendedSpotsLoadingStyles } from '@/src/components/home/RecommendedSpotCard';
 import type { HomeHotSpotData } from '@/src/utils/homeHotSpots';
-import { FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
+import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
 function createHeaderStyles(colors: ThemeColors) {
   return StyleSheet.create({
@@ -21,16 +21,16 @@ function createHeaderStyles(colors: ThemeColors) {
       color: colors.text,
       fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: undefined }),
     },
-    seeMore: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: Spacing.xs,
-      paddingVertical: Spacing.md,
+    countPill: {
+      marginLeft: 'auto',
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 2,
+      borderRadius: BorderRadius.full,
+      backgroundColor: colors.secondary + '1A',
     },
-    seeMoreText: {
+    countPillText: {
       fontSize: FontSize.xs,
-      fontWeight: '600',
+      fontWeight: '700',
       color: colors.secondary,
     },
   });
@@ -45,7 +45,6 @@ export function FishHomeSpotsSection({
   hotSpotList: HomeHotSpotData[];
   onOpenSpot: (locationId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const { colors } = useAppTheme();
   const headerStyles = useMemo(() => createHeaderStyles(colors), [colors]);
   const loadStyles = useMemo(() => recommendedSpotsLoadingStyles(colors), [colors]);
@@ -55,7 +54,12 @@ export function FishHomeSpotsSection({
       <View>
         <View style={headerStyles.sectionHeader}>
           <Ionicons name="location-sharp" size={20} color={colors.secondary} />
-          <Text style={headerStyles.sectionTitle}>Recommended Spots</Text>
+          <Text style={headerStyles.sectionTitle}>Recommended Locations</Text>
+          {!hotSpotLoading && hotSpotList.length > 0 ? (
+            <View style={headerStyles.countPill}>
+              <Text style={headerStyles.countPillText}>{hotSpotList.length}</Text>
+            </View>
+          ) : null}
         </View>
 
         {hotSpotLoading ? (
@@ -63,34 +67,15 @@ export function FishHomeSpotsSection({
             <ActivityIndicator color={colors.primary} />
           </View>
         ) : hotSpotList[0] ? (
-          <>
+          hotSpotList.map((hotSpot, i) => (
             <RecommendedSpotCard
-              data={hotSpotList[0]}
-              isTopPick
-              onPress={() => onOpenSpot(hotSpotList[0].location.id)}
+              key={hotSpot.location.id}
+              data={hotSpot}
+              rank={i + 1}
+              isTopPick={i === 0}
+              onPress={() => onOpenSpot(hotSpot.location.id)}
             />
-            {expanded &&
-              hotSpotList.slice(1).map((hotSpot) => (
-                <RecommendedSpotCard
-                  key={hotSpot.location.id}
-                  data={hotSpot}
-                  isTopPick={false}
-                  onPress={() => onOpenSpot(hotSpot.location.id)}
-                />
-              ))}
-            {hotSpotList.length > 1 && !expanded ? (
-              <Pressable style={headerStyles.seeMore} onPress={() => setExpanded(true)}>
-                <Text style={headerStyles.seeMoreText}>More waters to consider</Text>
-                <Ionicons name="chevron-down" size={16} color={colors.secondary} />
-              </Pressable>
-            ) : null}
-            {expanded && hotSpotList.length > 1 ? (
-              <Pressable style={headerStyles.seeMore} onPress={() => setExpanded(false)}>
-                <Text style={headerStyles.seeMoreText}>Show fewer</Text>
-                <Ionicons name="chevron-up" size={16} color={colors.secondary} />
-              </Pressable>
-            ) : null}
-          </>
+          ))
         ) : (
           <View style={loadStyles.emptyBox}>
             <Text style={loadStyles.emptyText}>

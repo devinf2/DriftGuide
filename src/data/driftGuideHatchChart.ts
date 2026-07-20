@@ -463,3 +463,17 @@ export function resolveHatchChartEntry(
 
   return undefined;
 }
+
+/**
+ * Resolve a fly pattern name (e.g. "Elk Hair Caddis") to the calendar entry whose matching-flies
+ * list includes it. Used to deep-link the home "Suggested Fly" card straight to its hatch on the
+ * calendar. Returns undefined when no entry lists that pattern.
+ */
+export function findHatchEntryForFly(
+  flyName: string,
+  entries: DriftGuideHatchChartEntry[] = DRIFTGUIDE_HATCH_CHART_ENTRIES,
+): DriftGuideHatchChartEntry | undefined {
+  const q = normalizeHatchQuery(flyName);
+  if (!q) return undefined;
+  return entries.find((e) => e.flies.some((f) => normalizeHatchQuery(f.name) === q));
+}

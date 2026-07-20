@@ -48,6 +48,8 @@ import type { TripEndpointKind } from '@/src/components/journal/TripEndpointPinM
 import type { AIQueryData, CatchData, Fly, FlyCatalog, FlyChangeData, NoteData, Photo, Trip, TripEvent } from '@/src/types';
 import type { EventSyncStatus } from '@/src/types/sync';
 import { TripDashboardTimelineRows } from '@/src/components/trip/TripDashboardTimelineRows';
+import { TripRecap } from '@/src/components/trip/TripRecap';
+import { buildTripRecap } from '@/src/utils/tripRecap';
 import {
   createTripDashboardTimelineTitleStyles,
 } from '@/src/components/trip/tripDashboardTimelineStyles';
@@ -89,6 +91,16 @@ export interface JournalFishingTimelineProps {
   eventSyncStatusForEvent?: (event: TripEvent) => EventSyncStatus;
   /** Trip album rows — same fetch as Photos tab; timeline thumbs prefer these URLs. */
   tripAlbumPhotos?: Photo[];
+  /** Deep-link: when set, auto-expand this catch's row (its `TripEvent.id`) so its details show. */
+  focusCatchEventId?: string | null;
+  /** Lead the scroll with the trip recap (hero catch + highlight tiles). Own completed trip only. */
+  showRecap?: boolean;
+  /** Recap treatment: `group` shows the merged-session variant (group total, no duration/rating). */
+  recapVariant?: 'trip' | 'group';
+  /** Opens the trip review modal from the recap Rating tile. Omit for read-only rating. */
+  onEditRating?: () => void;
+  /** Extra bottom padding for the scroll so content clears an overlapping tab bar (summary in a tab). */
+  contentBottomInset?: number;
 }
 
 export function JournalFishingTimeline({
@@ -107,6 +119,11 @@ export function JournalFishingTimeline({
   colorTokens,
   eventSyncStatusForEvent,
   tripAlbumPhotos = [],
+  focusCatchEventId = null,
+  showRecap = false,
+  recapVariant = 'trip',
+  onEditRating,
+  contentBottomInset,
 }: JournalFishingTimelineProps) {
   const palette = colorTokens ?? Colors;
   const useDashboardTimeline = colorTokens != null;
@@ -122,6 +139,10 @@ export function JournalFishingTimeline({
   );
 
   const sorted = useMemo(() => sortEventsByTime(events), [events]);
+  const recapBiggestCatchId = useMemo(
+    () => (showRecap ? buildTripRecap(sorted).biggest?.event.id ?? null : null),
+    [showRecap, sorted],
+  );
   const timelineDisplayRows = useMemo(
     () => buildTimelineDisplayRows(sorted, { newestFirst: useDashboardTimeline }),
     [sorted, useDashboardTimeline],
@@ -153,6 +174,19 @@ export function JournalFishingTimeline({
   useEffect(() => {
     void getFlyCatalogOrBundled().then(setFlyCatalog);
   }, []);
+
+  // Deep-link from the Welcome tab: expand the focused catch once its row is present.
+  useEffect(() => {
+    if (!focusCatchEventId) return;
+    const exists = sorted.some((e) => e.id === focusCatchEventId);
+    if (!exists) return;
+    setExpandedCatchIds((prev) => {
+      if (prev.has(focusCatchEventId)) return prev;
+      const next = new Set(prev);
+      next.add(focusCatchEventId);
+      return next;
+    });
+  }, [focusCatchEventId, sorted]);
 
   const reloadFromCloud = useCallback(async () => {
     // Peer / group rows use this Journal with `trip` = another angler's trip. Never merge that row or
@@ -489,12 +523,28 @@ export function JournalFishingTimeline({
     <View style={styles.root}>
       <ScrollView
         style={styles.tabContent}
-        contentContainerStyle={
-          useDashboardTimeline ? styles.dashboardTimelineOuter : styles.tabContentInner
-        }
+        contentContainerStyle={[
+          useDashboardTimeline ? styles.dashboardTimelineOuter : styles.tabContentInner,
+          contentBottomInset != null && { paddingBottom: contentBottomInset },
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator
       >
+        {showRecap ? (
+          <View style={styles.recapSection}>
+            <TripRecap
+              trip={trip}
+              events={events}
+              colors={palette}
+              variant={recapVariant}
+              topFly={tripFliesWithPhotos.find((f) => f.catchCount > 0) ?? null}
+              albumPhotoUrlsByCatchId={albumPhotoUrlsByCatchId}
+              onCatchPhotoPress={onCatchPhotoPress}
+              onEditRating={onEditRating}
+            />
+          </View>
+        ) : null}
+
         {trip.status === 'completed' && tripFliesWithPhotos.length > 0 ? (
           <View style={useDashboardTimeline ? styles.dashboardFlySection : styles.section}>
             <Text style={styles.sectionTitle}>Flies Used</Text>
@@ -572,6 +622,8 @@ export function JournalFishingTimeline({
               onFlyViewPress={setFlyViewEvent}
               onRowMenuPress={(event, index) => openRowMenu(event, index)}
               showRowMenu={editMode}
+              emphasizeCatches={showRecap}
+              biggestCatchEventId={recapBiggestCatchId}
               attributionLabelForEvent={attributionLabelForEvent}
               attributionAvatarUriForEvent={attributionAvatarUriForEvent}
               compactAttributionLabels={compactAttributionLabels}
@@ -732,6 +784,10 @@ function createJournalFishingTimelineStyles(c: ThemeColors) {
     },
     dashboardFlySection: {
       gap: Spacing.sm,
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.lg,
+    },
+    recapSection: {
       paddingHorizontal: Spacing.lg,
       paddingTop: Spacing.lg,
     },

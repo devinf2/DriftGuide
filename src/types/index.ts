@@ -76,7 +76,9 @@ export interface FriendshipRow {
 
 /** Reaction kinds — must match the post_reactions CHECK in migration 117. */
 export type PostReaction = 'fire' | 'fish' | 'like' | 'net' | 'wow';
-export const POST_REACTIONS: PostReaction[] = ['fire', 'fish', 'like', 'net', 'wow'];
+// Reactions offered in the quick-react row. `net` (🥅) is retired from the UI but kept in the
+// union above so any legacy rows already stored stay valid.
+export const POST_REACTIONS: PostReaction[] = ['fire', 'fish', 'like', 'wow'];
 
 /** DB row: posts table. */
 export interface PostRow {
@@ -117,6 +119,8 @@ export interface FeedPost {
   reactions: PostReactionSummary[];
   /** Live comment count on this post (visible comments only). */
   commentCount?: number;
+  /** Up to 2 most-recent comments (oldest-first), for the Instagram-style card preview. */
+  recentComments?: PostComment[];
 }
 
 /** DB row: post_comments table, plus the author profile joined client-side. */

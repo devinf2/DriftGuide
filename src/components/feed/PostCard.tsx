@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SinglePhotoZoomModal } from '@/src/components/SinglePhotoZoomModal';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import type { FeedPost, PostReaction } from '@/src/types';
+import type { FeedPost, PostComment, PostReaction } from '@/src/types';
 import { POST_REACTIONS } from '@/src/types';
 import { formatRelativeTime } from '@/src/utils/formatters';
 import { caughtByLabel, findReactionBucket, presentationLabel } from '@/src/utils/feed';
@@ -32,6 +32,8 @@ type PostCardProps = {
   onToggleReaction: (reaction: PostReaction) => void;
   onOpenComments?: () => void;
   commentCount?: number;
+  /** Up to 2 most-recent comments (oldest-first) for the inline preview. */
+  recentComments?: PostComment[];
   onReport?: () => void;
   onDelete?: () => void;
 };
@@ -107,6 +109,18 @@ function createStyles(colors: ThemeColors) {
     reactionEmoji: { fontSize: 15 },
     reactionCount: { fontSize: FontSize.xs, color: colors.textSecondary, fontWeight: '600' },
     reactionCountActive: { color: colors.primary },
+    commentsPreview: {
+      paddingHorizontal: Spacing.sm,
+      paddingBottom: Spacing.sm,
+      gap: 3,
+    },
+    viewAllComments: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      marginBottom: 1,
+    },
+    commentLine: { fontSize: FontSize.sm, color: colors.text, lineHeight: 19 },
+    commentAuthor: { fontWeight: '700', color: colors.text },
     openTrip: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -127,6 +141,7 @@ export function PostCard({
   onToggleReaction,
   onOpenComments,
   commentCount = 0,
+  recentComments = [],
   onReport,
   onDelete,
 }: PostCardProps) {
@@ -286,6 +301,36 @@ export function PostCard({
           </Pressable>
         ) : null}
       </View>
+
+      {recentComments.length > 0 ? (
+        <View style={styles.commentsPreview}>
+          {commentCount > recentComments.length && onOpenComments ? (
+            <Pressable
+              onPress={onOpenComments}
+              accessibilityRole="button"
+              accessibilityLabel={`View all ${commentCount} comments`}
+            >
+              <Text style={styles.viewAllComments}>
+                View all {commentCount} comments
+              </Text>
+            </Pressable>
+          ) : null}
+          {recentComments.map((comment) => (
+            <Pressable
+              key={comment.id}
+              onPress={onOpenComments}
+              disabled={!onOpenComments}
+              accessibilityRole={onOpenComments ? 'button' : undefined}
+            >
+              <Text style={styles.commentLine} numberOfLines={2}>
+                <Text style={styles.commentAuthor}>{profileDisplayName(comment.author)}</Text>
+                {'  '}
+                {comment.body}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
 
       {post.trip_id && onOpenTrip ? (
         <Pressable style={styles.openTrip} onPress={onOpenTrip} accessibilityRole="button">
