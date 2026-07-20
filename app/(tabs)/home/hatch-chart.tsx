@@ -1,13 +1,17 @@
 import { HatchEntryVisualCard } from '@/src/components/hatchChart/HatchEntryVisualCard';
 import { HatchYearMatrix } from '@/src/components/hatchChart/HatchYearMatrix';
+import { HatchNowHero } from '@/src/components/hatchChart/HatchNowHero';
+import { HatchCompactRow } from '@/src/components/hatchChart/HatchCompactRow';
+import { HatchCategoryFilter, type HatchFilter } from '@/src/components/hatchChart/HatchCategoryFilter';
 import {
   DRIFTGUIDE_HATCH_CHART_ENTRIES,
-  DRIFTGUIDE_HATCH_CHART_INTRO,
-  entriesStrongThisMonth,
+  hatchActivityForMonth,
   hatchEntriesSortedByMonthActivity,
   hatchFliesByStage,
+  pickNowHatch,
   resolveHatchChartEntry,
   type DriftGuideHatchChartEntry,
+  type HatchCategory,
   type HatchFly,
 } from '@/src/data/driftGuideHatchChart';
 import { hatchCategoryColor } from '@/src/components/hatchChart/hatchChartTheme';
@@ -22,7 +26,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { getFlyCatalogOrBundled, fetchFliesOrCache } from '@/src/services/flyService';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -53,52 +57,30 @@ function createStyles(colors: ThemeColors) {
       paddingTop: Spacing.sm,
       paddingBottom: Spacing.xl,
     },
-    hero: {
-      borderRadius: BorderRadius.lg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-      padding: Spacing.md,
-      marginBottom: Spacing.md,
-    },
-    heroTop: {
+    header: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: Spacing.sm,
-      marginBottom: Spacing.sm,
+      marginBottom: Spacing.md,
     },
-    heroMonth: {
+    headerMonth: {
       fontSize: FontSize.xl,
       fontWeight: '800',
       color: colors.text,
       fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: undefined }),
     },
-    heroSub: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      lineHeight: 21,
-      marginBottom: Spacing.sm,
-    },
-    chipRow: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: Spacing.xs,
-    },
-    chip: {
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderRadius: BorderRadius.md,
-      borderWidth: StyleSheet.hairlineWidth,
-    },
-    chipText: {
+    headerSub: {
       fontSize: FontSize.xs,
-      fontWeight: '700',
+      color: colors.textTertiary,
+      fontWeight: '600',
+      marginLeft: 'auto',
     },
-    intro: {
-      fontSize: FontSize.sm,
-      color: colors.textSecondary,
-      lineHeight: 22,
-      marginBottom: Spacing.md,
+    sectionHead: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'space-between',
+      marginTop: Spacing.md,
+      marginBottom: Spacing.sm,
     },
     sectionTitle: {
       fontSize: FontSize.sm,
@@ -106,7 +88,39 @@ function createStyles(colors: ThemeColors) {
       color: colors.textTertiary,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
-      marginBottom: Spacing.sm,
+    },
+    sectionCount: {
+      fontSize: FontSize.sm,
+      fontWeight: '700',
+      color: colors.textTertiary,
+    },
+    empty: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 21,
+      paddingVertical: Spacing.lg,
+      textAlign: 'center',
+    },
+    yearToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      marginTop: Spacing.md,
+      padding: Spacing.md,
+      borderRadius: BorderRadius.lg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    yearToggleTitle: {
+      fontSize: FontSize.md,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    yearToggleSub: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      marginTop: 1,
     },
     footer: {
       marginTop: Spacing.md,
@@ -238,15 +252,27 @@ export default function HatchChartScreen() {
 
   const now = useMemo(() => new Date(), []);
   const monthIndex0 = now.getMonth();
+  const hour = now.getHours();
   const monthName = format(now, 'MMMM');
-  const strongNow = useMemo(
-    () => entriesStrongThisMonth(DRIFTGUIDE_HATCH_CHART_ENTRIES, monthIndex0, 2),
-    [monthIndex0],
-  );
+
   const sorted = useMemo(
     () => hatchEntriesSortedByMonthActivity(DRIFTGUIDE_HATCH_CHART_ENTRIES, monthIndex0),
     [monthIndex0],
   );
+
+  // The one hatch to feature "right now" — highest tier active this month, best at the current hour.
+  const heroEntry = useMemo(
+    () => pickNowHatch(DRIFTGUIDE_HATCH_CHART_ENTRIES, monthIndex0, hour),
+    [monthIndex0, hour],
+  );
+
+  // Category filter for the browsable lists (the hero stays put — it's the live "now" answer).
+  const [filter, setFilter] = useState<HatchFilter>('all');
+  const categoriesPresent = useMemo(() => {
+    const order: HatchCategory[] = ['mayfly', 'caddis', 'stone', 'terrestrial', 'midge', 'stillwater'];
+    const present = new Set(DRIFTGUIDE_HATCH_CHART_ENTRIES.map((e) => e.category));
+    return order.filter((c) => present.has(c));
+  }, []);
 
   // Deep-link: a `focus` param (entry id or hatch name) opens that hatch expanded and scrolls to it.
   const { focus } = useLocalSearchParams<{ focus?: string }>();
@@ -254,6 +280,23 @@ export default function HatchChartScreen() {
     () => (focus ? resolveHatchChartEntry(Array.isArray(focus) ? focus[0] : focus) : undefined),
     [focus],
   );
+
+  // Tiers by this-month activity. Prime (3) get full cards; good/low (1–2) get compact rows; off
+  // hatches live only in the year matrix. A deep-linked off-month hatch is still surfaced below.
+  const { primeEntries, alsoEntries } = useMemo(() => {
+    // The featured hatch is spotlighted in the hero, so drop it from the lists to avoid a duplicate.
+    const inList = (e: DriftGuideHatchChartEntry) =>
+      e.id !== heroEntry?.id && (filter === 'all' || e.category === filter);
+    const prime = sorted.filter((e) => hatchActivityForMonth(e, monthIndex0) === 3 && inList(e));
+    const also = sorted.filter((e) => {
+      const lvl = hatchActivityForMonth(e, monthIndex0);
+      return lvl >= 1 && lvl <= 2 && inList(e);
+    });
+    if (focusEntry && inList(focusEntry) && hatchActivityForMonth(focusEntry, monthIndex0) === 0) {
+      also.unshift(focusEntry);
+    }
+    return { primeEntries: prime, alsoEntries: also };
+  }, [sorted, monthIndex0, filter, focusEntry, heroEntry]);
 
   // Expanded entries (multiple may be open). Seed with the focused hatch.
   const [openIds, setOpenIds] = useState<Set<string>>(() =>
@@ -268,18 +311,21 @@ export default function HatchChartScreen() {
     });
   }, []);
 
-  // Scroll the focused entry into view once its row has been laid out.
+  // "See the full year" reference matrix, collapsed by default so the current month leads.
+  const [yearOpen, setYearOpen] = useState(false);
+
+  // Scroll a deep-linked (focused) hatch into view once its row has been laid out.
   const scrollRef = useRef<ScrollView>(null);
   const didScrollRef = useRef(false);
   const handleEntryLayout = useCallback(
     (id: string, e: LayoutChangeEvent) => {
       if (didScrollRef.current || !focusEntry || id !== focusEntry.id) return;
       didScrollRef.current = true;
-      const y = e.nativeEvent.layout.y;
-      scrollRef.current?.scrollTo({ y: Math.max(0, y - Spacing.md), animated: true });
+      scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - Spacing.md), animated: true });
     },
     [focusEntry],
   );
+
 
   // Catalog powers name→catalog resolution when adding a tapped fly to the box.
   useEffect(() => {
@@ -340,52 +386,100 @@ export default function HatchChartScreen() {
       style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingBottom: Spacing.xl + insets.bottom }]}
     >
-      <View style={styles.hero}>
-        <View style={styles.heroTop}>
-          <MaterialCommunityIcons name="calendar-month" size={26} color={colors.secondary} />
-          <Text style={styles.heroMonth}>{monthName}</Text>
-        </View>
-        <Text style={styles.heroSub}>
-          Hatches marked &quot;good&quot; or &quot;prime&quot; this month on our reference calendar. Elevation, flow, and
-          tailwater vs freestone shift timing.
-        </Text>
-        {strongNow.length > 0 ? (
-          <View style={styles.chipRow}>
-            {strongNow.map((e) => {
-              const ac = hatchCategoryColor(e.category, colors);
-              return (
-                <View key={e.id} style={[styles.chip, { borderColor: ac, backgroundColor: colors.surfaceElevated }]}>
-                  <Text style={[styles.chipText, { color: ac }]}>{e.shortLabel}</Text>
-                </View>
-              );
-            })}
-          </View>
-        ) : (
-          <Text style={[styles.heroSub, { marginBottom: 0 }]}>
-            Fewer headline hatches this month on the chart—midges, small mayflies, and nymphing still carry most days.
-          </Text>
-        )}
+      <View style={styles.header}>
+        <MaterialCommunityIcons name="calendar-month" size={22} color={colors.secondary} />
+        <Text style={styles.headerMonth}>{monthName}</Text>
+        <Text style={styles.headerSub}>Western freestone &amp; tailwater</Text>
       </View>
 
-      <Text style={styles.intro}>{DRIFTGUIDE_HATCH_CHART_INTRO}</Text>
+      {heroEntry ? (
+        <HatchNowHero
+          entry={heroEntry}
+          monthIndex0={monthIndex0}
+          hour={hour}
+          colors={colors}
+          onSelectFly={handleSelectFly}
+        />
+      ) : null}
 
-      <HatchYearMatrix currentMonthIndex0={monthIndex0} colors={colors} />
+      <HatchCategoryFilter
+        categories={categoriesPresent}
+        value={filter}
+        onChange={setFilter}
+        colors={colors}
+      />
 
-      <Text style={styles.sectionTitle}>Hottest this month first — tap for rig notes + flies</Text>
-      {sorted.map((e) => (
-        <View key={e.id} onLayout={(ev) => handleEntryLayout(e.id, ev)}>
-          <HatchEntryVisualCard
-            entry={e}
-            currentMonthIndex0={monthIndex0}
-            colors={colors}
-            open={openIds.has(e.id)}
-            onToggle={() => toggleOpen(e.id)}
-            expandedExtra={
-              <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
-            }
-          />
+      {primeEntries.length > 0 ? (
+        <>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Prime this month</Text>
+            <Text style={styles.sectionCount}>{primeEntries.length}</Text>
+          </View>
+          {primeEntries.map((e) => (
+            <View key={e.id} onLayout={(ev) => handleEntryLayout(e.id, ev)}>
+              <HatchEntryVisualCard
+                entry={e}
+                currentMonthIndex0={monthIndex0}
+                colors={colors}
+                open={openIds.has(e.id)}
+                onToggle={() => toggleOpen(e.id)}
+                expandedExtra={
+                  <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+                }
+              />
+            </View>
+          ))}
+        </>
+      ) : null}
+
+      {alsoEntries.length > 0 ? (
+        <>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Also worth a look</Text>
+            <Text style={styles.sectionCount}>{alsoEntries.length}</Text>
+          </View>
+          {alsoEntries.map((e) => (
+            <View key={e.id} onLayout={(ev) => handleEntryLayout(e.id, ev)}>
+              <HatchCompactRow
+                entry={e}
+                currentMonthIndex0={monthIndex0}
+                colors={colors}
+                open={openIds.has(e.id)}
+                onToggle={() => toggleOpen(e.id)}
+                expandedExtra={
+                  <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+                }
+              />
+            </View>
+          ))}
+        </>
+      ) : null}
+
+      {primeEntries.length === 0 && alsoEntries.length === 0 ? (
+        <Text style={styles.empty}>
+          Nothing on the chart for this filter in {monthName}. Try “All”, or check the full year below.
+        </Text>
+      ) : null}
+
+      <Pressable
+        onPress={() => setYearOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: yearOpen }}
+        style={({ pressed }) => [styles.yearToggle, pressed && { opacity: 0.85 }]}
+      >
+        <MaterialCommunityIcons name="grid" size={20} color={colors.textSecondary} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.yearToggleTitle}>See the full year</Text>
+          <Text style={styles.yearToggleSub}>All {DRIFTGUIDE_HATCH_CHART_ENTRIES.length} hatches, month by month</Text>
         </View>
-      ))}
+        <Ionicons name={yearOpen ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textTertiary} />
+      </Pressable>
+
+      {yearOpen ? (
+        <View style={{ marginTop: Spacing.sm }}>
+          <HatchYearMatrix currentMonthIndex0={monthIndex0} colors={colors} />
+        </View>
+      ) : null}
 
       <Text style={styles.footer}>
         DriftGuide hatch calendar — planning reference only. Respect access, closures, and what you actually observe on

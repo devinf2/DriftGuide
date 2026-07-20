@@ -1,12 +1,15 @@
-import { HatchActivitySparkline } from '@/src/components/hatchChart/HatchActivitySparkline';
 import { HatchDaypartBar } from '@/src/components/hatchChart/HatchDaypartBar';
 import { HatchMonthHeatstrip } from '@/src/components/hatchChart/HatchMonthHeatstrip';
 import { hatchCategoryColor } from '@/src/components/hatchChart/hatchChartTheme';
-import type { DriftGuideHatchChartEntry } from '@/src/data/driftGuideHatchChart';
+import {
+  bestWindowLabel,
+  hatchActivityForMonth,
+  type DriftGuideHatchChartEntry,
+} from '@/src/data/driftGuideHatchChart';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState, type ReactNode } from 'react';
-import { LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useMemo, type ReactNode } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 type Props = {
   entry: DriftGuideHatchChartEntry;
@@ -20,16 +23,12 @@ type Props = {
 };
 
 export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors, open, onToggle, expandedExtra }: Props) {
-  const [chartW, setChartW] = useState(280);
   const accent = hatchCategoryColor(entry.category, colors);
-
-  const onLayout = (e: LayoutChangeEvent) => {
-    const w = e.nativeEvent.layout.width;
-    if (w > 48) setChartW(Math.floor(w));
-  };
-
-  const sparkH = 44;
   const styles = useMemo(() => createCardStyles(colors, accent), [colors, accent]);
+
+  const level = hatchActivityForMonth(entry, currentMonthIndex0);
+  const best = useMemo(() => bestWindowLabel(entry.daypart), [entry.daypart]);
+  const flyCount = entry.flies.length;
 
   return (
     <View style={styles.card}>
@@ -44,16 +43,30 @@ export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors, open, 
         <View style={styles.topRow}>
           <View style={[styles.catStripe, { backgroundColor: accent }]} />
           <View style={styles.topMain}>
-            <Text style={styles.name} numberOfLines={2}>
-              {entry.name}
-            </Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={2}>
+                {entry.name}
+              </Text>
+              {level >= 2 ? (
+                <View
+                  style={[
+                    styles.levelPill,
+                    { backgroundColor: level === 3 ? accent : colors.surfaceElevated, borderColor: accent },
+                  ]}
+                >
+                  <Text style={[styles.levelPillText, { color: level === 3 ? colors.textInverse : accent }]}>
+                    {level === 3 ? 'Prime' : 'Good'}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={styles.summary} numberOfLines={2}>
               {entry.peakSummary}
             </Text>
           </View>
         </View>
 
-        <View style={styles.chartBlock} onLayout={onLayout}>
+        <View style={styles.chartBlock}>
           <Text style={styles.sectionLabel}>Season by month</Text>
           <HatchMonthHeatstrip
             months={entry.monthActivity}
@@ -61,8 +74,13 @@ export function HatchEntryVisualCard({ entry, currentMonthIndex0, colors, open, 
             category={entry.category}
             colors={colors}
           />
-          <View style={styles.sparkWrap}>
-            <HatchActivitySparkline months={entry.monthActivity} strokeColor={accent} width={chartW} height={sparkH} />
+          <View style={styles.metaRow}>
+            <MaterialCommunityIcons name="clock-time-four-outline" size={13} color={colors.textTertiary} />
+            <Text style={styles.metaText}>
+              Best <Text style={{ color: colors.text, fontWeight: '700' }}>{best.toLowerCase()}</Text>
+            </Text>
+            <View style={styles.metaDot} />
+            <Text style={styles.metaText}>{flyCount} matching flies</Text>
           </View>
           <HatchDaypartBar daypart={entry.daypart} colors={colors} accent={accent} />
         </View>
@@ -119,10 +137,29 @@ function createCardStyles(colors: ThemeColors, accent: string) {
       paddingRight: Spacing.sm,
       paddingLeft: Spacing.sm,
     },
+    nameRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: Spacing.sm,
+    },
     name: {
+      flex: 1,
       fontSize: FontSize.md,
       fontWeight: '800',
       color: colors.text,
+    },
+    levelPill: {
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+      borderRadius: BorderRadius.full,
+      borderWidth: StyleSheet.hairlineWidth,
+      marginTop: 1,
+    },
+    levelPillText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+      textTransform: 'uppercase',
     },
     summary: {
       fontSize: FontSize.xs,
@@ -160,9 +197,23 @@ function createCardStyles(colors: ThemeColors, accent: string) {
       letterSpacing: 0.4,
       marginBottom: 6,
     },
-    sparkWrap: {
-      marginTop: Spacing.sm,
+    metaRow: {
+      flexDirection: 'row',
       alignItems: 'center',
+      gap: 6,
+      marginTop: Spacing.sm,
+      marginBottom: 2,
+    },
+    metaText: {
+      fontSize: FontSize.xs,
+      color: colors.textTertiary,
+      fontWeight: '600',
+    },
+    metaDot: {
+      width: 3,
+      height: 3,
+      borderRadius: 1.5,
+      backgroundColor: colors.textTertiary,
     },
     detail: {
       borderTopWidth: StyleSheet.hairlineWidth,

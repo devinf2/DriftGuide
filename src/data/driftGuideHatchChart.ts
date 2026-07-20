@@ -477,3 +477,98 @@ export function findHatchEntryForFly(
   if (!q) return undefined;
   return entries.find((e) => e.flies.some((f) => normalizeHatchQuery(f.name) === q));
 }
+
+// ── Time-of-day helpers ──────────────────────────────────────────────────────
+// Derived from the existing `daypart` weights only — no new data fields. These power the
+// "on the water now" hero and the per-card best-window summary in the redesigned calendar.
+
+export type DaypartKey = keyof DaypartWeights;
+
+/** Order daypart buckets run across the day; also the order shown in HatchDaypartBar. */
+export const HATCH_DAYPART_ORDER: DaypartKey[] = [
+  'dawn',
+  'morning',
+  'midday',
+  'afternoon',
+  'evening',
+  'night',
+];
+
+export const HATCH_DAYPART_LABELS: Record<DaypartKey, string> = {
+  dawn: 'Dawn',
+  morning: 'Morning',
+  midday: 'Midday',
+  afternoon: 'Afternoon',
+  evening: 'Evening',
+  night: 'Night',
+};
+
+/** Map a clock hour (0–23) to the daypart bucket it falls in. */
+export function daypartKeyForHour(hour: number): DaypartKey {
+  const h = ((Math.floor(hour) % 24) + 24) % 24;
+  if (h >= 5 && h < 7) return 'dawn';
+  if (h >= 7 && h < 11) return 'morning';
+  if (h >= 11 && h < 14) return 'midday';
+  if (h >= 14 && h < 18) return 'afternoon';
+  if (h >= 18 && h < 21) return 'evening';
+  return 'night';
+}
+
+/** A hatch's share of daily activity (0–1) in one daypart, normalized across all its dayparts. */
+export function hatchDaypartShare(entry: DriftGuideHatchChartEntry, key: DaypartKey): number {
+  const total = HATCH_DAYPART_ORDER.reduce((s, k) => s + Math.max(0, entry.daypart[k]), 0);
+  if (total <= 0) return 0;
+  return Math.max(0, entry.daypart[key]) / total;
+}
+
+/**
+ * Short human label for a hatch's strongest time-of-day window — the peak daypart, widened to a
+ * neighboring bucket when that neighbor is nearly as strong (e.g. "Dawn–morning", "Midday").
+ */
+export function bestWindowLabel(daypart: DaypartWeights): string {
+  const weights = HATCH_DAYPART_ORDER.map((k) => Math.max(0, daypart[k]));
+  const max = Math.max(...weights);
+  if (max <= 0) return '—';
+  let peak = 0;
+  for (let i = 1; i < weights.length; i += 1) {
+    if (weights[i]! > weights[peak]!) peak = i;
+  }
+  const left = peak > 0 ? weights[peak - 1]! : -1;
+  const right = peak < weights.length - 1 ? weights[peak + 1]! : -1;
+  const near = 0.6 * max;
+  let lo = peak;
+  let hi = peak;
+  if (left >= right && left >= near) lo = peak - 1;
+  else if (right > left && right >= near) hi = peak + 1;
+  const a = HATCH_DAYPART_LABELS[HATCH_DAYPART_ORDER[lo]!];
+  const b = HATCH_DAYPART_LABELS[HATCH_DAYPART_ORDER[hi]!];
+  return lo === hi ? a : `${a}–${b}`;
+}
+
+/** Representative "tie on now" pattern: first dry, else first listed fly. */
+export function primaryFlyForHatch(entry: DriftGuideHatchChartEntry): HatchFly | undefined {
+  return entry.flies.find((f) => f.stage === 'dry') ?? entry.flies[0];
+}
+
+/**
+ * Pick the single hatch to feature "right now": from the highest activity tier present this month
+ * (prime, then good, then possible), the one most active at the current daypart. Returns undefined
+ * only when nothing on the chart is active this month.
+ */
+export function pickNowHatch(
+  entries: DriftGuideHatchChartEntry[],
+  monthIndex0: number,
+  hour: number,
+): DriftGuideHatchChartEntry | undefined {
+  const key = daypartKeyForHour(hour);
+  for (const tier of [3, 2, 1] as const) {
+    const pool = entries.filter((e) => hatchActivityForMonth(e, monthIndex0) === tier);
+    if (pool.length > 0) {
+      return [...pool].sort(
+        (a, b) =>
+          hatchDaypartShare(b, key) - hatchDaypartShare(a, key) || a.name.localeCompare(b.name),
+      )[0];
+    }
+  }
+  return undefined;
+}

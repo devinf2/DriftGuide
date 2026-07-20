@@ -42,8 +42,8 @@ export function HatchDaypartBar({ daypart, colors, accent }: Props) {
         })}
       </View>
       <View style={styles.labelRow}>
-        {PARTS.map((p, i) => (
-          <View key={p.key} style={{ flex: raw[i]! / sum, minWidth: 0 }}>
+        {PARTS.map((p) => (
+          <View key={p.key} style={styles.labelCell}>
             <Text style={[styles.label, { color: colors.textTertiary }]} numberOfLines={1}>
               {p.label}
             </Text>
@@ -74,6 +74,10 @@ const styles = StyleSheet.create({
   labelRow: {
     flexDirection: 'row',
     marginTop: 4,
+  },
+  labelCell: {
+    flex: 1,
+    minWidth: 0,
   },
   label: {
     fontSize: 9,
