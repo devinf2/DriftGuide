@@ -1,8 +1,13 @@
 import { DriftGuideMessage } from '@/src/components/home/DriftGuideMessage';
-import { HatchMonthHeatstrip } from '@/src/components/hatchChart/HatchMonthHeatstrip';
+import { HatchEntryVisualCard } from '@/src/components/hatchChart/HatchEntryVisualCard';
+import { MatchingFliesStrip } from '@/src/components/hatchChart/MatchingFliesStrip';
 import { getBundledFlyImageSource } from '@/src/constants/flyImages';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
-import { findHatchEntryForFly } from '@/src/data/driftGuideHatchChart';
+import {
+  findHatchEntryForFly,
+  type DriftGuideHatchChartEntry,
+  type HatchFly,
+} from '@/src/data/driftGuideHatchChart';
 import { getFlyOfTheDay } from '@/src/services/ai';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -99,21 +104,29 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '800',
       color: colors.textInverse,
     },
-    hatchCal: {
+    hatchCalWrap: {
       marginHorizontal: Spacing.md,
       marginBottom: Spacing.md,
-      padding: Spacing.md,
-      borderRadius: BorderRadius.lg,
-      backgroundColor: colors.surfaceElevated,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
     },
-    hatchCalTitle: { fontSize: FontSize.sm, fontWeight: '700', color: colors.text },
-    hatchCalSub: {
+    hatchCalKicker: {
       fontSize: FontSize.xs,
-      color: colors.textSecondary,
-      marginTop: 1,
+      fontWeight: '800',
+      color: colors.textTertiary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
       marginBottom: Spacing.sm,
+    },
+    fullCalLink: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 2,
+      paddingVertical: Spacing.xs,
+    },
+    fullCalLinkText: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.secondary,
     },
     hatchChips: {
       flexDirection: 'row',
@@ -241,6 +254,13 @@ export function FishHomeRightNow({
     });
   }, [targetHatch]);
 
+  // The inline hatch card starts open so the full detail (season, timing, rig notes) is visible.
+  const [hatchOpen, setHatchOpen] = useState(true);
+  // Tapping a matching fly here hands off to the full calendar (where add-to-fly-box lives).
+  const openHatchForFly = useCallback((_fly: HatchFly, entry: DriftGuideHatchChartEntry) => {
+    router.push({ pathname: '/home/hatch-chart', params: { focus: entry.id } });
+  }, []);
+
   const showFallback = rankedWatersCount === 0 && !hasLocation && Boolean(onBrowseMap);
 
   return (
@@ -288,23 +308,31 @@ export function FishHomeRightNow({
           </View>
         </Pressable>
 
-        {/* The suggested fly's own hatch calendar — when it peaks through the year. */}
+        {/* The suggested fly's own hatch — full calendar detail inline (season, timing, rig notes,
+            matching flies), so anglers get everything without leaving Home. */}
         {targetHatch ? (
-          <Pressable
-            style={styles.hatchCal}
-            onPress={openHatchCalendar}
-            accessibilityRole="button"
-            accessibilityLabel={`${targetHatch.name} hatch calendar. Open full chart.`}
-          >
-            <Text style={styles.hatchCalTitle}>{targetHatch.name} · hatch calendar</Text>
-            <Text style={styles.hatchCalSub}>{targetHatch.peakSummary}</Text>
-            <HatchMonthHeatstrip
-              months={targetHatch.monthActivity}
+          <View style={styles.hatchCalWrap}>
+            <Text style={styles.hatchCalKicker}>This fly&apos;s hatch</Text>
+            <HatchEntryVisualCard
+              entry={targetHatch}
               currentMonthIndex0={monthIndex0}
-              category={targetHatch.category}
               colors={colors}
+              open={hatchOpen}
+              onToggle={() => setHatchOpen((v) => !v)}
+              expandedExtra={
+                <MatchingFliesStrip entry={targetHatch} colors={colors} onSelectFly={openHatchForFly} />
+              }
             />
-          </Pressable>
+            <Pressable
+              onPress={openHatchCalendar}
+              accessibilityRole="button"
+              accessibilityLabel="Open the full DriftGuide hatch calendar"
+              style={({ pressed }) => [styles.fullCalLink, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.fullCalLinkText}>See the full hatch calendar</Text>
+              <MaterialCommunityIcons name="chevron-right" size={16} color={colors.secondary} />
+            </Pressable>
+          </View>
         ) : null}
 
         {primeHatches.length > 0 ? (

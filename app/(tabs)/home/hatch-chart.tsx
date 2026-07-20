@@ -3,11 +3,11 @@ import { HatchYearMatrix } from '@/src/components/hatchChart/HatchYearMatrix';
 import { HatchNowHero } from '@/src/components/hatchChart/HatchNowHero';
 import { HatchCompactRow } from '@/src/components/hatchChart/HatchCompactRow';
 import { HatchCategoryFilter, type HatchFilter } from '@/src/components/hatchChart/HatchCategoryFilter';
+import { MatchingFliesStrip } from '@/src/components/hatchChart/MatchingFliesStrip';
 import {
   DRIFTGUIDE_HATCH_CHART_ENTRIES,
   hatchActivityForMonth,
   hatchEntriesSortedByMonthActivity,
-  hatchFliesByStage,
   pickNowHatch,
   resolveHatchChartEntry,
   type DriftGuideHatchChartEntry,
@@ -30,7 +30,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, type ImageSourcePropType, type LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { type ImageSourcePropType, type LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /** Resolve a tapped matching fly to a catalog entry (real match by name, else a bundled stub). */
@@ -129,104 +129,7 @@ function createStyles(colors: ThemeColors) {
       lineHeight: 18,
       fontStyle: 'italic',
     },
-    fliesInline: {
-      marginTop: Spacing.sm,
-      paddingTop: Spacing.sm,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.border,
-    },
-    fliesHeader: {
-      fontSize: FontSize.xs,
-      fontWeight: '800',
-      color: colors.textTertiary,
-      textTransform: 'uppercase',
-      letterSpacing: 0.4,
-      marginBottom: Spacing.sm,
-    },
-    fliesStageLabel: {
-      fontSize: FontSize.xs,
-      fontWeight: '700',
-      marginBottom: 6,
-    },
-    fliesStrip: {
-      gap: Spacing.sm,
-      paddingRight: Spacing.md,
-    },
-    flyItem: {
-      width: 76,
-      alignItems: 'center',
-    },
-    flyImage: {
-      width: 64,
-      height: 64,
-      borderRadius: BorderRadius.md,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      backgroundColor: colors.surfaceElevated,
-    },
-    flyName: {
-      fontSize: 10,
-      fontWeight: '700',
-      color: colors.text,
-      textAlign: 'center',
-      marginTop: 4,
-    },
-    flySize: {
-      fontSize: 10,
-      color: colors.textTertiary,
-      textAlign: 'center',
-    },
   });
-}
-
-type MatchingFliesStripProps = {
-  entry: DriftGuideHatchChartEntry;
-  colors: ThemeColors;
-  styles: ReturnType<typeof createStyles>;
-  onSelectFly: (fly: HatchFly, entry: DriftGuideHatchChartEntry) => void;
-};
-
-/** Horizontal "Matching flies" strip, grouped by life stage, with bundled fly images. */
-function MatchingFliesStrip({ entry, colors, styles, onSelectFly }: MatchingFliesStripProps) {
-  const groups = useMemo(() => hatchFliesByStage(entry), [entry]);
-  const accent = hatchCategoryColor(entry.category, colors);
-  if (groups.length === 0) return null;
-
-  return (
-    <View style={styles.fliesInline}>
-      <Text style={styles.fliesHeader}>Matching flies</Text>
-      {groups.map((group) => (
-        <View key={group.stage} style={{ marginBottom: Spacing.sm }}>
-          <Text style={[styles.fliesStageLabel, { color: accent }]}>{group.label}</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fliesStrip}>
-            {group.flies.map((fly) => {
-              const source = getBundledFlyImageSource(fly.name);
-              return (
-                <Pressable
-                  key={`${group.stage}-${fly.name}`}
-                  style={({ pressed }) => [styles.flyItem, pressed && { opacity: 0.7 }]}
-                  onPress={() => onSelectFly(fly, entry)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${fly.name}${fly.size ? `, ${fly.size}` : ''}`}
-                  accessibilityHint="Use this fly when logging a catch"
-                >
-                  {source ? (
-                    <Image source={source} style={styles.flyImage} resizeMode="cover" />
-                  ) : (
-                    <View style={styles.flyImage} />
-                  )}
-                  <Text style={styles.flyName} numberOfLines={2}>
-                    {fly.name}
-                  </Text>
-                  {fly.size ? <Text style={styles.flySize}>{fly.size}</Text> : null}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      ))}
-    </View>
-  );
 }
 
 export default function HatchChartScreen() {
@@ -424,7 +327,7 @@ export default function HatchChartScreen() {
                 open={openIds.has(e.id)}
                 onToggle={() => toggleOpen(e.id)}
                 expandedExtra={
-                  <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+                  <MatchingFliesStrip entry={e} colors={colors} onSelectFly={handleSelectFly} />
                 }
               />
             </View>
@@ -447,7 +350,7 @@ export default function HatchChartScreen() {
                 open={openIds.has(e.id)}
                 onToggle={() => toggleOpen(e.id)}
                 expandedExtra={
-                  <MatchingFliesStrip entry={e} colors={colors} styles={styles} onSelectFly={handleSelectFly} />
+                  <MatchingFliesStrip entry={e} colors={colors} onSelectFly={handleSelectFly} />
                 }
               />
             </View>
