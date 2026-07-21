@@ -17,6 +17,30 @@ export function edgeFunctionInvokeHeaders(accessToken: string): Record<string, s
   return headers;
 }
 
+/** Cap every backend request; "one bar" of service must not stall a full load forever. */
+const NETWORK_TIMEOUT_MS = 12_000;
+
+/**
+ * Offline-first fetch: aborts after {@link NETWORK_TIMEOUT_MS} instead of hanging on a stalled
+ * socket (weak/"tiny bit of" service). A timed-out request rejects like any network failure, so
+ * GoTrue reschedules token refresh and PostgREST callers fall back to on-device caches — the app
+ * degrades to offline rather than freezing on a load it can't finish. Honors a caller's own signal.
+ */
+function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS);
+
+  const callerSignal = init?.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: createDriftGuideSupabaseAuthStorage(),
@@ -24,4 +48,5 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     detectSessionInUrl: false,
   },
+  global: { fetch: fetchWithTimeout },
 });

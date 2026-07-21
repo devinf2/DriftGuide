@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import type { SupportedStorage } from '@supabase/auth-js';
+import type { Session } from '@supabase/supabase-js';
 import { stretchPersistedAuthSessionJsonForOfflineRead } from '@/src/services/supabaseAuthSessionStretch';
 import { isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
 import { useSimulateOfflineStore } from '@/src/stores/simulateOfflineStore';
@@ -60,6 +61,38 @@ async function deviceReachableForAuth(): Promise<boolean> {
   let reachable = isAppReachableFromNetInfoState(state);
   if (isSimulatedOfflineDev()) reachable = false;
   return reachable;
+}
+
+/**
+ * Offline-first cold start: read the persisted GoTrue session straight from AsyncStorage (expiry
+ * stretched so it reads as valid) without any network round-trip. Used to open the app from cache
+ * when `supabase.auth.getSession()` stalls on weak service; Supabase reconciles its own session via
+ * `onAuthStateChange` once the network answers. Returns null when no session is stored.
+ */
+export async function readPersistedSupabaseSessionOffline(): Promise<Session | null> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const authKey = keys.find((k) => k.startsWith('sb-') && k.endsWith('-auth-token'));
+    if (!authKey) return null;
+
+    const raw = await AsyncStorage.getItem(authKey);
+    if (raw == null) return null;
+
+    const stretched = stretchPersistedAuthSessionJsonForOfflineRead(raw) ?? raw;
+    const parsed: unknown = JSON.parse(stretched);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as { access_token?: unknown }).access_token === 'string' &&
+      typeof (parsed as { user?: unknown }).user === 'object' &&
+      (parsed as { user: unknown }).user !== null
+    ) {
+      return parsed as Session;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export function createDriftGuideSupabaseAuthStorage(): SupportedStorage {

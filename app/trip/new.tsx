@@ -31,6 +31,7 @@ import type { AIContext } from '@/src/services/ai';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
+import { confirmDrivingDirections } from '@/src/utils/openDirections';
 import { handleOfflineDataBeforeTrip } from '@/src/utils/offlineTripDownloadPrompt';
 import { useOfflineDownloadResumeStore } from '@/src/stores/offlineDownloadResumeStore';
 
@@ -763,6 +764,24 @@ export default function NewTripScreen() {
                   </Text>
                 ) : null}
               </View>
+              {selectedLocation.latitude != null && selectedLocation.longitude != null ? (
+                <Pressable
+                  style={styles.directionsInline}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Get driving directions to ${selectedLocation.name}`}
+                  onPress={() =>
+                    confirmDrivingDirections(
+                      selectedLocation.latitude as number,
+                      selectedLocation.longitude as number,
+                      selectedLocation.name,
+                    )
+                  }
+                >
+                  <Ionicons name="navigate" size={16} color={colors.primary} />
+                  <Text style={styles.directionsInlineText}>Directions</Text>
+                </Pressable>
+              ) : null}
               <Text style={styles.changeText}>Change</Text>
             </View>
             {(() => {
@@ -1484,6 +1503,17 @@ function createNewTripStyles(colors: ThemeColors) {
     minWidth: 0,
   },
   changeText: {
+    fontSize: FontSize.sm,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  directionsInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginRight: Spacing.md,
+  },
+  directionsInlineText: {
     fontSize: FontSize.sm,
     color: colors.primary,
     fontWeight: '600',

@@ -19,6 +19,7 @@ import { GlobalUploadIndicator } from '@/src/components/GlobalUploadIndicator';
 import { SyncOnConnectivity } from '@/src/components/SyncOnConnectivity';
 import { AnalyticsEvents, track } from '@/src/services/analytics';
 import { supabase } from '@/src/services/supabase';
+import { readPersistedSupabaseSessionOffline } from '@/src/services/supabaseAuthStorage';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
@@ -64,6 +65,9 @@ function parseTripDeepLink(url: string | null | undefined): string | null {
 export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
+
+/** How long cold start waits on the network before opening offline-first from the cached session. */
+const COLD_START_STALL_MS = 2500;
 
 SplashScreen.preventAutoHideAsync();
 
@@ -131,6 +135,24 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       if (session) fetchProfile();
     });
 
+    // Offline-first: never let a stalled cold-start refresh (weak "one bar" service) trap the
+    // splash. If getSession() hasn't resolved auth yet, open from the persisted session read
+    // straight off disk; Supabase reconciles via onAuthStateChange once the network answers.
+    // `isLoading` is the single source of truth for "cold start unresolved" — setSession and
+    // clearAuthBootstrap both flip it false, so this no-ops when auth resolved first.
+    const stallTimer = setTimeout(() => {
+      if (!useAuthStore.getState().isLoading) return;
+      void readPersistedSupabaseSessionOffline().then((restored) => {
+        if (!useAuthStore.getState().isLoading) return;
+        if (restored) {
+          setSession(restored);
+          fetchProfile();
+        } else {
+          clearAuthBootstrap();
+        }
+      });
+    }, COLD_START_STALL_MS);
+
     void supabase.auth
       .getSession()
       .then(async ({ data: { session }, error }) => {
@@ -147,7 +169,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
         clearAuthBootstrap();
       });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(stallTimer);
+    };
   }, []);
 
   useEffect(() => {

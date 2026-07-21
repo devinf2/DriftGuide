@@ -1,6 +1,7 @@
 import { DriftGuideMessage } from '@/src/components/home/DriftGuideMessage';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
+import { confirmDrivingDirections } from '@/src/utils/openDirections';
 import type { Trip } from '@/src/types';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -131,6 +132,22 @@ export function FishHomePlannedSection({
                   </Text>
                 </View>
                 <View style={styles.plannedActions}>
+                  {item.location?.latitude != null && item.location?.longitude != null ? (
+                    <Pressable
+                      style={styles.peopleBtn}
+                      onPress={() =>
+                        confirmDrivingDirections(
+                          item.location!.latitude as number,
+                          item.location!.longitude as number,
+                          item.location?.name,
+                        )
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel={`Get driving directions to ${item.location?.name ?? 'this trip'}`}
+                    >
+                      <MaterialCommunityIcons name="navigation-variant" size={22} color={colors.primary} />
+                    </Pressable>
+                  ) : null}
                   {onOpenGroupPeople ? (
                     <Pressable
                       style={styles.peopleBtn}

@@ -103,16 +103,23 @@ export const useAuthStore = create<AuthState>()(
         }
 
         set({ isProfileLoading: true });
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .single();
 
-        if (!error && data) {
-          set({ profile: data as Profile });
+          if (!error && data) {
+            set({ profile: data as Profile });
+          }
+        } catch (e) {
+          // Offline / stalled request (fetch timed out): keep the persisted profile and let
+          // navigation continue from cache. Never leave isProfileLoading stuck true.
+          console.warn('[auth] fetchProfile failed (offline?)', e);
+        } finally {
+          set({ isProfileLoading: false });
         }
-        set({ isProfileLoading: false });
       },
 
       updateProfileNames: async (firstName, lastName) => {

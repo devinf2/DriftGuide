@@ -56,6 +56,7 @@ import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMar
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { locationsForSpotMapContext, spotMapRelatedLocationIds } from '@/src/utils/locationSpotMapFilter';
+import { confirmDrivingDirections } from '@/src/utils/openDirections';
 import * as ExpoLocation from 'expo-location';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
 import {
@@ -542,6 +543,7 @@ export default function SpotFishingTripScreen() {
       coordinate: [ap.longitude, ap.latitude] as [number, number],
       title: ap.name,
       useMarkerView: true,
+      onPress: () => confirmDrivingDirections(ap.latitude, ap.longitude, ap.name),
       children: (
         <View style={styles.accessPointMapBubble}>
           <MaterialIcons name="directions-walk" size={18} color={colors.success} />
