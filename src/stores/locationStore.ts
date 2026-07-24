@@ -36,6 +36,12 @@ interface LocationState {
   getRecentLocations: () => Location[];
   setLastAddedLocationId: (id: string | null) => void;
   setPendingPlanTripLocationId: (id: string | null) => void;
+  /** Insert or replace a location in the in-memory list (used for optimistic offline creates). */
+  upsertLocalLocation: (loc: Location) => void;
+  /** Remove an optimistic row (e.g. rolling back a failed online create). */
+  removeLocalLocation: (id: string) => void;
+  /** Swap an optimistic client id for the real server row once a queued create syncs. */
+  replaceLocalLocationId: (clientId: string, serverRow: Location) => void;
 }
 
 export const useLocationStore = create<LocationState>()(
@@ -129,6 +135,38 @@ export const useLocationStore = create<LocationState>()(
 
       setPendingPlanTripLocationId: (id) => {
         set({ pendingPlanTripLocationId: id });
+      },
+
+      upsertLocalLocation: (loc) => {
+        set((state) => {
+          const idx = state.locations.findIndex((l) => l.id === loc.id);
+          if (idx === -1) return { locations: [...state.locations, loc] };
+          const next = state.locations.slice();
+          next[idx] = loc;
+          return { locations: next };
+        });
+      },
+
+      removeLocalLocation: (id) => {
+        set((state) => ({ locations: state.locations.filter((l) => l.id !== id) }));
+      },
+
+      replaceLocalLocationId: (clientId, serverRow) => {
+        set((state) => {
+          // Drop the optimistic row and re-point any children that referenced it.
+          const withoutClient = state.locations.filter((l) => l.id !== clientId);
+          const reparented = withoutClient.map((l) =>
+            l.parent_location_id === clientId
+              ? { ...l, parent_location_id: serverRow.id }
+              : l,
+          );
+          const exists = reparented.some((l) => l.id === serverRow.id);
+          return {
+            locations: exists ? reparented : [...reparented, serverRow],
+            lastAddedLocationId:
+              state.lastAddedLocationId === clientId ? serverRow.id : state.lastAddedLocationId,
+          };
+        });
       },
     }),
     {

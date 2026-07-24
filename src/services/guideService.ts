@@ -301,7 +301,7 @@ export interface GuideTripSummary {
 export async function fetchGuideTripHistory(guideId: string): Promise<GuideTripSummary[]> {
   const { data, error } = await supabase
     .from('trips')
-    .select('id, location_id, start_time, end_time, total_fish, rating, location:locations(name)')
+    .select('id, location_id, start_time, end_time, total_fish, rating, location:locations!trips_location_id_fkey(name)')
     .eq('guide_id', guideId)
     .eq('status', 'completed')
     .is('deleted_at', null)

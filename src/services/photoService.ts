@@ -99,7 +99,7 @@ export interface PhotoWithTrip extends Photo {
 export async function fetchPhotosWithTrip(userId: string): Promise<PhotoWithTrip[]> {
   const { data, error } = await supabase
     .from('photos')
-    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .select('*, trip:trips(location_id, location:locations!trips_location_id_fkey(id, name))')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
@@ -126,7 +126,7 @@ async function hydratePhotosWithTrip(idsInOrder: string[]): Promise<PhotoWithTri
   if (idsInOrder.length === 0) return [];
   const { data, error } = await supabase
     .from('photos')
-    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .select('*, trip:trips(location_id, location:locations!trips_location_id_fkey(id, name))')
     .in('id', idsInOrder);
   if (error) {
     console.warn('[hydratePhotosWithTrip] query failed', { count: idsInOrder.length, error });
@@ -168,7 +168,7 @@ export async function fetchPhotosWithTripPage(
   const to = offset + limit - 1;
   const { data, error } = await supabase
     .from('photos')
-    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .select('*, trip:trips(location_id, location:locations!trips_location_id_fkey(id, name))')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .range(offset, to);
@@ -190,7 +190,7 @@ export async function fetchPhotosWithTripForTripIds(
 
   const { data, error } = await supabase
     .from('photos')
-    .select('*, trip:trips(location_id, location:locations(id, name))')
+    .select('*, trip:trips(location_id, location:locations!trips_location_id_fkey(id, name))')
     .eq('user_id', userId)
     .in('trip_id', tripIds)
     .order('created_at', { ascending: false });

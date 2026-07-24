@@ -29,7 +29,7 @@ import { useLocationFavoritesStore } from '@/src/stores/locationFavoritesStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { Location, LocationType, NearbyLocationResult } from '@/src/types';
-import { addCommunityLocation, searchNearbyRootParentCandidates } from '@/src/services/locationService';
+import { createLocationWithOutbox, searchNearbyRootParentCandidates } from '@/src/services/locationService';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
@@ -307,29 +307,48 @@ export default function AddLocationScreen() {
       if (!user || locationType == null) return;
       setParentLinkSaving(true);
       try {
-        const newLoc = await addCommunityLocation(
-          name.trim(),
-          locationType,
-          pin.latitude,
-          pin.longitude,
+        // Name is optional for access points — default to "{River} access".
+        const trimmed = name.trim();
+        const parentName = parentLocationId
+          ? (locations.find((l) => l.id === parentLocationId)?.name ?? null)
+          : null;
+        const finalName =
+          trimmed ||
+          (locationType === 'access_point'
+            ? parentName
+              ? `${parentName} access`
+              : 'Access point'
+            : trimmed);
+        // Offline-capable: shows the pin immediately and queues the write when offline.
+        const { location: newLoc, pending } = await createLocationWithOutbox(
+          {
+            name: finalName,
+            type: locationType,
+            latitude: pin.latitude,
+            longitude: pin.longitude,
+            isPublic,
+            parentLocationId,
+          },
           user.id,
-          isPublic,
-          parentLocationId,
         );
-        if (newLoc) {
-          await fetchLocations();
-          setLastAddedLocationId(newLoc.id);
-          setParentPickerPhase('idle');
-          setParentPickerCandidates([]);
-          router.replace(`/spot/${newLoc.id}`);
-        } else {
+        setLastAddedLocationId(newLoc.id);
+        setParentPickerPhase('idle');
+        setParentPickerCandidates([]);
+        if (pending) {
+          // Local-only for now — don't navigate to a server-backed detail page.
           Alert.alert(
-            'Could not add location',
-            'Check your connection. If you still see this, apply the latest Supabase migrations for this app (your database may be missing columns such as locations.created_by).',
+            'Saved offline',
+            "This spot is on your map now and will sync automatically when you're back online.",
+            [{ text: 'OK', onPress: () => router.back() }],
           );
+        } else {
+          router.replace(`/spot/${newLoc.id}`);
         }
       } catch {
-        Alert.alert('Could not add location', 'Something went wrong. Try again when you have a stable connection.');
+        Alert.alert(
+          'Could not add location',
+          'Something went wrong. Check your connection, or apply the latest Supabase migrations if this database is missing columns such as locations.created_by.',
+        );
       } finally {
         setParentPickerPhase('idle');
         setParentPickerCandidates([]);
@@ -340,26 +359,27 @@ export default function AddLocationScreen() {
       user,
       locationType,
       name,
+      locations,
       pin.latitude,
       pin.longitude,
       isPublic,
-      fetchLocations,
       setLastAddedLocationId,
       router,
     ],
   );
 
   const handleAddLocationPress = useCallback(() => {
-    if (!name.trim()) {
-      Alert.alert('Name needed', 'Enter a name for this location.');
-      return;
-    }
     if (!user) {
       Alert.alert('Sign in required', 'Sign in to add a location.');
       return;
     }
     if (locationType == null) {
       Alert.alert('Location type', 'Choose a type for this location before adding it.');
+      return;
+    }
+    // Access points can be nameless (auto-named); everything else needs a name.
+    if (locationType !== 'access_point' && !name.trim()) {
+      Alert.alert('Name needed', 'Enter a name for this location.');
       return;
     }
     if (!Number.isFinite(pin.latitude) || !Number.isFinite(pin.longitude)) {
@@ -397,7 +417,9 @@ export default function AddLocationScreen() {
   }, [parentLinkSaving]);
 
   const coordsOk = Number.isFinite(pin.latitude) && Number.isFinite(pin.longitude);
-  const canSave = name.trim().length > 0 && coordsOk && locationType != null;
+  // Access points don't require a name (auto-named); other types do.
+  const nameOk = locationType === 'access_point' || name.trim().length > 0;
+  const canSave = nameOk && coordsOk && locationType != null;
   const parentPickerOpen = parentPickerPhase !== 'idle' || parentLinkSaving;
   const addLocationBlocked = !canSave || parentPickerOpen;
 
@@ -494,10 +516,14 @@ export default function AddLocationScreen() {
           >
             <View style={styles.nameTypeRow}>
               <View style={styles.nameCol}>
-                <Text style={styles.fieldLabel}>Name</Text>
+                <Text style={styles.fieldLabel}>
+                  {locationType === 'access_point' ? 'Name (optional)' : 'Name'}
+                </Text>
                 <TextInput
                   style={styles.nameFieldInput}
-                  placeholder="Saved name"
+                  placeholder={
+                    locationType === 'access_point' ? 'Optional — we’ll name it for you' : 'Saved name'
+                  }
                   placeholderTextColor={colors.textTertiary}
                   value={name}
                   onChangeText={(t) => {

@@ -301,6 +301,8 @@ type TripMapboxMapViewProps = {
   onZoomLevelChange?: (zoom: number) => void;
   /** Tap on the map background (not a marker) → `[lng, lat]`. Used for the land-ownership lookup. */
   onMapPress?: (coordinate: [number, number]) => void;
+  /** Long-press (press & hold) on the map background → `[lng, lat]`. Used to start adding a location. */
+  onMapLongPress?: (coordinate: [number, number]) => void;
   /** When true, renders the Utah land-ownership vector overlay beneath the markers. */
   landOverlayVisible?: boolean;
   /**
@@ -339,6 +341,7 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
       onMapIdle,
       onZoomLevelChange,
       onMapPress,
+      onMapLongPress,
       landOverlayVisible = false,
       trailingFab = null,
       reservePlanTripFabSpacing = false,
@@ -447,14 +450,12 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
 
     const mapTabOrnaments = useMemo(() => {
       if (!mapTabControlLayout) return null;
-      const pairWidth = MAP_TAB_ATTRIBUTION_BLOCK + MAP_TAB_ORNAMENT_GAP + MAP_TAB_LOGO_BLOCK;
-      const leftAttr = Math.max(Spacing.md, (windowWidth - pairWidth) / 2);
-      const leftLogo = leftAttr + MAP_TAB_ATTRIBUTION_BLOCK + MAP_TAB_ORNAMENT_GAP;
+      // Map tab: tuck the Mapbox logo into the bottom-left corner (the (i) is disabled below).
       return {
-        attributionPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: leftAttr } as const,
-        logoPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: leftLogo } as const,
+        attributionPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: Spacing.md } as const,
+        logoPosition: { bottom: MAP_TAB_MAPBOX_ROW_BOTTOM, left: Spacing.md } as const,
       };
-    }, [mapTabControlLayout, windowWidth]);
+    }, [mapTabControlLayout]);
 
     if (!rawMod || !mod) {
       return (
@@ -522,7 +523,8 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
           compassEnabled={compassEnabled}
           scaleBarEnabled={false}
           logoEnabled
-          attributionEnabled
+          // Map tab hides the (i) info button for a cleaner chrome; the logo stays (required).
+          attributionEnabled={!mapTabControlLayout}
           attributionPosition={
             mapTabOrnaments
               ? mapTabOrnaments.attributionPosition
@@ -541,6 +543,15 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
                   const coords = (feature as { geometry?: { coordinates?: [number, number] } })
                     ?.geometry?.coordinates;
                   if (coords && coords.length === 2) onMapPress(coords);
+                }
+              : undefined
+          }
+          onLongPress={
+            onMapLongPress
+              ? (feature: unknown) => {
+                  const coords = (feature as { geometry?: { coordinates?: [number, number] } })
+                    ?.geometry?.coordinates;
+                  if (coords && coords.length === 2) onMapLongPress(coords);
                 }
               : undefined
           }
@@ -612,9 +623,13 @@ export const TripMapboxMapView = forwardRef<TripMapboxMapRef, TripMapboxMapViewP
         ) : null}
         {showLocateButton ? (
           <MapLocateButton
-            // Sit opposite the basemap switcher so it never overlaps the bottom controls.
-            side={mapTabControlLayout ? 'left' : 'right'}
-            bottom={Spacing.lg + planTripFabClearance}
+            // Map tab: stack the locate button directly above the layers switcher (both bottom-right).
+            side="right"
+            bottom={
+              mapTabControlLayout
+                ? (showBasemap ? (layersFabBottom ?? trailingFabBottom) + 44 + 8 : trailingFabBottom)
+                : Spacing.lg + planTripFabClearance
+            }
             busy={locating}
             onPress={() => void handleLocate(mode)}
           />

@@ -1,7 +1,10 @@
-import { AddLocationMapSheet } from '@/src/components/add-location/AddLocationMapSheet';
-import { AddBusinessMapSheet } from '@/src/components/add-location/AddBusinessMapSheet';
+import { AddPlaceSheet } from '@/src/components/add-location/AddPlaceSheet';
 import { LandOwnershipSheet } from '@/src/components/map/LandOwnershipSheet';
-import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/TripMapboxMapView';
+import {
+  TripMapboxMapView,
+  type TripMapboxMapRef,
+  type MapboxMapMarker,
+} from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
 import { buildBusinessMapboxMarkers } from '@/src/components/map/businessMapboxMarkers';
 import { useBusinessStore } from '@/src/stores/businessStore';
@@ -201,13 +204,15 @@ function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     map: {
       ...StyleSheet.absoluteFillObject,
     },
-    centerPinWrap: {
-      ...StyleSheet.absoluteFillObject,
-      justifyContent: 'center',
+    addPinMarker: {
       alignItems: 'center',
-    },
-    centerPinIcon: {
-      marginBottom: 26,
+      justifyContent: 'center',
+      // Anchor the pin's tip on the coordinate (MarkerView centers by default).
+      marginBottom: 40,
+      shadowColor: '#000',
+      shadowOpacity: 0.35,
+      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 2 },
     },
     webPlaceholder: {
       flex: 1,
@@ -220,22 +225,6 @@ function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
       fontSize: FontSize.md,
       color: colors.textSecondary,
       textAlign: 'center',
-    },
-    addLocationFab: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: colors.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-      shadowColor: '#000',
-      shadowOpacity: 0.2,
-      shadowRadius: 4,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 4,
-    },
-    addLocationFabPressed: {
-      opacity: 0.88,
     },
     layerChipsRow: {
       flexDirection: 'row',
@@ -307,9 +296,12 @@ export default function MapTabScreen() {
   const [mapSuggestions, setMapSuggestions] = useState<MapboxGeocodeFeature[]>([]);
   const [mapSuggestionsLoading, setMapSuggestionsLoading] = useState(false);
   const [locationAllowed, setLocationAllowed] = useState(false);
-  const [addingLocation, setAddingLocation] = useState(false);
-  const [addingBusiness, setAddingBusiness] = useState(false);
-  const anyAdding = addingLocation || addingBusiness;
+  // Single add-mode: long-press the map to enter it and drop a pin. Once a pin is placed
+  // (`addMode && pinPlaced`), `AddPlaceSheet` takes over — showing the type rail, then the
+  // matching form (water / access point / parking / business).
+  const [addMode, setAddMode] = useState(false);
+  const [pinPlaced, setPinPlaced] = useState(false);
+  const anyAdding = addMode;
   const [addPin, setAddPin] = useState<{ latitude: number; longitude: number }>({
     latitude: DEFAULT_MAP_CENTER[1],
     longitude: DEFAULT_MAP_CENTER[0],
@@ -375,6 +367,11 @@ export default function MapTabScreen() {
     setMapAddLocationSheetActive(anyAdding);
     return () => setMapAddLocationSheetActive(false);
   }, [anyAdding, setMapAddLocationSheetActive]);
+
+  // Safety net: never leave the map's touch-blocking overlay on once we exit add-mode.
+  useEffect(() => {
+    if (!anyAdding) setMapInteractionBlocked(false);
+  }, [anyAdding]);
 
   useEffect(() => {
     let subscription: ExpoLocation.LocationSubscription | undefined;
@@ -459,28 +456,20 @@ export default function MapTabScreen() {
 
   const searchAtRest = !searchInputFocused && searchText.trim().length === 0;
 
-  const beginAddLocation = useCallback(() => {
-    const [lng, lat] = mapCenter;
+  /** Long-press the map to start adding: drops the pin and opens the sheet in one gesture. */
+  const handleMapLongPress = useCallback((coordinate: [number, number]) => {
+    const [lng, lat] = coordinate;
     setAddPin({ latitude: lat, longitude: lng });
-    setAddingBusiness(false);
-    setAddingLocation(true);
-  }, [mapCenter]);
+    setAddMode(true);
+    setPinPlaced(true);
+  }, []);
 
-  const beginAddBusiness = useCallback(() => {
-    const [lng, lat] = mapCenter;
+  /** While already adding, tapping the map moves the pin. */
+  const handleAddModeMapPress = useCallback((coordinate: [number, number]) => {
+    const [lng, lat] = coordinate;
     setAddPin({ latitude: lat, longitude: lng });
-    setAddingLocation(false);
-    setAddingBusiness(true);
-  }, [mapCenter]);
-
-  /** Add FAB: ask whether the new pin is a fishing spot or a business. */
-  const promptAddKind = useCallback(() => {
-    Alert.alert('Add to the map', 'What would you like to add here?', [
-      { text: 'Fishing spot', onPress: beginAddLocation },
-      { text: 'Business', onPress: beginAddBusiness },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [beginAddLocation, beginAddBusiness]);
+    setPinPlaced(true);
+  }, []);
 
   const jumpMapToGeocodeFeature = useCallback((f: MapboxGeocodeFeature) => {
     const [lng, lat] = f.center;
@@ -488,24 +477,32 @@ export default function MapTabScreen() {
     setMapCenter([lng, lat]);
     setMapZoom(USER_LOCATION_ZOOM);
     setAddPin({ latitude: lat, longitude: lng });
+    setPinPlaced(true);
   }, []);
 
   const endAddLocation = useCallback(() => {
-    setAddingLocation(false);
-    setAddingBusiness(false);
+    setAddMode(false);
+    setPinPlaced(false);
+    // The sheet can unmount mid-save before its effect sends `false` back, which would
+    // otherwise leave the map's pointerEvents stuck at "none" (frozen). Clear it here.
+    setMapInteractionBlocked(false);
     Keyboard.dismiss();
   }, []);
 
-  const handleMapIdle = useCallback(
-    (state: MapCameraStatePayload) => {
-      setMapViewport(boundingBoxFromMapState(state));
-      if (addingLocation || addingBusiness) {
-        const [lng, lat] = state.properties.center;
-        setAddPin({ latitude: lat, longitude: lng });
-      }
+  /** While adding, picking a map search result flies there AND drops the pin. */
+  const pickMapSuggestionWhileAdding = useCallback(
+    (f: MapboxGeocodeFeature) => {
+      setSearchText(f.place_name);
+      setSearchInputFocused(false);
+      jumpMapToGeocodeFeature(f);
+      Keyboard.dismiss();
     },
-    [addingLocation, addingBusiness],
+    [jumpMapToGeocodeFeature],
   );
+
+  const handleMapIdle = useCallback((state: MapCameraStatePayload) => {
+    setMapViewport(boundingBoxFromMapState(state));
+  }, []);
 
   const applyMapFeatureToMap = useCallback((f: MapboxGeocodeFeature) => {
     const [lng, lat] = f.center;
@@ -531,23 +528,10 @@ export default function MapTabScreen() {
       setMapCenter([c.lng, c.lat]);
       setMapZoom(USER_LOCATION_ZOOM);
       setAddPin({ latitude: c.lat, longitude: c.lng });
+      setPinPlaced(true);
       Keyboard.dismiss();
     },
     [mapDisplayLocations],
-  );
-
-  const addLocationFab = useMemo(
-    () => (
-      <Pressable
-        style={({ pressed }) => [styles.addLocationFab, pressed && styles.addLocationFabPressed]}
-        onPress={() => (anyAdding ? endAddLocation() : promptAddKind())}
-        accessibilityRole="button"
-        accessibilityLabel={anyAdding ? 'Cancel adding' : 'Add to the map'}
-      >
-        <MaterialIcons name={anyAdding ? 'close' : 'add'} size={34} color={colors.textInverse} />
-      </Pressable>
-    ),
-    [anyAdding, promptAddKind, colors.textInverse, endAddLocation, styles],
   );
 
   // Cap how many catalog pins we draw at once. The full catalog is national (~700+),
@@ -576,7 +560,7 @@ export default function MapTabScreen() {
       buildCatalogMapboxMarkers(
         visibleCatalogLocations,
         (loc) => {
-          if (addingLocation) endAddLocation();
+          if (addMode) endAddLocation();
           router.push(`/spot/${loc.id}?fromMap=1`);
         },
         {
@@ -590,7 +574,7 @@ export default function MapTabScreen() {
     [
       visibleCatalogLocations,
       router,
-      addingLocation,
+      addMode,
       endAddLocation,
       colors.primary,
       colors.surface,
@@ -624,9 +608,29 @@ export default function MapTabScreen() {
     [visibleBusinesses, anyAdding, endAddLocation, router, resolvedScheme],
   );
 
+  // The pin being placed while adding — a real, prominent MarkerView (not the old
+  // near-invisible center crosshair). Tapping the map moves it (handleAddModeMapPress).
+  const addPinMarker = useMemo<MapboxMapMarker | null>(() => {
+    if (!anyAdding || !pinPlaced) return null;
+    return {
+      id: 'add-pin',
+      coordinate: [addPin.longitude, addPin.latitude],
+      useMarkerView: true,
+      children: (
+        <View style={styles.addPinMarker} pointerEvents="none">
+          <Ionicons name="location-sharp" size={46} color={colors.primary} />
+        </View>
+      ),
+    };
+  }, [anyAdding, pinPlaced, addPin.longitude, addPin.latitude, styles, colors.primary]);
+
   const allMarkers = useMemo(
-    () => [...(showSpotsOnMap ? catalogMarkers : []), ...businessMarkers],
-    [showSpotsOnMap, catalogMarkers, businessMarkers],
+    () => [
+      ...(showSpotsOnMap ? catalogMarkers : []),
+      ...businessMarkers,
+      ...(addPinMarker ? [addPinMarker] : []),
+    ],
+    [showSpotsOnMap, catalogMarkers, businessMarkers, addPinMarker],
   );
 
   const renderSuggestionRow = (key: string, title: string, onPress: () => void) => (
@@ -669,21 +673,22 @@ export default function MapTabScreen() {
                 onZoomLevelChange={setMapZoom}
                 landOverlayVisible={landOwnershipVisible}
                 onMapPress={
-                  landOwnershipVisible && !anyAdding ? handleLandMapPress : undefined
+                  anyAdding
+                    ? handleAddModeMapPress
+                    : landOwnershipVisible
+                      ? handleLandMapPress
+                      : undefined
                 }
-                trailingFab={addLocationFab}
+                onMapLongPress={handleMapLongPress}
                 reservePlanTripFabSpacing
                 mapTabControlLayout
                 expandable={false}
+                showLocateButton={!anyAdding}
+                showBasemapSwitcher={!anyAdding}
               />
-              {anyAdding ? (
-                <View style={styles.centerPinWrap} pointerEvents="none">
-                  <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
-                </View>
-              ) : null}
             </View>
-            <AddLocationMapSheet
-              visible={addingLocation}
+            <AddPlaceSheet
+              visible={anyAdding && pinPlaced}
               pinLatitude={addPin.latitude}
               pinLongitude={addPin.longitude}
               catalogLocations={activeLocationsOnly(mapDisplayLocations)}
@@ -693,20 +698,11 @@ export default function MapTabScreen() {
               onRequestClose={endAddLocation}
               onSheetHeightChange={setAddSheetHeight}
               onMapInteractionBlockedChange={setMapInteractionBlocked}
-              onSaved={(id) => {
+              onSavedLocation={(id) => {
                 router.push(`/spot/${id}?fromMap=1`);
                 endAddLocation();
               }}
-            />
-            <AddBusinessMapSheet
-              visible={addingBusiness}
-              pinLatitude={addPin.latitude}
-              pinLongitude={addPin.longitude}
-              geocodeProximity={geocodeProximity ?? mapCenter}
-              onApplyGeocodeFeature={jumpMapToGeocodeFeature}
-              onRequestClose={endAddLocation}
-              onSheetHeightChange={setAddSheetHeight}
-              onSaved={(id) => {
+              onSavedBusiness={(id) => {
                 router.push(`/business/${id}`);
                 endAddLocation();
               }}
@@ -819,6 +815,74 @@ export default function MapTabScreen() {
               </Pressable>
             </View>
           ) : null}
+        </View>
+      ) : null}
+
+      {anyAdding ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.headerOverlay,
+            {
+              paddingTop: effectiveTop + Spacing.sm,
+              paddingLeft: Spacing.lg + insets.left,
+              paddingRight: Spacing.lg + insets.right,
+            },
+            styles.headerOverlayIdle,
+          ]}
+        >
+          <View style={styles.searchBlock}>
+            <TextInput
+              style={[styles.searchInput, styles.searchInputEditingGlass, styles.searchInputCompact]}
+              placeholder="Search an address or place…"
+              placeholderTextColor={resolvedScheme === 'dark' ? '#CBD5E1' : colors.textSecondary}
+              value={searchText}
+              onChangeText={setSearchText}
+              onFocus={() => setSearchInputFocused(true)}
+              onBlur={() => {
+                setTimeout(() => setSearchInputFocused(false), 200);
+              }}
+              returnKeyType="done"
+            />
+            {showSearchSuggestions ? (
+              <View style={styles.suggestionsPanel}>
+                <ScrollView
+                  style={styles.suggestionsScroll}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled
+                >
+                  {savedLocationMatches.length > 0 ? (
+                    <>
+                      <Text style={styles.suggestionsSectionLabel}>In DriftGuide</Text>
+                      {savedLocationMatches.slice(0, 8).map((loc: Location) =>
+                        renderSuggestionRow(`add-loc-${loc.id}`, loc.name, () => {
+                          setSearchText(loc.name);
+                          setSearchInputFocused(false);
+                          jumpMapToCatalogLocationWhileAdding(loc);
+                        }),
+                      )}
+                    </>
+                  ) : null}
+                  {mapSuggestionsLoading ? (
+                    <View style={styles.suggestionsLoadingRow}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                      <Text style={styles.suggestionsLoadingText}>Searching map near you…</Text>
+                    </View>
+                  ) : null}
+                  {!mapSuggestionsLoading && mapSuggestions.length > 0 ? (
+                    <>
+                      <Text style={styles.suggestionsSectionLabel}>Map suggestions</Text>
+                      {mapSuggestions.map((f) =>
+                        renderSuggestionRow(`add-${f.id}`, f.place_name, () =>
+                          pickMapSuggestionWhileAdding(f),
+                        ),
+                      )}
+                    </>
+                  ) : null}
+                </ScrollView>
+              </View>
+            ) : null}
+          </View>
         </View>
       ) : null}
 

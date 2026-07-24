@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   View,
   Text,
@@ -151,6 +151,8 @@ type Props = {
   onSaved: (businessId: string) => void;
   onRequestClose: () => void;
   onSheetHeightChange?: (height: number) => void;
+  /** Optional Fishing-spot / Business kind selector rendered in the header (from AddPlaceSheet). */
+  kindSelector?: ReactNode;
 };
 
 export function AddBusinessMapSheet({
@@ -162,6 +164,7 @@ export function AddBusinessMapSheet({
   onSaved,
   onRequestClose,
   onSheetHeightChange,
+  kindSelector,
 }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -303,7 +306,7 @@ export function AddBusinessMapSheet({
       >
         <View style={styles.formPanel}>
           <View style={styles.header}>
-            <Text style={styles.title}>New business</Text>
+            {kindSelector ?? <Text style={styles.title}>New business</Text>}
             <Pressable
               onPress={() => {
                 Keyboard.dismiss();

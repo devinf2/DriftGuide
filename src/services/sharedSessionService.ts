@@ -104,7 +104,7 @@ export async function listTripsInSession(sessionId: string): Promise<Trip[]> {
   }
   const { data, error } = await supabase
     .from('trips')
-    .select('*, location:locations(*)')
+    .select('*, location:locations!trips_location_id_fkey(*)')
     .eq('shared_session_id', sessionId)
     .is('deleted_at', null);
 

@@ -1,3 +1,5 @@
+import { v4 as uuidv4 } from 'uuid';
+import NetInfo from '@react-native-community/netinfo';
 import { supabase } from './supabase';
 import {
   LOCATION_PIN_ADJUST_THRESHOLD_KM,
@@ -5,6 +7,27 @@ import {
 } from '@/src/constants/locationThresholds';
 import { Location, LocationType, NearbyLocationResult } from '@/src/types';
 import { activeLocationsOnly, locationsVisibleToViewer } from '@/src/utils/locationVisibility';
+import { effectiveIsAppOnline, isAppReachableFromNetInfoState } from '@/src/utils/netReachability';
+import { mergeLocationsById } from '@/src/utils/mergeLocations';
+import { useLocationStore } from '@/src/stores/locationStore';
+import {
+  loadOfflineLocationsSnapshot,
+  saveOfflineLocationsSnapshot,
+} from '@/src/services/offlineLocationSnapshot';
+import {
+  enqueuePendingLocationCreate,
+  getPendingLocationOps,
+  setPendingLocationOps,
+  type PendingLocationCreateInput,
+  type PendingLocationOp,
+} from '@/src/services/pendingLocationOpsStorage';
+
+/** Client-generated id prefix for optimistic, not-yet-synced locations. */
+const LOCAL_LOCATION_PREFIX = 'local_';
+
+export function isLocalLocationId(id: string | null | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(LOCAL_LOCATION_PREFIX);
+}
 
 const EARTH_RADIUS_KM = 6371;
 
@@ -413,4 +436,152 @@ export async function addCommunityLocation(
   }
 
   return data as Location;
+}
+
+/** Build the optimistic Location row shown immediately (before the server confirms). */
+function buildOptimisticLocation(
+  clientId: string,
+  userId: string,
+  input: PendingLocationCreateInput,
+): Location {
+  return {
+    id: clientId,
+    name: input.name.trim(),
+    type: input.type,
+    parent_location_id: input.parentLocationId ?? input.parentClientId ?? null,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    metadata: {},
+    created_by: userId,
+    status: 'pending',
+    usage_count: 0,
+    is_public: input.isPublic,
+    deleted_at: null,
+  };
+}
+
+async function isOnlineNow(): Promise<boolean> {
+  try {
+    const state = await NetInfo.fetch();
+    return effectiveIsAppOnline(isAppReachableFromNetInfoState(state));
+  } catch {
+    // If we can't tell, assume online and let the insert itself fail into the queue.
+    return true;
+  }
+}
+
+/** Merge an optimistic pin into the on-disk snapshot so it survives an app restart before sync. */
+async function mergeOptimisticIntoSnapshot(userId: string, loc: Location): Promise<void> {
+  try {
+    const snap = await loadOfflineLocationsSnapshot(userId);
+    await saveOfflineLocationsSnapshot(userId, mergeLocationsById(snap, [loc]));
+  } catch {
+    /* snapshot is best-effort */
+  }
+}
+
+/**
+ * Offline-capable community-location create. Shows the pin immediately (optimistic),
+ * writes through to Supabase when online, and otherwise queues the create in the outbox
+ * to flush on reconnect (see {@link flushPendingLocations}). Mirrors the fly-ops outbox.
+ *
+ * `pending: true` means the row is local-only for now (id starts with `local_`).
+ */
+export async function createLocationWithOutbox(
+  input: PendingLocationCreateInput,
+  userId: string,
+): Promise<{ location: Location; pending: boolean }> {
+  const clientId = `${LOCAL_LOCATION_PREFIX}${uuidv4()}`;
+  const optimistic = buildOptimisticLocation(clientId, userId, input);
+
+  // 1. Instant pin.
+  useLocationStore.getState().upsertLocalLocation(optimistic);
+  await mergeOptimisticIntoSnapshot(userId, optimistic);
+
+  // 2. Write through when online. A null result here is a genuine server error
+  //    (not connectivity) — roll back the optimistic pin and surface it to the caller.
+  if (await isOnlineNow()) {
+    const row = await addCommunityLocation(
+      input.name,
+      input.type,
+      input.latitude,
+      input.longitude,
+      userId,
+      input.isPublic,
+      input.parentLocationId ?? null,
+    );
+    if (row) {
+      useLocationStore.getState().replaceLocalLocationId(clientId, row);
+      await mergeOptimisticIntoSnapshot(userId, row);
+      return { location: row, pending: false };
+    }
+    useLocationStore.getState().removeLocalLocation(clientId);
+    throw new Error('createLocationWithOutbox: online insert failed');
+  }
+
+  // 3. Offline → queue for reconnect; the optimistic pin stays put.
+  await enqueuePendingLocationCreate(userId, clientId, input);
+  return { location: optimistic, pending: true };
+}
+
+/**
+ * Flush queued location creates on reconnect. Parents (roots) are committed before their
+ * children so a child's `parentClientId` can be remapped to the real server id. Failed ops
+ * are retained for the next reconnect. Registered in {@link SyncOnConnectivity}.
+ */
+export async function flushPendingLocations(): Promise<void> {
+  const ops = await getPendingLocationOps();
+  if (ops.length === 0) return;
+
+  const remapClientToServer = new Map<string, string>();
+  let queue: PendingLocationOp[] = ops.slice();
+
+  // Repeated passes: each pass commits every op whose parent is already resolvable.
+  // Stop when a full pass makes no progress (remaining ops have unresolved parents or errored).
+  for (;;) {
+    const stuck: PendingLocationOp[] = [];
+    let progressed = false;
+
+    for (const op of queue) {
+      // Resolve the parent id: explicit server id, or an offline parent that has since synced.
+      let parentId: string | null | undefined = op.input.parentLocationId ?? null;
+      if (!parentId && op.input.parentClientId) {
+        parentId = remapClientToServer.get(op.input.parentClientId);
+        if (!parentId) {
+          // Parent hasn't been committed yet this run — try again on a later pass.
+          stuck.push(op);
+          continue;
+        }
+      }
+
+      const row = await addCommunityLocation(
+        op.input.name,
+        op.input.type,
+        op.input.latitude,
+        op.input.longitude,
+        op.userId,
+        op.input.isPublic,
+        parentId ?? null,
+      );
+
+      if (row) {
+        remapClientToServer.set(op.clientId, row.id);
+        useLocationStore.getState().replaceLocalLocationId(op.clientId, row);
+        progressed = true;
+      } else {
+        // Genuine failure (still offline / server error) — keep for next reconnect.
+        stuck.push(op);
+      }
+    }
+
+    if (!progressed) {
+      queue = stuck;
+      break;
+    }
+    queue = stuck;
+    if (queue.length === 0) break;
+  }
+
+  // Persist whatever remains (unresolved parents or failed writes).
+  await setPendingLocationOps(queue);
 }

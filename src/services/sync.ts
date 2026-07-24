@@ -411,7 +411,7 @@ export async function fetchTripById(tripId: string): Promise<Trip | null> {
   try {
     const { data, error } = await supabase
       .from('trips')
-      .select('*, location:locations(*)')
+      .select('*, location:locations!trips_location_id_fkey(*)')
       .eq('id', tripId)
       .maybeSingle();
 
@@ -459,7 +459,7 @@ export async function fetchTripsFromCloud(userId: string): Promise<Trip[]> {
   try {
     const { data, error } = await supabase
       .from('trips')
-      .select('*, location:locations(*)')
+      .select('*, location:locations!trips_location_id_fkey(*)')
       .eq('user_id', userId)
       .order('start_time', { ascending: false });
 
@@ -528,7 +528,7 @@ async function hydrateTripsWithLocations(idsInOrder: string[]): Promise<Trip[]> 
   try {
     const { data, error } = await supabase
       .from('trips')
-      .select('*, location:locations(*)')
+      .select('*, location:locations!trips_location_id_fkey(*)')
       .in('id', idsInOrder);
     if (error) throw error;
     const rows = (data as Trip[]) || [];
@@ -578,7 +578,7 @@ export async function fetchCompletedTripsPage(
     const to = offset + limit - 1;
     const { data, error } = await supabase
       .from('trips')
-      .select('*, location:locations(*)')
+      .select('*, location:locations!trips_location_id_fkey(*)')
       .eq('user_id', userId)
       .eq('status', 'completed')
       .order('start_time', { ascending: false })
@@ -909,7 +909,7 @@ export async function fetchPlannedTripsFromCloud(userId: string): Promise<Trip[]
   try {
     const { data, error } = await supabase
       .from('trips')
-      .select('*, location:locations(*)')
+      .select('*, location:locations!trips_location_id_fkey(*)')
       .eq('user_id', userId)
       .eq('status', 'planned')
       .order('created_at', { ascending: false });

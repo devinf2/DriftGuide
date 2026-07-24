@@ -40,8 +40,7 @@ import {
 import { loadGuideIntelForLocation, saveGuideIntelForLocation } from '@/src/services/guideIntelCache';
 import { getWeather } from '@/src/services/weather';
 import { getStreamFlow } from '@/src/services/waterFlow';
-import type { AccessPoint, LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
-import { fetchApprovedAccessPointsForLocations } from '@/src/services/accessPointService';
+import type { LocationConditions, Location, WeatherData, WaterFlowData } from '@/src/types';
 import { ConditionsTab } from '@/src/components/trip-tabs/ConditionsTab';
 import { DriftGuideReferenceCard } from '@/src/components/DriftGuideReferenceCard';
 import { GuideChatLinkedSpots } from '@/src/components/GuideChatLinkedSpots';
@@ -239,7 +238,6 @@ export default function SpotFishingTripScreen() {
   const [howToFishLoading, setHowToFishLoading] = useState(false);
   const [offlineSpotGuideSections, setOfflineSpotGuideSections] = useState<OfflineGuideSections | null>(null);
   const [offlineSpotGuideLoading, setOfflineSpotGuideLoading] = useState(false);
-  const [approvedAccessPoints, setApprovedAccessPoints] = useState<AccessPoint[]>([]);
   const [communityFishN, setCommunityFishN] = useState(0);
   const [communityRatingsLoading, setCommunityRatingsLoading] = useState(false);
   const [showCommunityTab, setShowCommunityTab] = useState(false);
@@ -328,14 +326,6 @@ export default function SpotFishingTripScreen() {
     return () => sub();
   }, []);
 
-  useEffect(() => {
-    if (!location) {
-      setApprovedAccessPoints([]);
-      return;
-    }
-    const ids = [...spotMapRelatedLocationIds(location, locations)];
-    void fetchApprovedAccessPointsForLocations(ids).then(setApprovedAccessPoints);
-  }, [location, locations]);
 
   useFocusEffect(
     useCallback(() => {
@@ -533,8 +523,10 @@ export default function SpotFishingTripScreen() {
   );
 
   const spotMapboxMarkers = useMemo(() => {
+    // Access points are now child locations (type 'access_point'). Render them as
+    // walk bubbles, and keep them out of the catalog pins so they don't double up.
     const catalog = buildCatalogMapboxMarkers(
-      spotMapLocations,
+      spotMapLocations.filter((l) => l.type !== 'access_point'),
       (loc) => {
         if (loc.id !== id) router.push(`/spot/${loc.id}`);
       },
@@ -546,22 +538,23 @@ export default function SpotFishingTripScreen() {
       },
       favoriteLocationIds,
     );
-    const access = approvedAccessPoints.map((ap) => ({
-      id: `ap-${ap.id}`,
-      coordinate: [ap.longitude, ap.latitude] as [number, number],
-      title: ap.name,
-      useMarkerView: true,
-      onPress: () => confirmDrivingDirections(ap.latitude, ap.longitude, ap.name),
-      children: (
-        <View style={styles.accessPointMapBubble}>
-          <MaterialIcons name="directions-walk" size={18} color={colors.success} />
-        </View>
-      ),
-    }));
+    const access = spotMapLocations
+      .filter((l) => l.type === 'access_point' && l.latitude != null && l.longitude != null)
+      .map((ap) => ({
+        id: `ap-${ap.id}`,
+        coordinate: [ap.longitude!, ap.latitude!] as [number, number],
+        title: ap.name,
+        useMarkerView: true,
+        onPress: () => confirmDrivingDirections(ap.latitude!, ap.longitude!, ap.name),
+        children: (
+          <View style={styles.accessPointMapBubble}>
+            <MaterialIcons name="directions-walk" size={18} color={colors.success} />
+          </View>
+        ),
+      }));
     return [...catalog, ...access];
   }, [
     spotMapLocations,
-    approvedAccessPoints,
     id,
     router,
     colors.primary,

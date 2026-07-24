@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   View,
   Text,
@@ -26,8 +26,24 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { forwardGeocode, type MapboxGeocodeFeature } from '@/src/services/mapboxGeocoding';
 import { LocationType, NearbyLocationResult, type Location } from '@/src/types';
-import { addCommunityLocation, searchNearbyRootParentCandidates } from '@/src/services/locationService';
+import {
+  createLocationWithOutbox,
+  searchNearbyRootParentCandidates,
+  rootParentCandidatesFromLocations,
+  isLocalLocationId,
+} from '@/src/services/locationService';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
+
+const WATER_TYPES: LocationType[] = ['river', 'stream', 'lake', 'reservoir', 'pond'];
+function isWaterType(t: LocationType | null | undefined): boolean {
+  return t != null && WATER_TYPES.includes(t);
+}
+
+/**
+ * How close a known river must be for us to lead with "Adding access to {river}?".
+ * Beyond this we fall back to the neutral type dropdown + post-save parent picker.
+ */
+const BEST_GUESS_PARENT_MAX_KM = 8;
 
 /** All values must match Postgres `location_type` enum (see migrations). */
 const LOCATION_TYPE_OPTIONS: { value: LocationType; label: string }[] = [
@@ -60,6 +76,17 @@ function catalogLocationSubtitle(loc: Location): string {
       ? `${loc.usage_count} ${loc.usage_count === 1 ? 'visit' : 'visits'}`
       : '';
   return [type, status, usage].filter(Boolean).join(' · ');
+}
+
+/** Children don't need a name; default to "{River} access" / "{River} parking" (DB name is not-null). */
+function defaultChildName(
+  parentName: string | null | undefined,
+  type: LocationType | null | undefined,
+): string {
+  const p = (parentName ?? '').trim();
+  const suffix = type === 'parking' ? 'parking' : 'access';
+  if (!p) return type === 'parking' ? 'Parking' : 'Access point';
+  return `${p} ${suffix}`;
 }
 
 function firstPartOfSearch(s: string): string {
@@ -263,9 +290,83 @@ function createAddLocationMapSheetStyles(colors: ThemeColors) {
       color: colors.textTertiary,
       fontWeight: '500',
     },
+    dropdownCompactLocked: {
+      opacity: 0.75,
+      justifyContent: 'flex-start',
+    },
     dropdownChevronCompact: {
       fontSize: 11,
       color: colors.textSecondary,
+    },
+    bestGuessCard: {
+      backgroundColor: colors.primary + '12',
+      borderWidth: 1,
+      borderColor: colors.primary + '33',
+      borderRadius: BorderRadius.md,
+      padding: Spacing.md,
+      marginBottom: Spacing.sm,
+    },
+    bestGuessHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    bestGuessTitle: {
+      flex: 1,
+      fontSize: FontSize.md,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    bestGuessSubtitle: {
+      fontSize: FontSize.sm,
+      color: colors.textSecondary,
+      marginTop: 4,
+    },
+    bestGuessButtonRow: {
+      flexDirection: 'row',
+      gap: Spacing.sm,
+      marginTop: Spacing.md,
+    },
+    bestGuessPrimary: {
+      flex: 1,
+      backgroundColor: colors.primary,
+      borderRadius: BorderRadius.sm,
+      paddingVertical: Spacing.sm,
+      alignItems: 'center',
+    },
+    bestGuessPrimaryText: {
+      color: colors.textInverse,
+      fontWeight: '700',
+      fontSize: FontSize.sm,
+    },
+    bestGuessSecondary: {
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: Spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    bestGuessSecondaryText: {
+      color: colors.textSecondary,
+      fontWeight: '600',
+      fontSize: FontSize.sm,
+    },
+    parentChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      alignSelf: 'flex-start',
+      backgroundColor: colors.primary + '14',
+      borderRadius: 999,
+      paddingVertical: 5,
+      paddingHorizontal: Spacing.sm,
+      marginBottom: Spacing.sm,
+      maxWidth: '100%',
+    },
+    parentChipText: {
+      fontSize: FontSize.sm,
+      fontWeight: '600',
+      color: colors.primary,
+      flexShrink: 1,
     },
     publicLocationRow: {
       flexDirection: 'row',
@@ -432,11 +533,23 @@ type Props = {
   onApplyGeocodeFeature: (feature: MapboxGeocodeFeature) => void;
   /** User chose an existing catalog row — center map on that place and keep adding. */
   onSelectCatalogLocation: (location: Location) => void;
-  onSaved: (locationId: string) => void;
+  onSaved?: (locationId: string) => void;
   onRequestClose: () => void;
   /** Full height of the bottom sheet (for shrinking the map stage so the pin matches map center). */
   onSheetHeightChange?: (height: number) => void;
   onMapInteractionBlockedChange?: (blocked: boolean) => void;
+  /** Optional header slot (kind selector / back button) rendered in the header (from AddPlaceSheet). */
+  kindSelector?: ReactNode;
+  /** When set, the type is fixed (from the type rail): no type dropdown or best-guess prompt. */
+  presetType?: LocationType;
+  /** Water-creation mode with a water-only type dropdown (used for inline "＋ New water"). */
+  waterOnly?: boolean;
+  /** For access points/parking: the water this is a child of. Local ids are handled offline. */
+  presetParent?: { id: string; name: string } | null;
+  /** Water-creation dedup: user tapped an existing water match — add a child to it instead. */
+  onPickExistingWater?: (water: Location) => void;
+  /** Preferred over onSaved when set: the orchestrator decides navigation/continuation. */
+  onCommitted?: (loc: Location, pending: boolean) => void;
 };
 
 export function AddLocationMapSheet({
@@ -451,13 +564,21 @@ export function AddLocationMapSheet({
   onRequestClose,
   onSheetHeightChange,
   onMapInteractionBlockedChange,
+  kindSelector,
+  presetType,
+  waterOnly,
+  presetParent,
+  onPickExistingWater,
+  onCommitted,
 }: Props) {
+    // Rail-driven modes commit directly (no in-sheet type/parent decisions or best-guess).
+    const railMode = presetType != null || !!waterOnly;
     const insets = useSafeAreaInsets();
     const effectiveTop = useEffectiveSafeTopInset();
     const { colors, resolvedScheme } = useAppTheme();
     const styles = useMemo(() => createAddLocationMapSheetStyles(colors), [colors]);
     const { user } = useAuthStore();
-    const { fetchLocations, setLastAddedLocationId } = useLocationStore();
+    const { setLastAddedLocationId } = useLocationStore();
     const wasVisibleRef = useRef(false);
 
     const [name, setName] = useState('');
@@ -467,6 +588,11 @@ export function AddLocationMapSheet({
     const [parentPickerPhase, setParentPickerPhase] = useState<'idle' | 'loading' | 'choose'>('idle');
     const [parentPickerCandidates, setParentPickerCandidates] = useState<NearbyLocationResult[]>([]);
     const [parentLinkSaving, setParentLinkSaving] = useState(false);
+    // Best-guess parent-river flow. `unknown` → offer the lead card if a nearby river
+    // exists; `access` → confirmed access point under `chosenParent`; `own` → brand-new water.
+    const [parentChoice, setParentChoice] = useState<'unknown' | 'access' | 'own'>('unknown');
+    const [bestGuessParent, setBestGuessParent] = useState<NearbyLocationResult | null>(null);
+    const [chosenParent, setChosenParent] = useState<{ id: string; name: string } | null>(null);
 
     const nameSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const nameFieldWrapRef = useRef<View>(null);
@@ -492,21 +618,84 @@ export function AddLocationMapSheet({
       wasVisibleRef.current = true;
       if (opening) {
         setName('');
-        setLocationType(null);
+        // Type is fixed when driven by the type rail; water-only defaults to river; else chosen in-sheet.
+        setLocationType(presetType ?? (waterOnly ? 'river' : null));
         setIsPublic(true);
         setParentPickerPhase('idle');
         setParentPickerCandidates([]);
         setParentLinkSaving(false);
         setNameMapSuggestions([]);
         setNameMapSuggestionsLoading(false);
+        if (presetParent) {
+          setParentChoice('access');
+          setChosenParent(presetParent);
+        } else {
+          setParentChoice(presetType ? 'own' : 'unknown');
+          setChosenParent(null);
+        }
+        setBestGuessParent(null);
       }
-    }, [visible]);
+    }, [visible, presetType, presetParent, waterOnly]);
 
-    const catalogMatches = useMemo(
-      () =>
-        name.trim().length >= 2 ? filterLocationsByQuery(catalogLocations, name) : [],
-      [catalogLocations, name],
-    );
+    // Proactively look for a nearby known river so we can lead with
+    // "Adding access to {river}?" — the streamlined common case. Recomputed as the
+    // pin moves. Falls back to the offline catalog snapshot when the RPC is unreachable.
+    useEffect(() => {
+      // Not needed in rail-driven modes.
+      if (railMode || !visible || !Number.isFinite(pinLatitude) || !Number.isFinite(pinLongitude)) {
+        setBestGuessParent(null);
+        return;
+      }
+      let cancelled = false;
+      const timer = setTimeout(() => {
+        void (async () => {
+          let candidates: NearbyLocationResult[] = [];
+          try {
+            candidates = await searchNearbyRootParentCandidates(
+              pinLatitude,
+              pinLongitude,
+              null,
+              BEST_GUESS_PARENT_MAX_KM,
+              1,
+            );
+          } catch {
+            candidates = [];
+          }
+          if ((!candidates || candidates.length === 0) && user) {
+            candidates = rootParentCandidatesFromLocations(
+              catalogLocations,
+              pinLatitude,
+              pinLongitude,
+              null,
+              BEST_GUESS_PARENT_MAX_KM,
+              1,
+              user.id,
+            );
+          }
+          if (cancelled) return;
+          const nearest =
+            candidates.find((c) => c.distance_km <= BEST_GUESS_PARENT_MAX_KM) ?? null;
+          setBestGuessParent(nearest);
+        })();
+      }, 300);
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
+    }, [visible, railMode, pinLatitude, pinLongitude, catalogLocations, user]);
+
+    // In water-creation mode, dedup the name against existing WATERS (roots) so the user
+    // can attach to one instead of creating a duplicate river.
+    const waterDedupMode = railMode && isWaterType(locationType) && !!onPickExistingWater;
+    const catalogMatches = useMemo(() => {
+      if (name.trim().length < 2) return [];
+      const base = waterDedupMode
+        ? catalogLocations.filter(
+            (l) => l.parent_location_id == null && WATER_TYPES.includes(l.type),
+          )
+        : catalogLocations;
+      return filterLocationsByQuery(base, name);
+    }, [catalogLocations, name, waterDedupMode]);
 
     const showNameSuggestions =
       nameInputFocused &&
@@ -564,29 +753,50 @@ export function AddLocationMapSheet({
         if (!user || locationType == null) return;
         setParentLinkSaving(true);
         try {
-          const newLoc = await addCommunityLocation(
-            name.trim(),
-            locationType,
-            pinLatitude,
-            pinLongitude,
+          // Name is optional for access points — fall back to a generated one.
+          const trimmed = name.trim();
+          const finalName =
+            trimmed ||
+            (locationType === 'access_point' || locationType === 'parking'
+              ? defaultChildName(chosenParent?.name ?? null, locationType)
+              : trimmed);
+          // If the parent is an offline (local) pin, reference it by client id so the
+          // outbox can remap it to the server id after the parent syncs.
+          const parentIsLocal = isLocalLocationId(parentLocationId);
+          // Offline-capable: shows the pin immediately and queues the write when offline.
+          const { location: newLoc, pending } = await createLocationWithOutbox(
+            {
+              name: finalName,
+              type: locationType,
+              latitude: pinLatitude,
+              longitude: pinLongitude,
+              isPublic,
+              parentLocationId: parentIsLocal ? null : parentLocationId,
+              parentClientId: parentIsLocal ? parentLocationId : null,
+            },
             user.id,
-            isPublic,
-            parentLocationId,
           );
-          if (newLoc) {
-            await fetchLocations();
-            setLastAddedLocationId(newLoc.id);
-            setParentPickerPhase('idle');
-            setParentPickerCandidates([]);
-            onSaved(newLoc.id);
-          } else {
+          setLastAddedLocationId(newLoc.id);
+          setParentPickerPhase('idle');
+          setParentPickerCandidates([]);
+          if (onCommitted) {
+            // Orchestrator owns navigation / continuation (e.g. inline water → access point).
+            onCommitted(newLoc, pending);
+          } else if (pending) {
+            // Local-only for now — don't navigate to a server-backed detail page.
+            onRequestClose();
             Alert.alert(
-              'Could not add location',
-              'Check your connection. If you still see this, apply the latest Supabase migrations for this app (your database may be missing columns such as locations.created_by).',
+              'Saved offline',
+              "This spot is on your map now and will sync automatically when you're back online.",
             );
+          } else {
+            onSaved?.(newLoc.id);
           }
         } catch {
-          Alert.alert('Could not add location', 'Something went wrong. Try again when you have a stable connection.');
+          Alert.alert(
+            'Could not add location',
+            'Something went wrong. Check your connection, or apply the latest Supabase migrations if this database is missing columns such as locations.created_by.',
+          );
         } finally {
           setParentPickerPhase('idle');
           setParentPickerCandidates([]);
@@ -597,26 +807,29 @@ export function AddLocationMapSheet({
         user,
         locationType,
         name,
+        chosenParent,
         pinLatitude,
         pinLongitude,
         isPublic,
-        fetchLocations,
         setLastAddedLocationId,
         onSaved,
+        onCommitted,
+        onRequestClose,
       ],
     );
 
     const handleAddLocationPress = useCallback(() => {
-      if (!name.trim()) {
-        Alert.alert('Name needed', 'Enter a name for this location.');
-        return;
-      }
       if (!user) {
         Alert.alert('Sign in required', 'Sign in to add a location.');
         return;
       }
       if (locationType == null) {
         Alert.alert('Location type', 'Choose a type for this location before adding it.');
+        return;
+      }
+      // Access points can be nameless (auto-named); everything else needs a name.
+      if (locationType !== 'access_point' && !name.trim()) {
+        Alert.alert('Name needed', 'Enter a name for this location.');
         return;
       }
       if (!Number.isFinite(pinLatitude) || !Number.isFinite(pinLongitude)) {
@@ -653,8 +866,87 @@ export function AddLocationMapSheet({
       }
     }, [parentLinkSaving]);
 
+    /** Confirm the best-guess: this is an access point under the nearby river. */
+    const confirmBestGuessAccess = useCallback(() => {
+      if (!bestGuessParent) return;
+      setChosenParent(bestGuessParent);
+      setParentChoice('access');
+      setLocationType('access_point');
+    }, [bestGuessParent]);
+
+    /** Reject the best-guess: this is a brand-new water — show the full type dropdown. */
+    const declineBestGuess = useCallback(() => {
+      setChosenParent(null);
+      setParentChoice('own');
+    }, []);
+
+    /** Undo an "access point" confirmation and reconsider. */
+    const clearParentChoice = useCallback(() => {
+      setChosenParent(null);
+      setParentChoice('unknown');
+    }, []);
+
+    // With a parent already chosen we skip the post-save parent modal and commit directly.
+    const handleSavePress = useCallback(() => {
+      // Rail-driven flows commit directly — the type (and any parent) are already decided.
+      if (railMode) {
+        if (!user) {
+          Alert.alert('Sign in required', 'Sign in to add a location.');
+          return;
+        }
+        if (!Number.isFinite(pinLatitude) || !Number.isFinite(pinLongitude)) {
+          Alert.alert('Pin location needed', 'Tap the map so the pin sits on your spot.');
+          return;
+        }
+        const nameRequired = locationType !== 'access_point' && locationType !== 'parking';
+        if (nameRequired && !name.trim()) {
+          Alert.alert('Name needed', 'Enter a name for this location.');
+          return;
+        }
+        Keyboard.dismiss();
+        void commitNewLocation(presetParent?.id ?? null);
+        return;
+      }
+      if (parentChoice === 'access' && chosenParent) {
+        // Access points can be nameless — we auto-name them "{River} access".
+        if (!user) {
+          Alert.alert('Sign in required', 'Sign in to add a location.');
+          return;
+        }
+        if (!Number.isFinite(pinLatitude) || !Number.isFinite(pinLongitude)) {
+          Alert.alert('Pin location needed', 'Tap the map so the pin sits on your access point.');
+          return;
+        }
+        Keyboard.dismiss();
+        void commitNewLocation(chosenParent.id);
+        return;
+      }
+      handleAddLocationPress();
+    }, [
+      railMode,
+      locationType,
+      presetParent,
+      parentChoice,
+      chosenParent,
+      name,
+      user,
+      pinLatitude,
+      pinLongitude,
+      commitNewLocation,
+      handleAddLocationPress,
+    ]);
+
+    const isChildTypeSel = locationType === 'access_point' || locationType === 'parking';
+    // Rail flows fix the type up front: no best-guess card. Water-only shows a water dropdown.
+    const showBestGuessCard = !railMode && parentChoice === 'unknown' && bestGuessParent != null;
+    const showTypeDropdown = waterOnly
+      ? true
+      : !presetType && (!bestGuessParent || parentChoice === 'own');
+
     const coordsOk = Number.isFinite(pinLatitude) && Number.isFinite(pinLongitude);
-    const canSave = name.trim().length > 0 && coordsOk && locationType != null;
+    // Access points / parking don't require a name (auto-named); other types do.
+    const nameOk = isChildTypeSel || name.trim().length > 0;
+    const canSave = nameOk && coordsOk && locationType != null;
     const addLocationBlocked = !canSave || parentPickerOpen;
 
     if (!visible) return null;
@@ -669,7 +961,7 @@ export function AddLocationMapSheet({
         >
           <View style={styles.formPanel}>
             <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>New location</Text>
+              {kindSelector ?? <Text style={styles.sheetTitle}>New location</Text>}
               <Pressable
                 onPress={() => {
                   Keyboard.dismiss();
@@ -682,14 +974,71 @@ export function AddLocationMapSheet({
                 <Ionicons name="close" size={26} color={colors.textSecondary} />
               </Pressable>
             </View>
+
+            {showBestGuessCard && bestGuessParent ? (
+              <View style={styles.bestGuessCard}>
+                <View style={styles.bestGuessHeaderRow}>
+                  <Ionicons name="git-branch-outline" size={18} color={colors.primary} />
+                  <Text style={styles.bestGuessTitle}>
+                    Adding access to {bestGuessParent.name}?
+                  </Text>
+                </View>
+                <Text style={styles.bestGuessSubtitle}>
+                  {formatProximityKm(bestGuessParent.distance_km)} · we'll link this spot to that water
+                </Text>
+                <View style={styles.bestGuessButtonRow}>
+                  <Pressable
+                    style={styles.bestGuessPrimary}
+                    onPress={confirmBestGuessAccess}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.bestGuessPrimaryText}>Yes, add access point</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.bestGuessSecondary}
+                    onPress={declineBestGuess}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.bestGuessSecondaryText}>No — new water</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {parentChoice === 'access' && chosenParent ? (
+              <View style={styles.parentChip}>
+                <Ionicons name="git-branch-outline" size={15} color={colors.primary} />
+                <Text style={styles.parentChipText} numberOfLines={1}>
+                  {locationType === 'parking' ? 'Parking on' : 'Access point on'} {chosenParent.name}
+                </Text>
+                {/* In preset (type-rail) mode the header back button handles changing the water. */}
+                {presetType ? null : (
+                  <Pressable
+                    onPress={clearParentChoice}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Change parent water"
+                  >
+                    <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                  </Pressable>
+                )}
+              </View>
+            ) : null}
+
             <View style={styles.nameTypeBlock}>
               <View style={styles.nameTypeRow}>
                 <View style={styles.nameCol}>
-                  <Text style={styles.fieldLabel}>Name</Text>
+                  <Text style={styles.fieldLabel}>
+                    {isChildTypeSel ? 'Name (optional)' : 'Name'}
+                  </Text>
                   <View ref={nameFieldWrapRef} style={styles.nameFieldWrap}>
                     <TextInput
                       style={styles.nameFieldInput}
-                      placeholder="Search DriftGuide & map, or type a name…"
+                      placeholder={
+                        isChildTypeSel
+                          ? `Optional — defaults to "${defaultChildName(chosenParent?.name ?? null, locationType)}"`
+                          : 'Search DriftGuide & map, or type a name…'
+                      }
                       placeholderTextColor={colors.textTertiary}
                       value={name}
                       onChangeText={setName}
@@ -718,19 +1067,31 @@ export function AddLocationMapSheet({
                         >
                           {catalogMatches.length > 0 ? (
                             <>
-                              <Text style={styles.nameSuggestionsSectionLabel}>In DriftGuide</Text>
+                              <Text style={styles.nameSuggestionsSectionLabel}>
+                                {waterDedupMode
+                                  ? 'Already on DriftGuide — tap to add access here'
+                                  : 'In DriftGuide'}
+                              </Text>
                               {catalogMatches.slice(0, 8).map((loc) => (
                                 <Pressable
                                   key={loc.id}
                                   style={styles.nameSuggestionRow}
                                   onPress={() => {
-                                    setName(loc.name);
                                     Keyboard.dismiss();
                                     setNameInputFocused(false);
-                                    onSelectCatalogLocation(loc);
+                                    if (waterDedupMode && onPickExistingWater) {
+                                      onPickExistingWater(loc);
+                                    } else {
+                                      setName(loc.name);
+                                      onSelectCatalogLocation(loc);
+                                    }
                                   }}
                                   accessibilityRole="button"
-                                  accessibilityLabel={`Center map on ${loc.name}`}
+                                  accessibilityLabel={
+                                    waterDedupMode
+                                      ? `Add access to ${loc.name}`
+                                      : `Center map on ${loc.name}`
+                                  }
                                 >
                                   <Ionicons name="location" size={18} color={colors.primary} />
                                   <View style={styles.nameSuggestionTextCol}>
@@ -794,21 +1155,32 @@ export function AddLocationMapSheet({
                     ) : null}
                   </View>
                 </View>
-                <View style={styles.typeCol}>
-                  <Text style={styles.fieldLabelCompact}>Type</Text>
-                  <Pressable style={styles.dropdownCompact} onPress={() => setTypePickerOpen(true)}>
-                    <Text
-                      style={[
-                        styles.dropdownTextCompact,
-                        locationType == null && styles.dropdownPlaceholderCompact,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {typeLabel(locationType)}
-                    </Text>
-                    <Text style={styles.dropdownChevronCompact}>▾</Text>
-                  </Pressable>
-                </View>
+                {showTypeDropdown ? (
+                  <View style={styles.typeCol}>
+                    <Text style={styles.fieldLabelCompact}>Type</Text>
+                    <Pressable style={styles.dropdownCompact} onPress={() => setTypePickerOpen(true)}>
+                      <Text
+                        style={[
+                          styles.dropdownTextCompact,
+                          locationType == null && styles.dropdownPlaceholderCompact,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {typeLabel(locationType)}
+                      </Text>
+                      <Text style={styles.dropdownChevronCompact}>▾</Text>
+                    </Pressable>
+                  </View>
+                ) : parentChoice === 'access' ? (
+                  <View style={styles.typeCol}>
+                    <Text style={styles.fieldLabelCompact}>Type</Text>
+                    <View style={[styles.dropdownCompact, styles.dropdownCompactLocked]}>
+                      <Text style={styles.dropdownTextCompact} numberOfLines={1}>
+                        Access point
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
               </View>
             </View>
 
@@ -836,13 +1208,21 @@ export function AddLocationMapSheet({
 
               <Pressable
                 style={[styles.saveButton, addLocationBlocked && styles.saveButtonDisabled]}
-                onPress={handleAddLocationPress}
+                onPress={handleSavePress}
                 disabled={addLocationBlocked}
               >
-                {parentPickerPhase === 'loading' ? (
+                {parentPickerPhase === 'loading' || parentLinkSaving ? (
                   <ActivityIndicator color={colors.textInverse} />
                 ) : (
-                  <Text style={styles.saveButtonText}>Add location</Text>
+                  <Text style={styles.saveButtonText}>
+                    {locationType === 'parking'
+                      ? 'Add parking'
+                      : locationType === 'access_point' || parentChoice === 'access'
+                        ? 'Add access point'
+                        : railMode && locationType
+                          ? `Add ${typeLabel(locationType).toLowerCase()}`
+                          : 'Add location'}
+                  </Text>
                 )}
               </Pressable>
             </ScrollView>
@@ -861,8 +1241,11 @@ export function AddLocationMapSheet({
             onPress={() => setTypePickerOpen(false)}
           >
             <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Location type</Text>
-              {LOCATION_TYPE_OPTIONS.map((opt) => (
+              <Text style={styles.modalTitle}>{waterOnly ? 'Water type' : 'Location type'}</Text>
+              {(waterOnly
+                ? LOCATION_TYPE_OPTIONS.filter((o) => WATER_TYPES.includes(o.value))
+                : LOCATION_TYPE_OPTIONS
+              ).map((opt) => (
                 <TouchableOpacity
                   key={opt.value}
                   style={[styles.modalOption, locationType === opt.value && styles.modalOptionActive]}

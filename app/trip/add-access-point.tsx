@@ -68,31 +68,34 @@ export default function AddAccessPointScreen() {
   }, [parentLocation]);
 
   const handleSave = useCallback(async () => {
-    if (!pin || !name.trim() || !user || !locationId) return;
+    if (!pin || !user || !locationId) return;
     setSaving(true);
     try {
+      // Name is optional — default to "{River} access".
+      const finalName =
+        name.trim() || (parentLocation?.name ? `${parentLocation.name} access` : 'Access point');
       const row = await createAccessPoint({
         locationId,
-        name: name.trim(),
+        name: finalName,
         latitude: pin.latitude,
         longitude: pin.longitude,
         userId: user.id,
       });
       if (row) {
         Alert.alert(
-          'Submitted',
-          'This access point will appear for others after review.',
+          'Access point added',
+          "It's on the map now. If you're offline, it'll sync automatically when you reconnect.",
           [{ text: 'OK', onPress: () => router.back() }],
         );
       } else {
-        Alert.alert('Error', 'Could not save. Try again when online.');
+        Alert.alert('Error', 'Could not save. Try again.');
       }
     } catch {
       Alert.alert('Error', 'Could not save. Try again.');
     } finally {
       setSaving(false);
     }
-  }, [pin, name, user, locationId, router]);
+  }, [pin, name, user, locationId, parentLocation?.name, router]);
 
   if (!locationId) {
     return (
@@ -116,7 +119,8 @@ export default function AddAccessPointScreen() {
     );
   }
 
-  const canSave = pin && name.trim().length > 0;
+  // Name is optional for access points — only a pin is required.
+  const canSave = Boolean(pin);
 
   return (
     <KeyboardAvoidingView
@@ -128,11 +132,15 @@ export default function AddAccessPointScreen() {
           Location: {parentLocation?.name ?? '…'}
         </Text>
         <Text style={styles.helpText}>
-          Mark a trailhead, parking area, or boat ramp — not a secret fishing lie. Submissions are reviewed before they show for everyone.
+          Mark a trailhead, parking area, or boat ramp — not a secret fishing lie. A name is optional.
         </Text>
         <TextInput
           style={styles.nameInput}
-          placeholder="Access name (e.g. Charleston parking)"
+          placeholder={
+            parentLocation?.name
+              ? `Optional — defaults to "${parentLocation.name} access"`
+              : 'Access name (optional)'
+          }
           placeholderTextColor={Colors.textTertiary}
           value={name}
           onChangeText={setName}

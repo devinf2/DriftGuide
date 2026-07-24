@@ -10,6 +10,7 @@ import { syncPendingUserCatches } from '@/src/services/userCatchService';
 import { refreshAllIfStale } from '@/src/services/waterwayCache';
 import { processPendingPhotos } from '@/src/services/processPendingPhotos';
 import { flushPendingFlyOps } from '@/src/services/flyService';
+import { flushPendingLocations } from '@/src/services/locationService';
 import { reconcileTripPhotoCache } from '@/src/services/tripPhotoOfflineCache';
 
 const DEBOUNCE_MS = 2000;
@@ -41,6 +42,7 @@ export function SyncOnConnectivity() {
           await syncPendingUserCatches(userId);
         }
         await flushPendingCatches();
+        await flushPendingLocations();
         await retryPendingSyncs();
         await flushPendingJournalEdits();
         const { activeTrip, events } = useTripStore.getState();
@@ -77,6 +79,7 @@ export function SyncOnConnectivity() {
           const uid = useAuthStore.getState().user?.id;
           if (uid) await syncPendingUserCatches(uid);
           await flushPendingCatches();
+          await flushPendingLocations();
           await retryPendingSyncs();
           await flushPendingJournalEdits();
           const { activeTrip: at, events: ev } = useTripStore.getState();
