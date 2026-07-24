@@ -56,6 +56,8 @@ export interface Profile {
   username?: string | null;
   /** Default visibility for trip photos on profile; per-trip can override. */
   default_trip_photo_visibility?: TripPhotoVisibility;
+  /** Grants moderation/verification powers (approve businesses, verify guides, curate promotions). */
+  is_admin?: boolean;
 }
 
 export type FriendshipStatus = 'pending' | 'accepted' | 'blocked';
@@ -220,6 +222,188 @@ export interface NearbyLocationResult {
   status: string;
   distance_km: number;
   name_similarity: number;
+}
+
+/** Outfitters, lodges, fly shops — commercial listings, standalone from the fishing-spot catalog. */
+export type BusinessCategory = 'outfitter' | 'lodge' | 'fly_shop' | 'guide_service' | 'other';
+
+/** Provenance/moderation state, mirrors LocationStatus. User submissions start 'pending'. */
+export type BusinessStatus = 'verified' | 'community' | 'pending';
+
+/** Per-day open/close, free-form (e.g. { mon: { open: '08:00', close: '18:00' } }). */
+export type BusinessHours = Partial<
+  Record<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun', { open: string; close: string } | null>
+>;
+
+export interface Business {
+  id: string;
+  name: string;
+  category: BusinessCategory;
+  latitude: number;
+  longitude: number;
+  /** Optional explicit tie to a water; surfaces on that location's Report. */
+  location_id?: string | null;
+  address?: string | null;
+  state?: string | null;
+  description?: string | null;
+  website_url?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  hours?: BusinessHours | null;
+  logo_url?: string | null;
+  cover_url?: string | null;
+  status: BusinessStatus;
+  created_by?: string | null;
+  usage_count?: number;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
+}
+
+export interface BusinessPhoto {
+  id: string;
+  business_id: string;
+  photo_url: string;
+  sort_order: number;
+  created_by?: string | null;
+  created_at: string;
+}
+
+/** Partner organization (e.g. Uinta Life Fishing Collective) with a community link. */
+export interface Partner {
+  id: string;
+  name: string;
+  community_url?: string | null;
+  logo_url?: string | null;
+  description?: string | null;
+  created_at: string;
+}
+
+/** A discount/offer on a business, linking members to the partner community. */
+export interface BusinessDeal {
+  id: string;
+  business_id: string;
+  partner_id?: string | null;
+  title: string;
+  detail?: string | null;
+  /** Falls back (in app) to the partner's community_url when null. */
+  cta_url?: string | null;
+  active: boolean;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  created_by?: string | null;
+  created_at: string;
+}
+
+export type PromotionSubject = 'business' | 'deal' | 'guide';
+export type PromotionPlacement = 'home_featured';
+
+export interface Promotion {
+  id: string;
+  subject_type: PromotionSubject;
+  subject_id: string;
+  placement: PromotionPlacement;
+  priority: number;
+  active: boolean;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  created_at: string;
+}
+
+/** A resolved featured item for the home rail (promotion joined to its business/deal/partner). */
+export interface FeaturedBusinessCard {
+  promotionId: string;
+  businessId: string;
+  businessName: string;
+  category: BusinessCategory;
+  logoUrl?: string | null;
+  coverUrl?: string | null;
+  dealTitle?: string | null;
+  /** Where the deal CTA sends the user (partner community, etc.). */
+  ctaUrl?: string | null;
+  partnerName?: string | null;
+}
+
+// --- Guide / Pro marketplace ---
+
+export type GuideStatus = 'pending' | 'approved' | 'suspended';
+export type GuideBookingStatus = 'requested' | 'accepted' | 'declined' | 'completed' | 'cancelled';
+
+/** 1:1 extension of a profile for anglers who sell guiding services. Verified = verified_at set. */
+export interface GuideProfile {
+  profile_id: string;
+  bio?: string | null;
+  home_water?: string | null;
+  years_experience?: number | null;
+  rates?: Record<string, unknown> | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  booking_url?: string | null;
+  status: GuideStatus;
+  verified_at?: string | null;
+  verified_by?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+/** Guide profile joined with the underlying profile's display fields (for screens). */
+export interface GuideProfileWithProfile extends GuideProfile {
+  profile?: Pick<Profile, 'id' | 'display_name' | 'avatar_url' | 'username'> | null;
+}
+
+/** 'booking' = a guided trip (date/times, quantity); 'download' = a PDF guide book. */
+export type GuideOfferingType = 'booking' | 'download';
+
+/** A guide's offering. Payment for both types is arranged off-app (Venmo/contact) for now. */
+export interface GuideService {
+  id: string;
+  guide_id: string;
+  offering_type: GuideOfferingType;
+  title: string;
+  location_id?: string | null;
+  price_cents?: number | null;
+  duration_label?: string | null;
+  description?: string | null;
+  /** 'booking' only: optional cap on spots/quantity. */
+  quantity_available?: number | null;
+  /** 'download' only: PDF location once paid delivery ships (deferred). */
+  download_url?: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface GuideBooking {
+  id: string;
+  guide_id: string;
+  requester_id: string;
+  service_id?: string | null;
+  requested_date?: string | null;
+  party_size?: number | null;
+  message?: string | null;
+  status: GuideBookingStatus;
+  created_at: string;
+}
+
+export interface GuideReview {
+  id: string;
+  guide_id: string;
+  reviewer_id: string;
+  trip_id?: string | null;
+  rating: number;
+  body?: string | null;
+  created_at: string;
+}
+
+/** Review joined with the reviewer's display fields (for the reviews list). */
+export interface GuideReviewWithReviewer extends GuideReview {
+  reviewer?: Pick<Profile, 'id' | 'display_name' | 'avatar_url'> | null;
+}
+
+export interface GuidePublicStats {
+  avg_rating: number;
+  review_count: number;
+  trips_completed: number;
 }
 
 export interface Trip {

@@ -1,7 +1,10 @@
 import { AddLocationMapSheet } from '@/src/components/add-location/AddLocationMapSheet';
+import { AddBusinessMapSheet } from '@/src/components/add-location/AddBusinessMapSheet';
 import { LandOwnershipSheet } from '@/src/components/map/LandOwnershipSheet';
 import { TripMapboxMapView, type TripMapboxMapRef } from '@/src/components/map/TripMapboxMapView';
 import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMarkers';
+import { buildBusinessMapboxMarkers } from '@/src/components/map/businessMapboxMarkers';
+import { useBusinessStore } from '@/src/stores/businessStore';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { MAPBOX_ACCESS_TOKEN } from '@/src/constants/mapbox';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
@@ -11,7 +14,7 @@ import { useAddLocationFlowStore } from '@/src/stores/addLocationFlowStore';
 import { useLocationStore } from '@/src/stores/locationStore';
 import { useMapOverlayStore } from '@/src/stores/mapOverlayStore';
 import { getLandOwnershipAtPoint } from '@/src/services/landOwnershipService';
-import type { LandOwnershipInfo, Location } from '@/src/types';
+import type { Business, LandOwnershipInfo, Location } from '@/src/types';
 import { isPointInBoundingBox, type BoundingBox } from '@/src/types/boundingBox';
 import { filterLocationsByQuery } from '@/src/utils/locationSearch';
 import { activeLocationsOnly } from '@/src/utils/locationVisibility';
@@ -234,6 +237,38 @@ function createStyles(colors: ThemeColors, scheme: ResolvedScheme) {
     addLocationFabPressed: {
       opacity: 0.88,
     },
+    layerChipsRow: {
+      flexDirection: 'row',
+      gap: Spacing.xs,
+      marginTop: Spacing.sm,
+    },
+    layerChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: 5,
+      borderRadius: BorderRadius.full,
+      borderWidth: 1,
+    },
+    layerChipOn: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    layerChipOff: {
+      backgroundColor: glass.filled.bg,
+      borderColor: glass.filled.border,
+    },
+    layerChipTextOn: {
+      fontSize: FontSize.xs,
+      fontWeight: '700',
+      color: colors.textInverse,
+    },
+    layerChipTextOff: {
+      fontSize: FontSize.xs,
+      fontWeight: '600',
+      color: colors.text,
+    },
   });
 }
 
@@ -250,6 +285,11 @@ export default function MapTabScreen() {
   const { locations, fetchLocations } = useLocationStore();
   const [offlineSnap, setOfflineSnap] = useState<Location[]>([]);
   const setMapAddLocationSheetActive = useAddLocationFlowStore((s) => s.setMapSheetActive);
+  const businesses = useBusinessStore((s) => s.businesses);
+  const fetchBusinesses = useBusinessStore((s) => s.fetchAll);
+  const showBusinessesOnMap = useBusinessStore((s) => s.showOnMap);
+  const setShowBusinessesOnMap = useBusinessStore((s) => s.setShowOnMap);
+  const [showSpotsOnMap, setShowSpotsOnMap] = useState(true);
 
   const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const userProximityRef = useRef<[number, number] | null>(null);
@@ -268,6 +308,8 @@ export default function MapTabScreen() {
   const [mapSuggestionsLoading, setMapSuggestionsLoading] = useState(false);
   const [locationAllowed, setLocationAllowed] = useState(false);
   const [addingLocation, setAddingLocation] = useState(false);
+  const [addingBusiness, setAddingBusiness] = useState(false);
+  const anyAdding = addingLocation || addingBusiness;
   const [addPin, setAddPin] = useState<{ latitude: number; longitude: number }>({
     latitude: DEFAULT_MAP_CENTER[1],
     longitude: DEFAULT_MAP_CENTER[0],
@@ -308,7 +350,8 @@ export default function MapTabScreen() {
   useFocusEffect(
     useCallback(() => {
       if (locations.length === 0) void fetchLocations();
-    }, [locations.length, fetchLocations]),
+      void fetchBusinesses();
+    }, [locations.length, fetchLocations, fetchBusinesses]),
   );
 
   useEffect(() => {
@@ -329,9 +372,9 @@ export default function MapTabScreen() {
   );
 
   useEffect(() => {
-    setMapAddLocationSheetActive(addingLocation);
+    setMapAddLocationSheetActive(anyAdding);
     return () => setMapAddLocationSheetActive(false);
-  }, [addingLocation, setMapAddLocationSheetActive]);
+  }, [anyAdding, setMapAddLocationSheetActive]);
 
   useEffect(() => {
     let subscription: ExpoLocation.LocationSubscription | undefined;
@@ -419,8 +462,25 @@ export default function MapTabScreen() {
   const beginAddLocation = useCallback(() => {
     const [lng, lat] = mapCenter;
     setAddPin({ latitude: lat, longitude: lng });
+    setAddingBusiness(false);
     setAddingLocation(true);
   }, [mapCenter]);
+
+  const beginAddBusiness = useCallback(() => {
+    const [lng, lat] = mapCenter;
+    setAddPin({ latitude: lat, longitude: lng });
+    setAddingLocation(false);
+    setAddingBusiness(true);
+  }, [mapCenter]);
+
+  /** Add FAB: ask whether the new pin is a fishing spot or a business. */
+  const promptAddKind = useCallback(() => {
+    Alert.alert('Add to the map', 'What would you like to add here?', [
+      { text: 'Fishing spot', onPress: beginAddLocation },
+      { text: 'Business', onPress: beginAddBusiness },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [beginAddLocation, beginAddBusiness]);
 
   const jumpMapToGeocodeFeature = useCallback((f: MapboxGeocodeFeature) => {
     const [lng, lat] = f.center;
@@ -432,18 +492,19 @@ export default function MapTabScreen() {
 
   const endAddLocation = useCallback(() => {
     setAddingLocation(false);
+    setAddingBusiness(false);
     Keyboard.dismiss();
   }, []);
 
   const handleMapIdle = useCallback(
     (state: MapCameraStatePayload) => {
       setMapViewport(boundingBoxFromMapState(state));
-      if (addingLocation) {
+      if (addingLocation || addingBusiness) {
         const [lng, lat] = state.properties.center;
         setAddPin({ latitude: lat, longitude: lng });
       }
     },
-    [addingLocation],
+    [addingLocation, addingBusiness],
   );
 
   const applyMapFeatureToMap = useCallback((f: MapboxGeocodeFeature) => {
@@ -479,14 +540,14 @@ export default function MapTabScreen() {
     () => (
       <Pressable
         style={({ pressed }) => [styles.addLocationFab, pressed && styles.addLocationFabPressed]}
-        onPress={() => (addingLocation ? endAddLocation() : beginAddLocation())}
+        onPress={() => (anyAdding ? endAddLocation() : promptAddKind())}
         accessibilityRole="button"
-        accessibilityLabel={addingLocation ? 'Cancel adding location' : 'Add location'}
+        accessibilityLabel={anyAdding ? 'Cancel adding' : 'Add to the map'}
       >
-        <MaterialIcons name={addingLocation ? 'close' : 'add'} size={34} color={colors.textInverse} />
+        <MaterialIcons name={anyAdding ? 'close' : 'add'} size={34} color={colors.textInverse} />
       </Pressable>
     ),
-    [addingLocation, beginAddLocation, colors.textInverse, endAddLocation, styles],
+    [anyAdding, promptAddKind, colors.textInverse, endAddLocation, styles],
   );
 
   // Cap how many catalog pins we draw at once. The full catalog is national (~700+),
@@ -539,6 +600,35 @@ export default function MapTabScreen() {
     ],
   );
 
+  const visibleBusinesses = useMemo(() => {
+    if (!showBusinessesOnMap || mapZoom < MIN_CATALOG_PIN_ZOOM) return [];
+    if (!mapViewport) return businesses;
+    return businesses.filter(
+      (b) =>
+        b.latitude != null &&
+        b.longitude != null &&
+        isPointInBoundingBox(b.latitude, b.longitude, mapViewport),
+    );
+  }, [businesses, showBusinessesOnMap, mapViewport, mapZoom]);
+
+  const businessMarkers = useMemo(
+    () =>
+      buildBusinessMapboxMarkers(
+        visibleBusinesses,
+        (b) => {
+          if (anyAdding) endAddLocation();
+          router.push(`/business/${b.id}`);
+        },
+        resolvedScheme,
+      ),
+    [visibleBusinesses, anyAdding, endAddLocation, router, resolvedScheme],
+  );
+
+  const allMarkers = useMemo(
+    () => [...(showSpotsOnMap ? catalogMarkers : []), ...businessMarkers],
+    [showSpotsOnMap, catalogMarkers, businessMarkers],
+  );
+
   const renderSuggestionRow = (key: string, title: string, onPress: () => void) => (
     <Pressable key={key} style={styles.suggestionRow} onPress={onPress}>
       <Ionicons name="location-outline" size={16} color={colors.primary} />
@@ -564,7 +654,7 @@ export default function MapTabScreen() {
             <View
               style={[
                 styles.mapStage,
-                addingLocation ? { marginBottom: addSheetHeight } : null,
+                anyAdding ? { marginBottom: addSheetHeight } : null,
               ]}
             >
               <TripMapboxMapView
@@ -573,20 +663,20 @@ export default function MapTabScreen() {
                 centerCoordinate={mapCenter}
                 zoomLevel={mapZoom}
                 cameraKey={`map-tab-${cameraNonce}`}
-                markers={catalogMarkers}
+                markers={allMarkers}
                 showUserLocation={locationAllowed}
                 onMapIdle={handleMapIdle}
                 onZoomLevelChange={setMapZoom}
                 landOverlayVisible={landOwnershipVisible}
                 onMapPress={
-                  landOwnershipVisible && !addingLocation ? handleLandMapPress : undefined
+                  landOwnershipVisible && !anyAdding ? handleLandMapPress : undefined
                 }
                 trailingFab={addLocationFab}
                 reservePlanTripFabSpacing
                 mapTabControlLayout
                 expandable={false}
               />
-              {addingLocation ? (
+              {anyAdding ? (
                 <View style={styles.centerPinWrap} pointerEvents="none">
                   <Ionicons name="location-sharp" size={44} color={colors.primary} style={styles.centerPinIcon} />
                 </View>
@@ -608,11 +698,24 @@ export default function MapTabScreen() {
                 endAddLocation();
               }}
             />
+            <AddBusinessMapSheet
+              visible={addingBusiness}
+              pinLatitude={addPin.latitude}
+              pinLongitude={addPin.longitude}
+              geocodeProximity={geocodeProximity ?? mapCenter}
+              onApplyGeocodeFeature={jumpMapToGeocodeFeature}
+              onRequestClose={endAddLocation}
+              onSheetHeightChange={setAddSheetHeight}
+              onSaved={(id) => {
+                router.push(`/business/${id}`);
+                endAddLocation();
+              }}
+            />
           </>
         )}
       </View>
 
-      {!addingLocation ? (
+      {!anyAdding ? (
         <View
           pointerEvents="box-none"
           style={[
@@ -685,6 +788,37 @@ export default function MapTabScreen() {
               </View>
             ) : null}
           </View>
+
+          {!showSearchSuggestions ? (
+            <View style={styles.layerChipsRow} pointerEvents="box-none">
+              <Pressable
+                style={[styles.layerChip, showSpotsOnMap ? styles.layerChipOn : styles.layerChipOff]}
+                onPress={() => setShowSpotsOnMap((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel={showSpotsOnMap ? 'Hide fishing spots' : 'Show fishing spots'}
+              >
+                <Ionicons
+                  name="water"
+                  size={13}
+                  color={showSpotsOnMap ? colors.textInverse : colors.text}
+                />
+                <Text style={showSpotsOnMap ? styles.layerChipTextOn : styles.layerChipTextOff}>Spots</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.layerChip, showBusinessesOnMap ? styles.layerChipOn : styles.layerChipOff]}
+                onPress={() => setShowBusinessesOnMap(!showBusinessesOnMap)}
+                accessibilityRole="button"
+                accessibilityLabel={showBusinessesOnMap ? 'Hide shops' : 'Show shops'}
+              >
+                <Ionicons
+                  name="storefront"
+                  size={13}
+                  color={showBusinessesOnMap ? colors.textInverse : colors.text}
+                />
+                <Text style={showBusinessesOnMap ? styles.layerChipTextOn : styles.layerChipTextOff}>Shops</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       ) : null}
 

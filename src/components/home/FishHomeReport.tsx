@@ -12,6 +12,7 @@ import { useAppTheme } from '@/src/theme/ThemeProvider';
 import type { HomeHotSpotData } from '@/src/utils/homeHotSpots';
 import { formatDistanceLabel } from '@/src/utils/homeHotSpots';
 import { deriveSpotGear } from '@/src/utils/spotGear';
+import { ReportGuidesOutfitters } from '@/src/components/home/ReportGuidesOutfitters';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
@@ -110,6 +111,8 @@ type Props = {
   onScroll?: ComponentProps<typeof Animated.ScrollView>['onScroll'];
   refreshControl?: ComponentProps<typeof Animated.ScrollView>['refreshControl'];
   contentContainerStyle?: StyleProp<ViewStyle>;
+  /** Optional content rendered at the very top of the scroll (e.g. featured partners rail). */
+  headerSlot?: React.ReactNode;
 };
 
 /**
@@ -124,6 +127,7 @@ export function FishHomeReport({
   onScroll,
   refreshControl,
   contentContainerStyle,
+  headerSlot,
 }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -164,6 +168,18 @@ export function FishHomeReport({
     () => activeHotSpot?.location ?? locations.find((l) => l.id === activeId) ?? null,
     [activeHotSpot, locations, activeId],
   );
+  /** The selected water plus its parent river and sibling sections — so a guide/shop
+   *  tagged to the river shows on its sections and vice versa. */
+  const relatedLocationIds = useMemo(() => {
+    if (!activeLocation) return [] as string[];
+    const ids = new Set<string>([activeLocation.id]);
+    if (activeLocation.parent_location_id) ids.add(activeLocation.parent_location_id);
+    const rootId = activeLocation.parent_location_id ?? activeLocation.id;
+    for (const l of locations) {
+      if (l.id === rootId || l.parent_location_id === rootId) ids.add(l.id);
+    }
+    return [...ids];
+  }, [activeLocation, locations]);
   const seedConditions = activeHotSpot?.conditions ?? null;
 
   const { conditions, summary, conditionsLoading, summaryLoading } = useSpotReport(
@@ -301,6 +317,7 @@ export function FishHomeReport({
         contentContainerStyle={contentContainerStyle}
         keyboardShouldPersistTaps="handled"
       >
+      {headerSlot}
       {/* Unified water header — the name is the switcher (tap to change water). */}
       <Pressable
         style={styles.water}
@@ -434,6 +451,13 @@ export function FishHomeReport({
               </View>
             </>
           ) : null}
+
+          {/* Guides who work this water + tagged/nearby shops (self-hides when empty). */}
+          <ReportGuidesOutfitters
+            locationIds={relatedLocationIds}
+            lat={activeLocation?.latitude}
+            lng={activeLocation?.longitude}
+          />
 
           {/* Full-report link — the primary actions live in the pinned footer below. */}
           <Pressable style={styles.secondary} onPress={openFullReport} accessibilityRole="button">

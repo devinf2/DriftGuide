@@ -38,6 +38,18 @@ describe('routeForNotificationData', () => {
     expect(routeForNotificationData({ type: 'friend_accept' })).toBe('/friends/manage');
   });
 
+  it('routes new-guide notifications to the guide profile, rejecting bad ids', () => {
+    expect(routeForNotificationData({ type: 'guide_created', actorId: UUID })).toBe(`/guide/${UUID}`);
+    expect(routeForNotificationData({ type: 'guide_created', actorId: 'nope' })).toBeNull();
+    expect(routeForNotificationData({ type: 'guide_created' })).toBeNull();
+  });
+
+  it('routes new-business notifications to the business screen, rejecting bad ids', () => {
+    expect(routeForNotificationData({ type: 'business_created', entityId: UUID })).toBe(`/business/${UUID}`);
+    expect(routeForNotificationData({ type: 'business_created', entityId: 'nope' })).toBeNull();
+    expect(routeForNotificationData({ type: 'business_created' })).toBeNull();
+  });
+
   it('routes stats payloads to the stats screen', () => {
     expect(routeForNotificationData({ type: 'stats' })).toBe('/profile/stats');
   });

@@ -7,6 +7,7 @@ import { FishHomeRightNow } from '@/src/components/home/FishHomeRightNow';
 import { StreakMilestoneCard } from '@/src/components/home/StreakMilestoneCard';
 import { TripSessionPeopleSheet } from '@/src/components/trip/TripSessionPeopleSheet';
 import { FishHomeReport } from '@/src/components/home/FishHomeReport';
+import { FeaturedPartnersRail } from '@/src/components/home/FeaturedPartnersRail';
 import { HomeSectionTabs, type HomeSectionKey } from '@/src/components/home/HomeSectionTabs';
 import { BorderRadius, FontSize, Spacing, type ThemeColors } from '@/src/constants/theme';
 import { useGuideChatContext } from '@/src/hooks/useGuideChatContext';
@@ -14,6 +15,8 @@ import { useHomeHotSpots } from '@/src/hooks/useHomeHotSpots';
 import { useRecentCatchesRecap } from '@/src/hooks/useRecentCatchesRecap';
 import { useNetworkStatus } from '@/src/hooks/useNetworkStatus';
 import { fetchProfile } from '@/src/services/friendsService';
+import { fetchPendingBusinesses } from '@/src/services/businessService';
+import { fetchPendingGuides } from '@/src/services/guideService';
 import {
   declineSessionInvite,
   listPendingSessionInvitesForUser,
@@ -26,7 +29,7 @@ import { useFriendsStore } from '@/src/stores/friendsStore';
 import { usePlanTripHomeSuggestionsStore } from '@/src/stores/planTripHomeSuggestionsStore';
 import { useTripStore } from '@/src/stores/tripStore';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { Trip, type SessionInvite } from '@/src/types';
+import { Trip, type Business, type GuideProfileWithProfile, type SessionInvite } from '@/src/types';
 import { formatFishCount } from '@/src/utils/formatters';
 import { profileFirstName } from '@/src/utils/profileDisplay';
 import { formatFishingElapsedLabel, getLiveFishingElapsedMs } from '@/src/utils/tripTiming';
@@ -416,6 +419,9 @@ export default function HomeScreen() {
   const [sessionInviteRows, setSessionInviteRows] = useState<
     { invite: SessionInvite; summaryLine: string }[]
   >([]);
+  // Admin-only: guide profiles + businesses awaiting approval (surfaced in the notification bell).
+  const [pendingGuideRows, setPendingGuideRows] = useState<GuideProfileWithProfile[]>([]);
+  const [pendingBusinessRows, setPendingBusinessRows] = useState<Business[]>([]);
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [section, setSection] = useState<HomeSectionKey>('report');
   // When the guide composer is focused, the hero slides up and the chat fills the screen.
@@ -547,6 +553,26 @@ export default function HomeScreen() {
     }, [loadSessionInvites]),
   );
 
+  const isAdmin = profile?.is_admin === true;
+
+  // Admin moderation queues (new guides + new shops) shown in the notification bell.
+  const loadPendingModeration = useCallback(async () => {
+    if (!isAdmin) {
+      setPendingGuideRows([]);
+      setPendingBusinessRows([]);
+      return;
+    }
+    const [guides, businesses] = await Promise.all([fetchPendingGuides(), fetchPendingBusinesses()]);
+    setPendingGuideRows(guides);
+    setPendingBusinessRows(businesses);
+  }, [isAdmin]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPendingModeration();
+    }, [loadPendingModeration]),
+  );
+
   const getContext = useGuideChatContext();
   const { hotSpotList, hotSpotLoading, userCoords } = useHomeHotSpots(
     fullHome,
@@ -647,8 +673,9 @@ export default function HomeScreen() {
     if (user?.id && fullHome) fetchPlannedTrips(user.id);
     if (fullHome) setBriefingRefreshKey((k) => k + 1);
     void loadSessionInvites();
+    void loadPendingModeration();
     setRefreshing(false);
-  }, [user?.id, fullHome, fetchPlannedTrips, loadSessionInvites]);
+  }, [user?.id, fullHome, fetchPlannedTrips, loadSessionInvites, loadPendingModeration]);
 
   const handleResumeTrip = useCallback(() => {
     const s = useTripStore.getState();
@@ -757,44 +784,57 @@ export default function HomeScreen() {
     [fullHome, refreshing, onRefresh, colors.primary],
   );
 
-  const showInviteNotificationBell = sessionInviteRows.length > 0 && Boolean(user?.id);
+  // Bell surfaces fishing-group invites (all users) plus admin moderation queues:
+  // guides and shops awaiting approval. Badge/count reflect the combined total.
+  const notifCount = sessionInviteRows.length + pendingGuideRows.length + pendingBusinessRows.length;
+  const notifLabel = useMemo(() => {
+    const parts: string[] = [];
+    if (sessionInviteRows.length > 0) {
+      parts.push(`${sessionInviteRows.length} fishing group invite${sessionInviteRows.length === 1 ? '' : 's'}`);
+    }
+    if (pendingGuideRows.length > 0) {
+      parts.push(`${pendingGuideRows.length} guide${pendingGuideRows.length === 1 ? '' : 's'} to review`);
+    }
+    if (pendingBusinessRows.length > 0) {
+      parts.push(`${pendingBusinessRows.length} shop${pendingBusinessRows.length === 1 ? '' : 's'} to review`);
+    }
+    return parts.length > 0 ? `Notifications, ${parts.join(', ')}` : 'Notifications';
+  }, [sessionInviteRows.length, pendingGuideRows.length, pendingBusinessRows.length]);
+
+  const showInviteNotificationBell = notifCount > 0 && Boolean(user?.id);
 
   const inviteBellAccessory = useMemo(() => {
     if (!showInviteNotificationBell) return null;
-    const n = sessionInviteRows.length;
     return (
       <Pressable
         onPress={() => setInviteModalVisible(true)}
         style={styles.notifBellBtn}
         hitSlop={10}
         accessibilityRole="button"
-        accessibilityLabel={`Notifications, ${n} fishing group invite${n === 1 ? '' : 's'}`}
+        accessibilityLabel={notifLabel}
       >
         <MaterialCommunityIcons name="bell-outline" size={24} color={colors.text} />
         <View style={styles.notifBadge} pointerEvents="none">
-          <Text style={styles.notifBadgeText}>{n > 9 ? '9+' : String(n)}</Text>
+          <Text style={styles.notifBadgeText}>{notifCount > 9 ? '9+' : String(notifCount)}</Text>
         </View>
       </Pressable>
     );
-  }, [showInviteNotificationBell, sessionInviteRows.length, styles, colors.text]);
+  }, [showInviteNotificationBell, notifCount, notifLabel, styles, colors.text]);
 
-  /** Always-visible bell for the hero (opens the invites modal; badge only when there are invites). */
+  /** Always-visible bell for the hero (opens the notifications modal; badge only when there's something). */
   const inviteBell = useMemo(() => {
-    const n = sessionInviteRows.length;
     return (
       <Pressable
         onPress={() => setInviteModalVisible(true)}
         style={styles.heroBellBtn}
         hitSlop={10}
         accessibilityRole="button"
-        accessibilityLabel={
-          n > 0 ? `Notifications, ${n} fishing group invite${n === 1 ? '' : 's'}` : 'Notifications'
-        }
+        accessibilityLabel={notifLabel}
       >
         <MaterialCommunityIcons name="bell-outline" size={22} color={colors.textInverse} />
-        {n > 0 ? (
+        {notifCount > 0 ? (
           <View style={styles.notifBadge} pointerEvents="none">
-            <Text style={styles.notifBadgeText}>{n > 9 ? '9+' : String(n)}</Text>
+            <Text style={styles.notifBadgeText}>{notifCount > 9 ? '9+' : String(notifCount)}</Text>
           </View>
         ) : null}
       </Pressable>
@@ -921,6 +961,7 @@ export default function HomeScreen() {
                   onScroll={scrollHandler}
                   refreshControl={homeRefreshControl}
                   contentContainerStyle={styles.reportPanelContent}
+                  headerSlot={<FeaturedPartnersRail />}
                 />
               </View>
 
@@ -1026,7 +1067,7 @@ export default function HomeScreen() {
           />
           <View style={styles.inviteModalCard}>
             <View style={styles.inviteModalHeader}>
-              <Text style={styles.inviteModalTitle}>Fishing group invites</Text>
+              <Text style={styles.inviteModalTitle}>Notifications</Text>
               <Pressable
                 onPress={() => setInviteModalVisible(false)}
                 hitSlop={12}
@@ -1041,9 +1082,52 @@ export default function HomeScreen() {
               contentContainerStyle={styles.inviteModalScroll}
               keyboardShouldPersistTaps="handled"
             >
-              {sessionInviteRows.length === 0 ? (
+              {notifCount === 0 ? (
                 <Text style={styles.groupInviteHint}>You're all caught up — no new notifications.</Text>
               ) : null}
+              {pendingGuideRows.map((g, idx) => {
+                const guideName = g.profile?.display_name?.trim() || g.profile?.username?.trim() || 'A guide';
+                return (
+                  <Pressable
+                    key={g.profile_id}
+                    style={[
+                      styles.groupInviteBlock,
+                      idx === pendingGuideRows.length - 1 &&
+                      pendingBusinessRows.length === 0 &&
+                      sessionInviteRows.length === 0
+                        ? styles.groupInviteBlockLast
+                        : undefined,
+                    ]}
+                    onPress={() => {
+                      setInviteModalVisible(false);
+                      router.push(`/guide/${g.profile_id}` as Href);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Review ${guideName}'s guide profile`}
+                  >
+                    <Text style={styles.groupInviteHint}>{guideName} created a guide profile — tap to review.</Text>
+                  </Pressable>
+                );
+              })}
+              {pendingBusinessRows.map((b, idx) => (
+                <Pressable
+                  key={b.id}
+                  style={[
+                    styles.groupInviteBlock,
+                    idx === pendingBusinessRows.length - 1 && sessionInviteRows.length === 0
+                      ? styles.groupInviteBlockLast
+                      : undefined,
+                  ]}
+                  onPress={() => {
+                    setInviteModalVisible(false);
+                    router.push(`/business/${b.id}` as Href);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Review ${b.name} shop submission`}
+                >
+                  <Text style={styles.groupInviteHint}>{b.name} was submitted as a shop — tap to review.</Text>
+                </Pressable>
+              ))}
               {sessionInviteRows.map(({ invite, summaryLine }, idx) => (
                 <View
                   key={invite.id}

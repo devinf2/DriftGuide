@@ -31,17 +31,26 @@ const BATCH_SIZE = 200;
 
 interface ActivityEventRow {
   id: string;
-  type: "post_created" | "post_reaction" | "friend_request" | "friend_accept";
+  type:
+    | "post_created"
+    | "post_reaction"
+    | "friend_request"
+    | "friend_accept"
+    | "guide_booking_request"
+    | "guide_review"
+    | "guide_created"
+    | "business_created";
   actor_id: string;
   recipient_id: string | null;
   post_id: string | null;
+  entity_id: string | null;
 }
 
 interface ResolvedRecipient {
   userId: string;
   title: string;
   body: string;
-  data: { type: string; postId: string | null; actorId: string };
+  data: { type: string; postId: string | null; actorId: string; entityId?: string | null };
 }
 
 // Mirror of src/utils/activityRecipients.ts resolveActivityRecipients().
@@ -82,6 +91,50 @@ function resolveRecipients(
         title: "Friend request accepted",
         body: `${name} accepted your friend request.`,
         data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  if (event.type === "guide_booking_request") {
+    return [
+      {
+        userId: event.recipient_id,
+        title: "New booking request",
+        body: `${name} requested to book a trip with you.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  if (event.type === "guide_review") {
+    return [
+      {
+        userId: event.recipient_id,
+        title: "New review",
+        body: `${name} left you a review.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  if (event.type === "guide_created") {
+    // Fanned out at insert time (migration 129) — one targeted row per admin.
+    // actor_id is the new guide's profile_id, which the tap routes to /guide/:id.
+    return [
+      {
+        userId: event.recipient_id,
+        title: "New guide to review",
+        body: `${name} created a guide profile.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id },
+      },
+    ];
+  }
+  if (event.type === "business_created") {
+    // Fanned out at insert time (migration 130) — one targeted row per admin.
+    // actor_id is the submitter; entity_id is the business, which the tap routes to.
+    return [
+      {
+        userId: event.recipient_id,
+        title: "New shop to review",
+        body: `${name} submitted a shop for review.`,
+        data: { type: event.type, postId: null, actorId: event.actor_id, entityId: event.entity_id },
       },
     ];
   }
@@ -139,7 +192,7 @@ Deno.serve(async (req: Request) => {
   const { data: events, error: evErr } = await admin
     .from("activity_events")
     // Column is event_type; alias to `type` so the row shape matches ActivityEventRow.
-    .select("id, type:event_type, actor_id, recipient_id, post_id")
+    .select("id, type:event_type, actor_id, recipient_id, post_id, entity_id")
     .is("processed_at", null)
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);

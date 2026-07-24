@@ -355,6 +355,27 @@ function ThemedNavigation() {
             }}
           />
           <Stack.Screen
+            name="business/[id]"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
+            name="guide/[id]"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
+            name="guide/edit"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
             name="trip/add-location"
             options={{ title: 'Add Location', presentation: 'modal' }}
           />

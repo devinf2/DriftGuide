@@ -56,6 +56,7 @@ import { buildCatalogMapboxMarkers } from '@/src/components/map/catalogMapboxMar
 import { TripMapboxMapView } from '@/src/components/map/TripMapboxMapView';
 import { USER_LOCATION_ZOOM } from '@/src/constants/mapDefaults';
 import { locationsForSpotMapContext, spotMapRelatedLocationIds } from '@/src/utils/locationSpotMapFilter';
+import { ReportGuidesOutfitters } from '@/src/components/home/ReportGuidesOutfitters';
 import { confirmDrivingDirections } from '@/src/utils/openDirections';
 import * as ExpoLocation from 'expo-location';
 import { enrichContextWithLocationCatchData } from '@/src/services/guideCatchContext';
@@ -523,6 +524,13 @@ export default function SpotFishingTripScreen() {
     if (!location) return [];
     return locationsForSpotMapContext(location, locations);
   }, [location, locations]);
+
+  // Waters to search for guides/shops: this spot + its river family (so a guide
+  // tagged to the river shows on its sections and vice versa).
+  const guideLocationIds = useMemo(
+    () => (location ? [...spotMapRelatedLocationIds(location, locations)] : []),
+    [location, locations],
+  );
 
   const spotMapboxMarkers = useMemo(() => {
     const catalog = buildCatalogMapboxMarkers(
@@ -1242,6 +1250,11 @@ export default function SpotFishingTripScreen() {
             <Text style={styles.fliesPlaceholder}>No fly suggestions for this spot.</Text>
           )}
         </View>
+
+        {/* Guides & shops for this water (renders nothing when there are none) */}
+        {location ? (
+          <ReportGuidesOutfitters locationIds={guideLocationIds} lat={lat} lng={lng} />
+        ) : null}
       </ScrollView>
       )}
 

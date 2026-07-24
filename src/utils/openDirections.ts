@@ -41,3 +41,51 @@ export function confirmDrivingDirections(latitude: number, longitude: number, la
     { text: 'Directions', onPress: () => void openDrivingDirections(latitude, longitude) },
   ]);
 }
+
+/** Ensure a user-entered URL has a scheme so the OS can open it. */
+function withScheme(url: string): string {
+  const trimmed = url.trim();
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed; // already has http(s):, tel:, mailto:, etc.
+  return `https://${trimmed}`;
+}
+
+/**
+ * Confirms intent (we're about to leave the app) then opens an external URL —
+ * a business website, a partner deal / community link, etc. Shared so the
+ * "leaving the app" copy stays consistent with {@link confirmDrivingDirections}.
+ */
+export function confirmOpenExternalUrl(url: string, label?: string): void {
+  const target = url?.trim();
+  if (!target) return;
+  const dest = withScheme(target);
+  const what = label?.trim() ? label.trim() : 'this link';
+  Alert.alert('Leave DriftGuide', `Open ${what} in your browser?`, [
+    { text: 'Cancel', style: 'cancel' },
+    {
+      text: 'Open',
+      onPress: () => {
+        void (async () => {
+          try {
+            await Linking.openURL(dest);
+          } catch {
+            // Unsupported scheme / no handler — silently ignore (matches directions behavior).
+          }
+        })();
+      },
+    },
+  ]);
+}
+
+/** Opens the phone dialer for a number (no confirm — the OS dialer already confirms the call). */
+export function openPhone(phone: string): void {
+  const digits = phone.replace(/[^\d+]/g, '');
+  if (!digits) return;
+  void Linking.openURL(`tel:${digits}`).catch(() => {});
+}
+
+/** Opens the mail composer to an address. */
+export function openEmail(email: string): void {
+  const addr = email.trim();
+  if (!addr) return;
+  void Linking.openURL(`mailto:${addr}`).catch(() => {});
+}

@@ -18,6 +18,8 @@ export const NOTIFICATION_UUID_RE =
  *   'post_created' | 'post_reaction'-> /friends (the social feed)
  *   'friend_request'                -> /friends/manage?seg=requests (the Requests tab)
  *   'friend_accept'                 -> /profile/friend/:actorId (the new friend's profile)
+ *   'guide_created'                 -> /guide/:actorId (the new guide's profile; admins only)
+ *   'business_created'              -> /business/:entityId (the pending shop; admins only)
  *   'stats'                         -> /profile/stats
  */
 export function routeForNotificationData(
@@ -47,6 +49,16 @@ export function routeForNotificationData(
       const id = typeof data.actorId === 'string' ? data.actorId : null;
       if (id && NOTIFICATION_UUID_RE.test(id)) return `/profile/friend/${id}`;
       return '/friends/manage';
+    }
+    case 'guide_created': {
+      const id = typeof data.actorId === 'string' ? data.actorId : null;
+      if (id && NOTIFICATION_UUID_RE.test(id)) return `/guide/${id}`;
+      return null;
+    }
+    case 'business_created': {
+      const id = typeof data.entityId === 'string' ? data.entityId : null;
+      if (id && NOTIFICATION_UUID_RE.test(id)) return `/business/${id}`;
+      return null;
     }
     case 'stats':
       return '/profile/stats';

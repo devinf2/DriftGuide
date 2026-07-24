@@ -326,6 +326,7 @@ export default function ProfileScreen() {
           />
           <QuickTile icon="map-outline" label="Offline maps" onPress={() => router.push('/profile/offline-maps')} colors={colors} styles={styles} />
           <QuickTile icon="chart-line" label="Stats" onPress={() => router.push('/profile/stats')} colors={colors} styles={styles} />
+          <QuickTile icon="compass-outline" label="Guiding" onPress={() => router.push('/guide/edit')} colors={colors} styles={styles} />
         </View>
 
         <ProfileTripsPhotosHub ref={profileHubRef} refreshSignal={photoLibraryRefreshSignal} />
